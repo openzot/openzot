@@ -118,12 +118,12 @@ the activity log — scroll back to review any change the agent made:
 ```
   edit   internal/server/server.go
  ╭───────────────────────────────────────────────────────────╮
- │ internal/server/server.go  +2 -1                           │
- │   func (s *Server) routes() {                              │
- │ -   mux.HandleFunc("/", s.handleIndex)                     │
- │ +   mux.HandleFunc("/", s.handleIndex)                     │
+ │ internal/server/server.go  +2 -1                          │
+ │   func (s *Server) routes() {                             │
+ │ -   mux.HandleFunc("/", s.handleIndex)                    │
+ │ +   mux.HandleFunc("/", s.handleIndex)                    │
  │ +   mux.HandleFunc("/health", s.handleHealth)             │
- │   }                                                        │
+ │   }                                                       │
  ╰───────────────────────────────────────────────────────────╯
 ```
 
