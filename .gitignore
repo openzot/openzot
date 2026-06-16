@@ -2,3 +2,7 @@
 
 configs/zot.yaml
 .env
+
+# Local development only: redirects the pinned go-sdk to the monorepo checkout.
+go.work
+go.work.sum
