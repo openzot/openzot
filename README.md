@@ -1,14 +1,29 @@
-# zot
+<h1 align="center">zot</h1>
 
-An autonomous coding agent you **watch**, not drive.
+**An autonomous coding agent for your terminal.** Brief it once on the command
+line and it plans, edits, and runs your code until the whole job is done - no
+prompting, no babysitting, no chat box. A read-only viewer streams every step.
 
-`zot` inverts the usual coding-TUI interaction model. There is **no prompt and no
-chat box**. You hand it a single task on the command line, and it works the
-problem entirely on
-its own - reading files, editing them, and running shell commands - while the
-terminal streams a live, **read-only** view of every step it takes.
+<img width="1504" height="1080" alt="zot" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 
-<img width="1504" height="1080" alt="Area" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
+## Status
+
+zot is **0.x**: functional and in active use, with improvements landing release
+to release. Until 1.0 the CLI flags, config, and behavior may still change
+between versions - pin a version and skim the [changelog](CHANGELOG.md) before
+upgrading.
+
+## Why zot exists
+
+Coding agents are usually copilots: they wait for a prompt, suggest, and hand the
+keyboard back. zot flips that - you describe the job once and it runs the whole
+loop (plan → act → observe → verify → exit) without you in it.
+
+The agentic loop - model calls, tool orchestration, planning, iteration - runs on
+a capable cloud harness ([ChatBotKit](https://chatbotkit.com)), not in the
+binary. That keeps the local runtime tiny: load config, wire the SDK's tools,
+render events. The backend is an implementation detail behind the agent package;
+other backends may come later.
 
 ## How it works
 
