@@ -8,31 +8,7 @@ problem entirely on
 its own — reading files, editing them, and running shell commands — while the
 terminal streams a live, **read-only** view of every step it takes.
 
-```
-✦ zot  ⠹ working   add a /health endpoint and a test for it
-model kimi-k2.7-code  ·  dir ~/scratch/api  ·  iter 3  ·  tools 9  ·  edits 2  ·  elapsed 00:41
-
-── iteration 1 ───────────────────────────────────────────────────────────────
-  plan  break the task into endpoint + test, then verify
-    1. read the existing router
-    2. add the /health handler
-    3. write a test and run it
-  read   server.go
-    ✓ 84 lines
-── iteration 2 ───────────────────────────────────────────────────────────────
-  edit   server.go
-    ✓ applied
-  write  server_test.go
-    ✓ saved
-  exec   go test ./...
-    │ ok  	example/api	0.012s
-    ✓ done
-  ▸ all steps complete, tests green
-
-✓ done  added /health endpoint and a passing test
-
-↑/↓ scroll  g/G top/bottom  q quit
-```
+<img width="1504" height="1080" alt="Area" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 
 ## How it works
 
