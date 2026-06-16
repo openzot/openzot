@@ -55,3 +55,20 @@ func TestValidate(t *testing.T) {
 		t.Error("expected an error for non-positive max_iterations")
 	}
 }
+
+func TestValidateFeatures(t *testing.T) {
+	base := Agent{Model: "m", MaxIterations: 1}
+
+	ok := Config{Agent: base, Features: []Feature{{Name: "web"}, {Name: "chunking"}}}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("unexpected error for allowed features: %v", err)
+	}
+
+	if err := (Config{Agent: base, Features: []Feature{{Name: "bash"}}}).Validate(); err == nil {
+		t.Error("expected an error for a feature outside the allow-list")
+	}
+
+	if err := (Config{Agent: base, Features: []Feature{{Name: ""}}}).Validate(); err == nil {
+		t.Error("expected an error for a feature with no name")
+	}
+}

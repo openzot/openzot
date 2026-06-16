@@ -15,6 +15,28 @@ type Config struct {
 	Agent      Agent      `yaml:"agent"`
 	ChatBotKit ChatBotKit `yaml:"chatbotkit"`
 	UI         UI         `yaml:"ui"`
+	// Features are ChatBotKit conversation features to enable for the run, each a
+	// name/options pair passed through to the agent.
+	Features []Feature `yaml:"features"`
+}
+
+// Feature is a ChatBotKit conversation feature enabled for the run: a name plus
+// optional, feature-specific options.
+type Feature struct {
+	Name    string                 `yaml:"name"`
+	Options map[string]interface{} `yaml:"options"`
+}
+
+// AllowedFeatures is the set of feature names zot currently exposes.
+var AllowedFeatures = []string{"web", "chunking"}
+
+func featureAllowed(name string) bool {
+	for _, a := range AllowedFeatures {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
 
 // UI holds presentation options for the read-only viewer.
@@ -104,6 +126,14 @@ func (c Config) Validate() error {
 	}
 	if c.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be a positive number")
+	}
+	for _, f := range c.Features {
+		if strings.TrimSpace(f.Name) == "" {
+			return fmt.Errorf("features: each feature needs a name")
+		}
+		if !featureAllowed(f.Name) {
+			return fmt.Errorf("features: unknown feature %q (allowed: %s)", f.Name, strings.Join(AllowedFeatures, ", "))
+		}
 	}
 	return nil
 }
