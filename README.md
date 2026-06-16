@@ -8,31 +8,7 @@ problem entirely on
 its own — reading files, editing them, and running shell commands — while the
 terminal streams a live, **read-only** view of every step it takes.
 
-```
-✦ zot  ⠹ working   add a /health endpoint and a test for it
-model kimi-k2.7-code  ·  dir ~/scratch/api  ·  iter 3  ·  tools 9  ·  edits 2  ·  elapsed 00:41
-
-── iteration 1 ───────────────────────────────────────────────────────────────
-  plan  break the task into endpoint + test, then verify
-    1. read the existing router
-    2. add the /health handler
-    3. write a test and run it
-  read   server.go
-    ✓ 84 lines
-── iteration 2 ───────────────────────────────────────────────────────────────
-  edit   server.go
-    ✓ applied
-  write  server_test.go
-    ✓ saved
-  exec   go test ./...
-    │ ok  	example/api	0.012s
-    ✓ done
-  ▸ all steps complete, tests green
-
-✓ done  added /health endpoint and a passing test
-
-↑/↓ scroll  g/G top/bottom  q quit
-```
+<img width="1504" height="1080" alt="Area" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 
 ## How it works
 
@@ -49,10 +25,49 @@ front-end. It launches the agent in a goroutine and renders the event stream
 (`ToolCallStart`, `ToolCallEnd`, `Iteration`, token narration, `AgentExit`, …)
 into a scrollable, read-only viewport. The UI deliberately has no text input.
 
+## Why CBK?
+
+CBK.AI is a capable cloud harness: the agentic loop — model calls, tool
+orchestration, planning, iteration — runs server-side. That pushes the heavy
+lifting off the executable, so the local runtime stays minimal. The binary is
+small, and the code that remains here is tiny: load some config, wire the SDK's
+tools, and render events. That makes zot easy to read, reason about, and extend.
+
+The backend is an implementation detail behind the agent package. We may add
+other backends in the future; for now ChatBotKit keeps things lightweight.
+
 ## Prerequisites
 
 - Go 1.24+
-- A ChatBotKit API key — get one at [chatbotkit.com](https://chatbotkit.com)
+- A ChatBotKit API token (see below)
+
+## API token
+
+zot needs its own ChatBotKit API token to run. **Mint a new one for the tool** —
+don't reuse a token from elsewhere.
+
+We **recommend** creating a scoped token at
+[chatbotkit.com/apps/code](https://chatbotkit.com/apps/code). This issues a token
+limited to coding-harness operations only, so it **cannot** reach the rest of
+your account.
+
+Provide the token either way:
+
+**1. Environment variable (preferred)** — export `CHATBOTKIT_API_SECRET`, or put
+it in a `.env` file in the working directory:
+
+```bash
+export CHATBOTKIT_API_SECRET="cbk_…"
+```
+
+**2. Config file** — set `api_secret` under the `chatbotkit` section of your
+config file (`~/.config/zot/config.yaml`, or the path given to `--config`):
+
+```yaml
+# ~/.config/zot/config.yaml
+chatbotkit:
+  api_secret: 'cbk_…'
+```
 
 ## Setup
 
@@ -90,6 +105,7 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 | `--task-file`      | _(none)_                    | Read the task from a file instead of the command line      |
 | `--diff`           | `false`                     | Show a syntax-highlighted diff panel under each edit/write |
 | `--plain`          | `false`                     | Stream unstyled output (auto-enabled when not a TTY)       |
+| `--feature`        | _(none)_                    | Enable a feature by name (repeatable): `web`, `chunking`   |
 | `--config`         | `~/.config/zot/config.yaml` | Path to a config file (optional)                           |
 | `--version`        |                             | Print the version and exit                                 |
 
@@ -102,12 +118,12 @@ the activity log — scroll back to review any change the agent made:
 ```
   edit   internal/server/server.go
  ╭───────────────────────────────────────────────────────────╮
- │ internal/server/server.go  +2 -1                           │
- │   func (s *Server) routes() {                              │
- │ -   mux.HandleFunc("/", s.handleIndex)                     │
- │ +   mux.HandleFunc("/", s.handleIndex)                     │
+ │ internal/server/server.go  +2 -1                          │
+ │   func (s *Server) routes() {                             │
+ │ -   mux.HandleFunc("/", s.handleIndex)                    │
+ │ +   mux.HandleFunc("/", s.handleIndex)                    │
  │ +   mux.HandleFunc("/health", s.handleHealth)             │
- │   }                                                        │
+ │   }                                                       │
  ╰───────────────────────────────────────────────────────────╯
 ```
 
@@ -126,6 +142,30 @@ alt-screen UI that would garble or fail. Force it in a terminal with `--plain`
 ```bash
 zot --plain "tidy go.mod" | tee run.log
 ```
+
+### Features
+
+Enable ChatBotKit conversation features for the run — each a name/options pair.
+Currently exposed: **`web`** (live web `search`/`fetch`) and **`chunking`**. Set
+them with repeated `--feature` flags:
+
+```bash
+zot --feature web --feature chunking "research the latest go release and summarise it"
+```
+
+…or in the config file, where you can also pass per-feature options:
+
+```yaml
+features:
+  - name: web
+    options:
+      search: true
+      fetch: true
+  - name: chunking
+```
+
+`--feature` flags replace the configured list when given. (The list isn't
+settable via a single env var — use the config file for options.)
 
 ## Configuration
 
@@ -152,6 +192,29 @@ Because the agent is autonomous, the only keys are for viewing:
 | `PgUp`/`PgDn` | page the log       |
 | `g` / `G`     | jump to top/bottom |
 | `q`           | quit               |
+
+## Project context (`AGENT.md` & skills)
+
+On startup zot folds in context from two places — the **config directory**
+(`~/.config/zot/`, global) and the **working directory** (`--dir`, per-project):
+
+- **`AGENT.md`** — at the **root** of either directory; its contents are
+  appended to the agent's backstory (config first, then project). Use it for
+  conventions the agent should always follow.
+- **skills** — each `<name>/SKILL.md` (with `name` / `description` YAML front
+  matter) is loaded via the SDK and passed to the agent as a `skills` feature;
+  the agent reads a skill's full file on demand when it's relevant. Both
+  **`.skills/`** (typical at a project root) and **`skills/`** are searched.
+
+```
+~/.config/zot/          ./ (your project, --dir)
+├── AGENT.md            ├── AGENT.md
+└── skills/             └── .skills/
+    └── greet/              └── deploy/
+        └── SKILL.md            └── SKILL.md
+```
+
+Everything here is optional — missing files and directories are ignored.
 
 ## ⚠️ Safety
 

@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -47,6 +48,8 @@ func run() error {
 	taskFile := flag.String("task-file", "", "read the task from this file instead of the command line")
 	diffFlag := flag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
 	plainFlag := flag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
+	var featureFlags stringSlice
+	flag.Var(&featureFlags, "feature", "enable a ChatBotKit feature by name (repeatable): "+strings.Join(config.AllowedFeatures, ", "))
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = usage
 	flag.Parse()
@@ -74,6 +77,14 @@ func run() error {
 	if *maxIter > 0 {
 		cfg.Agent.MaxIterations = *maxIter
 	}
+	// --feature (repeatable) replaces the configured features when given.
+	if len(featureFlags) > 0 {
+		features := make([]config.Feature, 0, len(featureFlags))
+		for _, name := range featureFlags {
+			features = append(features, config.Feature{Name: name})
+		}
+		cfg.Features = features
+	}
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "diff":
@@ -87,11 +98,26 @@ func run() error {
 		return err
 	}
 
+	// Resolve the config directory (source of any global AGENT.md / skills) while
+	// the original working directory is still current, so a relative --config
+	// resolves correctly before the chdir below.
+	configDir := config.ConfigDir(*configPath)
+	if abs, err := filepath.Abs(configDir); err == nil {
+		configDir = abs
+	}
+
 	// Sandbox the coding tools to --dir before the agent starts. DefaultTools()
 	// operates relative to the process working directory, so a chdir is the
 	// simplest way to scope the agent to the target project.
 	if err := os.Chdir(*dir); err != nil {
 		return fmt.Errorf("cannot enter --dir %q: %w", *dir, err)
+	}
+
+	// Fold in AGENT.md and skills from the config directory, then the working
+	// directory (project-level context wins / appends last).
+	workDir, _ := os.Getwd()
+	if err := zot.LoadProjectContext(&cfg, configDir, workDir); err != nil {
+		return err
 	}
 
 	return zot.Run(context.Background(), cfg, task)
@@ -133,4 +159,14 @@ Examples:
 
 Flags:`)
 	flag.PrintDefaults()
+}
+
+// stringSlice is a flag.Value that accumulates a repeatable string flag.
+type stringSlice []string
+
+func (s *stringSlice) String() string { return strings.Join(*s, ",") }
+
+func (s *stringSlice) Set(v string) error {
+	*s = append(*s, strings.TrimSpace(v))
+	return nil
 }

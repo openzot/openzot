@@ -41,6 +41,11 @@ func applyEnvStruct(v reflect.Value, prefix string) error {
 			}
 			continue
 		}
+		// Slices and maps (e.g. features) are not settable via a scalar env var;
+		// configure them in the file. Skip rather than error.
+		if fv.Kind() == reflect.Slice || fv.Kind() == reflect.Map {
+			continue
+		}
 		raw, ok := os.LookupEnv(name)
 		if !ok {
 			continue

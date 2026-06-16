@@ -42,3 +42,13 @@ ui:
   # Force the unstyled streaming renderer instead of the full-screen UI. Plain
   # mode is also selected automatically when stdout is not a terminal.
   plain: false
+
+# ChatBotKit conversation features to enable, as a list of name/options pairs.
+# Currently exposed: web, chunking. (Override from the CLI with repeated
+# --feature flags, e.g. --feature web --feature chunking.)
+features:
+  # - name: web
+  #   options:
+  #     search: true
+  #     fetch: true
+  # - name: chunking
