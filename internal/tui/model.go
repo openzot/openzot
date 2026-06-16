@@ -156,7 +156,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == statusRunning {
 			m.status = statusDone
 			m.flushPending()
-			m.appendEntry(dividerStyle.Render("— stream ended —"))
+			m.appendEntry(dividerStyle.Render("- stream ended -"))
 		}
 		return m, nil
 	}

@@ -1,6 +1,6 @@
 // Package zot is the embeddable core of the zot autonomous coding agent. It
-// turns a single plain-English task into an agentic run — plan, act, observe,
-// exit — driven entirely by the ChatBotKit Go SDK's agent package, and renders
+// turns a single plain-English task into an agentic run - plan, act, observe,
+// exit - driven entirely by the ChatBotKit Go SDK's agent package, and renders
 // the run in a read-only terminal UI.
 //
 // The standalone binary is cmd/zot; an embedding program can import this package
@@ -74,8 +74,8 @@ func DefaultConfigPath() string { return config.DefaultConfigPath() }
 // given directories, searched in order (typically the config directory first,
 // then the working directory):
 //
-//   - <dir>/AGENT.md  — appended to the agent backstory
-//   - <dir>/skills/   — loaded via the SDK and added as a "skills" feature
+//   - <dir>/AGENT.md  - appended to the agent backstory
+//   - <dir>/skills/   - loaded via the SDK and added as a "skills" feature
 //
 // Missing files and directories are ignored, and duplicate directories are
 // searched once. AGENT.md content augments (never replaces) the base backstory.

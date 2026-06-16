@@ -16,7 +16,7 @@ func TestLoadProjectContext(t *testing.T) {
 	mustWrite(t, filepath.Join(workDir, "AGENT.md"), "PROJECT CONVENTIONS")
 
 	// A skill in each location: plain "skills/" in the config dir and hidden
-	// ".skills/" in the project dir — both layouts must be picked up.
+	// ".skills/" in the project dir - both layouts must be picked up.
 	mustWrite(t, filepath.Join(configDir, "skills", "greet", "SKILL.md"),
 		"---\nname: greet\ndescription: say hello\n---\nbody")
 	mustWrite(t, filepath.Join(workDir, ".skills", "deploy", "SKILL.md"),

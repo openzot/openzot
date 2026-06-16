@@ -40,7 +40,7 @@ func TestLineDiff(t *testing.T) {
 	for _, o := range ops {
 		kinds = append(kinds, o.kind)
 	}
-	// Expect: equal(a), delete(b), insert(x), equal(c) — order of del/ins may vary
+	// Expect: equal(a), delete(b), insert(x), equal(c) - order of del/ins may vary
 	// but there must be exactly one delete and one insert and two equals.
 	var eq, del, ins int
 	for _, k := range kinds {

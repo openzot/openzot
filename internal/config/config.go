@@ -81,7 +81,7 @@ func Defaults() Config {
 }
 
 // Load resolves the configuration: defaults, then the YAML file (if present),
-// then environment overrides. A missing file at the default path is fine —
+// then environment overrides. A missing file at the default path is fine -
 // env vars alone can configure zot; a bad explicit --config file is an error.
 func Load(path string) (Config, error) {
 	cfg := Defaults()

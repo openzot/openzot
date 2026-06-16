@@ -5,20 +5,21 @@ An autonomous coding agent you **watch**, not drive.
 `zot` inverts the usual coding-TUI interaction model. There is **no prompt and no
 chat box**. You hand it a single task on the command line, and it works the
 problem entirely on
-its own — reading files, editing them, and running shell commands — while the
+its own - reading files, editing them, and running shell commands - while the
 terminal streams a live, **read-only** view of every step it takes.
 
 <img width="1504" height="1080" alt="Area" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 
 ## How it works
 
-All of the autonomy comes from the **ChatBotKit Go SDK** (`../../../sdks/go`):
+All of the autonomy comes from the
+[**ChatBotKit Go SDK**](https://github.com/chatbotkit/go-sdk):
 
-- [`agent.ExecuteWithTools`](../../../sdks/go/agent/agent.go) runs the model in a
-  loop — _plan → act → observe → progress → exit_ — until it decides the task is
-  done or it hits the iteration cap.
-- [`agent.DefaultTools()`](../../../sdks/go/agent/tools.go) gives it the coding
-  toolbox: `read`, `write`, `edit`, and `exec` (shell).
+- `agent.ExecuteWithTools` runs the model in a loop - _plan → act → observe →
+  progress → exit_ - until it decides the task is done or it hits the iteration
+  cap.
+- `agent.DefaultTools()` gives it the coding toolbox: `read`, `write`, `edit`,
+  and `exec` (shell).
 
 `zot` itself is just a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 front-end. It launches the agent in a goroutine and renders the event stream
@@ -27,8 +28,8 @@ into a scrollable, read-only viewport. The UI deliberately has no text input.
 
 ## Why CBK?
 
-CBK.AI is a capable cloud harness: the agentic loop — model calls, tool
-orchestration, planning, iteration — runs server-side. That pushes the heavy
+CBK.AI is a capable cloud harness: the agentic loop - model calls, tool
+orchestration, planning, iteration - runs server-side. That pushes the heavy
 lifting off the executable, so the local runtime stays minimal. The binary is
 small, and the code that remains here is tiny: load some config, wire the SDK's
 tools, and render events. That makes zot easy to read, reason about, and extend.
@@ -38,12 +39,12 @@ other backends in the future; for now ChatBotKit keeps things lightweight.
 
 ## Prerequisites
 
-- Go 1.24+
 - A ChatBotKit API token (see below)
+- Go 1.24+ - only if you build from source
 
 ## API token
 
-zot needs its own ChatBotKit API token to run. **Mint a new one for the tool** —
+zot needs its own ChatBotKit API token to run. **Mint a new one for the tool** -
 don't reuse a token from elsewhere.
 
 We **recommend** creating a scoped token at
@@ -53,14 +54,14 @@ your account.
 
 Provide the token either way:
 
-**1. Environment variable (preferred)** — export `CHATBOTKIT_API_SECRET`, or put
+**1. Environment variable (preferred)** - export `CHATBOTKIT_API_SECRET`, or put
 it in a `.env` file in the working directory:
 
 ```bash
 export CHATBOTKIT_API_SECRET="cbk_…"
 ```
 
-**2. Config file** — set `api_secret` under the `chatbotkit` section of your
+**2. Config file** - set `api_secret` under the `chatbotkit` section of your
 config file (`~/.config/zot/config.yaml`, or the path given to `--config`):
 
 ```yaml
@@ -69,12 +70,32 @@ chatbotkit:
   api_secret: 'cbk_…'
 ```
 
-## Setup
+## Install
+
+### Download a release (recommended)
+
+Grab a prebuilt binary from the
+[releases page](https://github.com/openzot/openzot/releases) - no toolchain
+required. Pick the archive for your platform (`linux-amd64`, `linux-arm64`,
+`darwin-amd64`, `darwin-arm64`, `windows-amd64`):
 
 ```bash
-cd incubator/zot/tool
-cp .env.example .env   # then add your CHATBOTKIT_API_SECRET
-make build             # or: go build -o zot ./cmd/zot
+VERSION=v0.2.0           # see the releases page for the latest
+OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
+curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
+mv zot ~/.local/bin/     # or any directory on your PATH
+zot --version
+```
+
+### Build from source
+
+Requires Go 1.24+.
+
+```bash
+git clone https://github.com/openzot/openzot
+cd openzot
+make build               # or: go build -o zot ./cmd/zot
+./zot --version
 ```
 
 `make build` stamps the version into the binary; `make test`, `make vet`, and
@@ -113,7 +134,7 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 
 With `--diff` (or `ui.diff: true`, or `ZOT_UI_DIFF=true`), every `edit`/`write`
 is followed by a framed, syntax-highlighted before/after panel rendered inline in
-the activity log — scroll back to review any change the agent made:
+the activity log - scroll back to review any change the agent made:
 
 ```
   edit   internal/server/server.go
@@ -132,8 +153,8 @@ panel shows ±3 lines of context and caps very large rewrites.
 
 ### Non-interactive (plain) mode
 
-The full-screen viewer needs a terminal. When stdout is **not** a TTY — piped,
-redirected, run from CI, or driven by another program — zot automatically falls
+The full-screen viewer needs a terminal. When stdout is **not** a TTY - piped,
+redirected, run from CI, or driven by another program - zot automatically falls
 back to **plain mode**: it streams the same activity as unstyled text lines
 (`--diff` still works, rendered as a plain unified diff) instead of starting an
 alt-screen UI that would garble or fail. Force it in a terminal with `--plain`
@@ -145,7 +166,7 @@ zot --plain "tidy go.mod" | tee run.log
 
 ### Features
 
-Enable ChatBotKit conversation features for the run — each a name/options pair.
+Enable ChatBotKit conversation features for the run - each a name/options pair.
 Currently exposed: **`web`** (live web `search`/`fetch`) and **`chunking`**. Set
 them with repeated `--feature` flags:
 
@@ -165,12 +186,12 @@ features:
 ```
 
 `--feature` flags replace the configured list when given. (The list isn't
-settable via a single env var — use the config file for options.)
+settable via a single env var - use the config file for options.)
 
 ## Configuration
 
 Configuration is layered: built-in defaults < config file < `ZOT_*` environment
-variables < CLI flags. The config file is optional — env vars alone are enough.
+variables < CLI flags. The config file is optional - env vars alone are enough.
 
 ```bash
 mkdir -p ~/.config/zot
@@ -195,13 +216,13 @@ Because the agent is autonomous, the only keys are for viewing:
 
 ## Project context (`AGENT.md` & skills)
 
-On startup zot folds in context from two places — the **config directory**
+On startup zot folds in context from two places - the **config directory**
 (`~/.config/zot/`, global) and the **working directory** (`--dir`, per-project):
 
-- **`AGENT.md`** — at the **root** of either directory; its contents are
+- **`AGENT.md`** - at the **root** of either directory; its contents are
   appended to the agent's backstory (config first, then project). Use it for
   conventions the agent should always follow.
-- **skills** — each `<name>/SKILL.md` (with `name` / `description` YAML front
+- **skills** - each `<name>/SKILL.md` (with `name` / `description` YAML front
   matter) is loaded via the SDK and passed to the agent as a `skills` feature;
   the agent reads a skill's full file on demand when it's relevant. Both
   **`.skills/`** (typical at a project root) and **`skills/`** are searched.
@@ -214,14 +235,14 @@ On startup zot folds in context from two places — the **config directory**
         └── SKILL.md            └── SKILL.md
 ```
 
-Everything here is optional — missing files and directories are ignored.
+Everything here is optional - missing files and directories are ignored.
 
 ## ⚠️ Safety
 
 `zot` is fully autonomous and has **real** file-write and shell-exec access
 to `--dir`. It will create, modify and delete files and run commands without
 asking. Point it at a scratch directory or a disposable git checkout you are
-happy for it to change — not your home directory.
+happy for it to change - not your home directory.
 
 ## Architecture
 
@@ -234,5 +255,5 @@ happy for it to change — not your home directory.
 | `internal/tui/`     | the Bubble Tea read-only viewer (model, render, styles, agent bridge) |
 | `configs/`          | example configuration                                                 |
 
-Releasing is driven by the `VERSION` file and the GitHub workflows — see
+Releasing is driven by the `VERSION` file and the GitHub workflows - see
 [RELEASES.md](RELEASES.md) and [CHANGELOG.md](CHANGELOG.md).

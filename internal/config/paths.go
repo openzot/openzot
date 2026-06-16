@@ -21,8 +21,8 @@ func DefaultConfigPath() string {
 	return filepath.Join(xdgConfigHome(), "zot", "config.yaml")
 }
 
-// ConfigDir returns the directory that holds the config file — and any global
-// AGENT.md / skills — for the given --config value ("" uses the default path).
+// ConfigDir returns the directory that holds the config file - and any global
+// AGENT.md / skills - for the given --config value ("" uses the default path).
 func ConfigDir(path string) string {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultConfigPath()

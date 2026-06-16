@@ -14,7 +14,7 @@ import (
 
 // isInteractive reports whether stdout is a terminal capable of the full-screen
 // UI. When it isn't (piped, redirected, run under another process, CI), zot
-// falls back to plain mode instead of trying — and failing — to start an
+// falls back to plain mode instead of trying - and failing - to start an
 // alt-screen program.
 func isInteractive() bool {
 	fd := os.Stdout.Fd()
