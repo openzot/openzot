@@ -266,3 +266,7 @@ happy for it to change - not your home directory.
 
 Releasing is driven by the `VERSION` file and the GitHub workflows - see
 [RELEASES.md](RELEASES.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## Related
+
+- [crmkit](https://github.com/crmkit/crmkit) - an agent-first CRM for AI agents.
