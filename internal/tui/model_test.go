@@ -22,7 +22,7 @@ func editEvent() agent.ToolCallStartEvent {
 }
 
 func TestModelShowsDiffWhenEnabled(t *testing.T) {
-	m := newModel("task", "model", "/tmp", true)
+	m := newModel("task", "model", "cbk", "/tmp", true)
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = sized.(model)
 
@@ -39,7 +39,7 @@ func TestModelShowsDiffWhenEnabled(t *testing.T) {
 }
 
 func TestModelNoDiffWhenDisabled(t *testing.T) {
-	m := newModel("task", "model", "/tmp", false)
+	m := newModel("task", "model", "cbk", "/tmp", false)
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = sized.(model)
 

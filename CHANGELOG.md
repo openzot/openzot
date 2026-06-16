@@ -2,6 +2,17 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-06-16
+
+### Features
+
+- Backends: a run now targets a named **backend**. zot ships with two - `cbk` (ChatBotKit, the default) and `relay` (CBK Relay, where you bring your own OpenAI/OpenRouter key) - both speaking the same API. Choose one per run with `--backend` (or `default_backend` in config); otherwise the default is used. The active backend is shown in the header.
+- Custom models per backend: under `backends.<name>.models`, a named entry can alias a real model id and override `max_iterations` / `features`. When `--model` matches a key, that entry's settings take priority.
+
+### Changed
+
+- **Breaking (config):** the `chatbotkit:` section is replaced by `backends:`. The credential moves from `chatbotkit.api_secret` to `backends.cbk.api_secret`; `CHATBOTKIT_API_SECRET` still configures the default `cbk` backend with no config file. The `relay` backend's credential is `RELAY_API_KEY`.
+
 ## [0.2.0] - 2026-06-16
 
 ### Features
@@ -10,7 +21,6 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 - Conversation features: enable `web` and `chunking` via repeated `--feature` flags or a `features:` list in the config file (with per-feature options).
 - Diff view: `--diff` (or `ui.diff` / `ZOT_UI_DIFF`) renders a framed, syntax-highlighted before/after panel under each edit/write, powered by [chroma](https://github.com/alecthomas/chroma).
 - Plain mode: when stdout is not a TTY (piped, CI, driven by another program) zot streams unstyled output instead of the full-screen UI; force it with `--plain` (or `ui.plain` / `ZOT_UI_PLAIN`).
-- The API token can now be set in the config file under `chatbotkit.api_secret`, in addition to `CHATBOTKIT_API_SECRET`.
 
 ### Changed
 
