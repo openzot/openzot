@@ -1,10 +1,10 @@
 # zot configuration.
 #
-# Every field is optional — zot runs with built-in defaults when no config file
+# Every field is optional - zot runs with built-in defaults when no config file
 # is present. Copy this file to ~/.config/zot/config.yaml (or pass it with
 # --config) and adjust as needed.
 #
-# ENVIRONMENT VARIABLES (no file required — ideal for containers/CI):
+# ENVIRONMENT VARIABLES (no file required - ideal for containers/CI):
 # Every field below has a matching env var, ZOT_<PATH>, where PATH is the field's
 # path upper-cased with dots as underscores. Env vars override the file.
 #   agent.model           -> ZOT_AGENT_MODEL

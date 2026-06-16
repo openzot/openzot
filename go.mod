@@ -9,8 +9,8 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
 	// The published ChatBotKit Go SDK. Pinned to a release for reproducible CI /
-	// production builds. For local development against the monorepo checkout, a
-	// gitignored go.work redirects this to ../../../sdks/go.
+	// production builds. For local development against an SDK checkout, point a
+	// gitignored go.work at it.
 	github.com/chatbotkit/go-sdk v0.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-isatty v0.0.20

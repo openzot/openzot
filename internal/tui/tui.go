@@ -2,7 +2,7 @@
 //
 // The UI deliberately has no text input: the user watches the agent work, they
 // do not drive it. Everything on screen is derived from the event stream that
-// agent.ExecuteWithTools emits — tool calls, iterations, token narration, and
+// agent.ExecuteWithTools emits - tool calls, iterations, token narration, and
 // the final exit.
 package tui
 

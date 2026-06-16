@@ -36,7 +36,7 @@ var (
 	keyHint     = lipgloss.NewStyle().Foreground(colCyan)
 
 	// Status badges. Bold coloured foreground (no background block) so the spinner
-	// and label read as one solid colour — embedding the spinner's own ANSI inside
+	// and label read as one solid colour - embedding the spinner's own ANSI inside
 	// a background style otherwise breaks the fill.
 	statusRunningStyle = lipgloss.NewStyle().Bold(true).Foreground(colYellow)
 	statusDoneStyle    = lipgloss.NewStyle().Bold(true).Foreground(colGreen)

@@ -24,7 +24,7 @@ type (
 // the program. It is meant to be launched in its own goroutine; it blocks until
 // the agent's event channel closes.
 //
-// All the autonomy lives in agent.ExecuteWithTools — it loops the model through
+// All the autonomy lives in agent.ExecuteWithTools - it loops the model through
 // plan/act/observe/exit on its own. runAgent is a pure pump: SDK event in,
 // tea.Msg out.
 func runAgent(ctx context.Context, p *tea.Program, client *sdk.Client, opts agent.ExecuteWithToolsOptions) {

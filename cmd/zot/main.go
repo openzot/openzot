@@ -2,7 +2,7 @@
 //
 // It flips the usual coding-TUI model: there is no prompt and no chat box. You
 // hand zot a single task on the command line, and it works the problem on its
-// own — reading files, editing them, and running shell commands — while the
+// own - reading files, editing them, and running shell commands - while the
 // terminal streams a live, read-only view of everything it does.
 //
 // Usage:
@@ -148,7 +148,7 @@ func resolveTask(taskFile string, args []string) (string, error) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `zot — an autonomous coding agent you watch, not drive
+	fmt.Fprintln(os.Stderr, `zot - an autonomous coding agent you watch, not drive
 
 Usage:
   zot [flags] "your task in plain english"
