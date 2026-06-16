@@ -9,14 +9,14 @@
 # path upper-cased with dots as underscores. Env vars override the file.
 #   agent.model           -> ZOT_AGENT_MODEL
 #   agent.max_iterations  -> ZOT_AGENT_MAX_ITERATIONS
-#   chatbotkit.base_url   -> ZOT_CHATBOTKIT_BASE_URL
+#   default_backend       -> ZOT_DEFAULT_BACKEND
 #
-# The API secret is read from the platform-standard CHATBOTKIT_API_SECRET (and
-# the endpoint from CHATBOTKIT_HOST) so it does not need the ZOT_ prefix. Keep
-# the secret in the environment, not in this file.
+# Backend credentials are read from the environment by default (no ZOT_ prefix):
+# the "cbk" backend uses CHATBOTKIT_API_SECRET, the "relay" backend uses
+# RELAY_API_KEY. Keep secrets in the environment, not in this file.
 
 agent:
-  # ChatBotKit model alias that drives the autonomous agent.
+  # Model name that drives the agent. Resolved against the selected backend.
   model: 'kimi-k2.7-code'
 
   # Safety cap on plan/act/observe cycles before the agent is forced to stop.
@@ -26,13 +26,29 @@ agent:
   # default fully-autonomous backstory.
   # backstory: ''
 
-chatbotkit:
-  # API token. Prefer the CHATBOTKIT_API_SECRET environment variable over
-  # putting the secret here.
-  # api_secret: '$CHATBOTKIT_API_SECRET'
+# Backends are the providers a run can target. zot ships with two - "cbk"
+# (ChatBotKit) and "relay" (CBK Relay) - both speaking the same API. Pick one per
+# run with --backend; otherwise default_backend (below) is used.
+default_backend: cbk
 
-  # Optional API endpoint override (handy for staging).
-  # base_url: 'https://api.chatbotkit.com'
+backends:
+  # cbk: ChatBotKit. Credential defaults to $CHATBOTKIT_API_SECRET.
+  cbk:
+    # api_secret: '$CHATBOTKIT_API_SECRET'
+    # base_url: 'https://api.chatbotkit.com'
+
+    # Custom model definitions. When --model matches a key here, its settings
+    # take priority. `model` aliases the real id; other fields override the run.
+    models: {}
+    #   fast:
+    #     model: kimi-k2.7-code
+    #     max_iterations: 50
+
+  # relay: CBK Relay - bring your own provider key. Defaults to $RELAY_API_KEY.
+  relay:
+    # api_secret: '$RELAY_API_KEY'   # e.g. an OpenAI / OpenRouter key
+    # base_url: 'https://relay.cbk.ai'
+    models: {}
 
 ui:
   # Render a framed, syntax-highlighted before/after diff under each edit/write

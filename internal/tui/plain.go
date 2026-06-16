@@ -26,7 +26,7 @@ func isInteractive() bool {
 // in pipes, logs, and CI without a TTY or escape codes.
 func runPlain(ctx context.Context, client *sdk.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
 	fmt.Printf("zot: %s\n", meta.Task)
-	fmt.Printf("model %s · dir %s\n", meta.Model, meta.Workdir)
+	fmt.Printf("backend %s · model %s · dir %s\n", meta.Backend, meta.Model, meta.Workdir)
 
 	events, errs := agent.ExecuteWithTools(ctx, client, opts)
 

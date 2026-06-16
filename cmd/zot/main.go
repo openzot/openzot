@@ -42,7 +42,8 @@ func run() error {
 	_ = godotenv.Load()
 
 	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	model := flag.String("model", "", "override the ChatBotKit model alias")
+	backend := flag.String("backend", "", "backend to run against (default: the configured default, cbk)")
+	model := flag.String("model", "", "override the model name")
 	dir := flag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := flag.Int("max-iterations", 0, "override the safety cap on agent iterations")
 	taskFile := flag.String("task-file", "", "read the task from this file instead of the command line")
@@ -71,6 +72,9 @@ func run() error {
 
 	// CLI overrides win over file and env. The bool --diff only overrides when it
 	// was actually passed, so a config-enabled diff stays on without it.
+	if *backend != "" {
+		cfg.DefaultBackend = *backend
+	}
 	if *model != "" {
 		cfg.Agent.Model = *model
 	}

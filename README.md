@@ -61,7 +61,8 @@ We **recommend** creating a scoped token at
 limited to coding-harness operations only, so it **cannot** reach the rest of
 your account.
 
-Provide the token either way:
+This token is the credential for the default **`cbk`** backend (see
+[Backends](#backends)). Provide it either way:
 
 **1. Environment variable (preferred)** - export `CHATBOTKIT_API_SECRET`, or put
 it in a `.env` file in the working directory:
@@ -70,13 +71,14 @@ it in a `.env` file in the working directory:
 export CHATBOTKIT_API_SECRET="cbk_…"
 ```
 
-**2. Config file** - set `api_secret` under the `chatbotkit` section of your
-config file (`~/.config/zot/config.yaml`, or the path given to `--config`):
+**2. Config file** - set `api_secret` under the `cbk` backend in your config file
+(`~/.config/zot/config.yaml`, or the path given to `--config`):
 
 ```yaml
 # ~/.config/zot/config.yaml
-chatbotkit:
-  api_secret: 'cbk_…'
+backends:
+  cbk:
+    api_secret: 'cbk_…'
 ```
 
 ## Install
@@ -89,7 +91,7 @@ required. Pick the archive for your platform (`linux-amd64`, `linux-arm64`,
 `darwin-amd64`, `darwin-arm64`, `windows-amd64`):
 
 ```bash
-VERSION=v0.2.0           # see the releases page for the latest
+VERSION=v0.3.0           # see the releases page for the latest
 OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
 curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
 mv zot ~/.local/bin/     # or any directory on your PATH
@@ -129,7 +131,8 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 
 | Flag               | Default                     | Description                                                |
 | ------------------ | --------------------------- | ---------------------------------------------------------- |
-| `--model`          | `kimi-k2.7-code`            | ChatBotKit model alias driving the agent                   |
+| `--model`          | `kimi-k2.7-code`            | Model name (resolved against the selected backend)        |
+| `--backend`        | `cbk`                       | Backend to run against: `cbk` or `relay`                  |
 | `--dir`            | `.`                         | Working directory the agent reads, writes and runs in      |
 | `--max-iterations` | `1000`                      | Safety cap before the agent is forced to stop              |
 | `--task-file`      | _(none)_                    | Read the task from a file instead of the command line      |
@@ -197,6 +200,46 @@ features:
 `--feature` flags replace the configured list when given. (The list isn't
 settable via a single env var - use the config file for options.)
 
+## Backends
+
+A run targets a **backend** - a provider zot talks to. Two ship built in, both
+speaking the same API:
+
+| Backend | Endpoint               | Credential                                  |
+| ------- | ---------------------- | ------------------------------------------- |
+| `cbk`   | ChatBotKit (default)   | `CHATBOTKIT_API_SECRET`                      |
+| `relay` | `https://relay.cbk.ai` | `RELAY_API_KEY` (your OpenAI/OpenRouter key) |
+
+Pick one with `--backend` (or `default_backend` in config); otherwise `cbk` is
+used. You select a model by name - it's resolved against the chosen backend:
+
+```bash
+zot "fix the failing test"                     # cbk + default model
+zot --backend relay --model gpt-5 "…"          # relay + gpt-5
+```
+
+Each backend can define **custom models** in the config; when `--model` matches a
+key, that entry's settings take priority (alias the real id, cap iterations, add
+features):
+
+```yaml
+default_backend: cbk
+backends:
+  cbk:
+    # api_secret: '$CHATBOTKIT_API_SECRET'   # default
+    models:
+      fast:
+        model: kimi-k2.7-code
+        max_iterations: 50
+  relay:
+    api_secret: '$OPENAI_API_KEY'
+    # base_url: 'https://relay.cbk.ai'        # default
+```
+
+```bash
+zot --model fast "…"   # uses cbk's "fast" model config
+```
+
 ## Configuration
 
 Configuration is layered: built-in defaults < config file < `ZOT_*` environment
@@ -207,10 +250,11 @@ mkdir -p ~/.config/zot
 cp configs/zot.example.yaml ~/.config/zot/config.yaml
 ```
 
-Every field has a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
-`ZOT_AGENT_MODEL`). The API secret is read from the platform-standard
-`CHATBOTKIT_API_SECRET` (endpoint from `CHATBOTKIT_HOST`), so it does not need
-the `ZOT_` prefix. See [configs/zot.example.yaml](configs/zot.example.yaml).
+Scalar fields have a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
+`ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Backend
+credentials come from their own env vars (`CHATBOTKIT_API_SECRET` for `cbk`,
+`RELAY_API_KEY` for `relay`), so they don't need the `ZOT_` prefix. See
+[configs/zot.example.yaml](configs/zot.example.yaml).
 
 ### Controls
 

@@ -130,36 +130,56 @@ func LoadProjectContext(cfg *Config, dirs ...string) error {
 // directory, so callers should chdir into the target project first. Run blocks
 // until the user quits the viewer or the program errors.
 func Run(ctx context.Context, cfg Config, task string) error {
-	if cfg.ChatBotKit.APISecret == "" {
-		return fmt.Errorf("ChatBotKit API secret is not set (export CHATBOTKIT_API_SECRET or set chatbotkit.api_secret)")
+	backend, ok := cfg.Backends[cfg.DefaultBackend]
+	if !ok {
+		return fmt.Errorf("backend %q is not configured", cfg.DefaultBackend)
+	}
+	if backend.APISecret == "" {
+		return fmt.Errorf("no API secret for backend %q (set its credential via env or config)", cfg.DefaultBackend)
 	}
 
-	client := sdk.New(sdk.Options{
-		Secret:  cfg.ChatBotKit.APISecret,
-		BaseURL: cfg.ChatBotKit.BaseURL,
-	})
+	// Resolve the model against the backend's custom model definitions. A custom
+	// entry's settings take priority over the run defaults.
+	model := cfg.Agent.Model
+	maxIterations := cfg.Agent.MaxIterations
+	features := cfg.Features
+	if mc, ok := backend.Models[model]; ok {
+		if mc.Model != "" {
+			model = mc.Model
+		}
+		if mc.MaxIterations > 0 {
+			maxIterations = mc.MaxIterations
+		}
+		features = append(append([]config.Feature{}, features...), mc.Features...)
+	}
 
 	backstory := cfg.Agent.Backstory
 	if backstory == "" {
 		backstory = DefaultBackstory
 	}
 
+	client := sdk.New(sdk.Options{
+		Secret:  backend.APISecret,
+		BaseURL: backend.BaseURL,
+	})
+
 	workdir, _ := os.Getwd()
 
 	opts := agent.ExecuteWithToolsOptions{
-		Model:         cfg.Agent.Model,
+		Model:         model,
 		Messages:      []agent.Message{{Type: "user", Text: task}},
 		Backstory:     backstory,
 		Tools:         agent.DefaultTools(),
-		MaxIterations: cfg.Agent.MaxIterations,
+		MaxIterations: maxIterations,
 	}
-	if feats := sdkFeatures(cfg.Features); len(feats) > 0 {
+	if feats := sdkFeatures(features); len(feats) > 0 {
 		opts.Extensions = &types.ConversationCompleteRequestExtensions{Features: feats}
 	}
 
 	return tui.Run(ctx, client, tui.Meta{
 		Task:     task,
 		Model:    cfg.Agent.Model,
+		Backend:  cfg.DefaultBackend,
 		Workdir:  workdir,
 		ShowDiff: cfg.UI.Diff,
 		Plain:    cfg.UI.Plain,

@@ -33,6 +33,7 @@ type tickMsg struct{}
 type model struct {
 	task     string
 	model    string
+	backend  string
 	workdir  string
 	showDiff bool
 
@@ -62,7 +63,7 @@ type model struct {
 	elapsed   time.Duration
 }
 
-func newModel(task, modelName, workdir string, showDiff bool) model {
+func newModel(task, modelName, backend, workdir string, showDiff bool) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colYellow)
@@ -70,6 +71,7 @@ func newModel(task, modelName, workdir string, showDiff bool) model {
 	return model{
 		task:      task,
 		model:     modelName,
+		backend:   backend,
 		workdir:   workdir,
 		showDiff:  showDiff,
 		spinner:   sp,
@@ -322,6 +324,7 @@ func (m model) badge() string {
 func (m model) metaBar() string {
 	seg := func(k, v string) string { return metaKey.Render(k+" ") + metaAccent.Render(v) }
 	parts := []string{
+		seg("backend", m.backend),
 		seg("model", m.model),
 		seg("dir", truncate(m.workdir, 36)),
 		seg("iter", fmt.Sprintf("%d", m.iteration)),

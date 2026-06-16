@@ -19,8 +19,10 @@ import (
 type Meta struct {
 	// Task is the one-line instruction the agent is working on.
 	Task string
-	// Model is the ChatBotKit model alias driving the agent.
+	// Model is the model name driving the agent.
 	Model string
+	// Backend is the name of the backend the run targets.
+	Backend string
 	// Workdir is the directory the agent's tools operate in.
 	Workdir string
 	// ShowDiff renders a syntax-highlighted diff panel under each edit/write.
@@ -41,7 +43,7 @@ func Run(ctx context.Context, client *sdk.Client, meta Meta, opts agent.ExecuteW
 		return runPlain(ctx, client, meta, opts)
 	}
 
-	m := newModel(meta.Task, meta.Model, meta.Workdir, meta.ShowDiff)
+	m := newModel(meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	go runAgent(ctx, p, client, opts)
