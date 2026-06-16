@@ -82,16 +82,16 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 
 ### Flags
 
-| Flag               | Default            | Description                                              |
-| ------------------ | ------------------ | -------------------------------------------------------- |
-| `--model`          | `kimi-k2.7-code`   | ChatBotKit model alias driving the agent                 |
-| `--dir`            | `.`                | Working directory the agent reads, writes and runs in    |
-| `--max-iterations` | `1000`             | Safety cap before the agent is forced to stop            |
-| `--task-file`      | _(none)_           | Read the task from a file instead of the command line    |
-| `--diff`           | `false`            | Show a syntax-highlighted diff panel under each edit/write|
-| `--plain`          | `false`            | Stream unstyled output (auto-enabled when not a TTY)     |
-| `--config`         | `~/.config/zot/config.yaml` | Path to a config file (optional)                |
-| `--version`        |                    | Print the version and exit                                |
+| Flag               | Default                     | Description                                                |
+| ------------------ | --------------------------- | ---------------------------------------------------------- |
+| `--model`          | `kimi-k2.7-code`            | ChatBotKit model alias driving the agent                   |
+| `--dir`            | `.`                         | Working directory the agent reads, writes and runs in      |
+| `--max-iterations` | `1000`                      | Safety cap before the agent is forced to stop              |
+| `--task-file`      | _(none)_                    | Read the task from a file instead of the command line      |
+| `--diff`           | `false`                     | Show a syntax-highlighted diff panel under each edit/write |
+| `--plain`          | `false`                     | Stream unstyled output (auto-enabled when not a TTY)       |
+| `--config`         | `~/.config/zot/config.yaml` | Path to a config file (optional)                           |
+| `--version`        |                             | Print the version and exit                                 |
 
 ### Diffs
 
@@ -146,31 +146,30 @@ the `ZOT_` prefix. See [configs/zot.example.yaml](configs/zot.example.yaml).
 
 Because the agent is autonomous, the only keys are for viewing:
 
-| Key       | Action            |
-| --------- | ----------------- |
-| `↑` / `↓` | scroll the log    |
-| `PgUp`/`PgDn` | page the log  |
-| `g` / `G` | jump to top/bottom |
-| `q`       | quit              |
+| Key           | Action             |
+| ------------- | ------------------ |
+| `↑` / `↓`     | scroll the log     |
+| `PgUp`/`PgDn` | page the log       |
+| `g` / `G`     | jump to top/bottom |
+| `q`           | quit               |
 
 ## ⚠️ Safety
 
 `zot` is fully autonomous and has **real** file-write and shell-exec access
 to `--dir`. It will create, modify and delete files and run commands without
 asking. Point it at a scratch directory or a disposable git checkout you are
-happy for it to change — not your home directory. This is an incubator
-experiment, not a sandboxed product.
+happy for it to change — not your home directory.
 
 ## Architecture
 
-| Path                   | Responsibility                                                        |
-| ---------------------- | -------------------------------------------------------------------- |
-| `cmd/zot/`             | the binary: flag parsing, `.env`, working dir, then calls `zot.Run`  |
-| `zot.go`               | embeddable core: builds the SDK client + agent options and runs it   |
-| `internal/config/`     | layered config (defaults < file < env), XDG paths, env overrides     |
-| `internal/version/`    | build-time version stamping and GitHub update checks                 |
-| `internal/tui/`        | the Bubble Tea read-only viewer (model, render, styles, agent bridge)|
-| `configs/`             | example configuration                                                |
+| Path                | Responsibility                                                        |
+| ------------------- | --------------------------------------------------------------------- |
+| `cmd/zot/`          | the binary: flag parsing, `.env`, working dir, then calls `zot.Run`   |
+| `zot.go`            | embeddable core: builds the SDK client + agent options and runs it    |
+| `internal/config/`  | layered config (defaults < file < env), XDG paths, env overrides      |
+| `internal/version/` | build-time version stamping and GitHub update checks                  |
+| `internal/tui/`     | the Bubble Tea read-only viewer (model, render, styles, agent bridge) |
+| `configs/`          | example configuration                                                 |
 
 Releasing is driven by the `VERSION` file and the GitHub workflows — see
 [RELEASES.md](RELEASES.md) and [CHANGELOG.md](CHANGELOG.md).
