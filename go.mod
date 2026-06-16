@@ -8,7 +8,10 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
-	github.com/chatbotkit/go-sdk v0.0.0
+	// The published ChatBotKit Go SDK. Pinned to a release for reproducible CI /
+	// production builds. For local development against the monorepo checkout, a
+	// gitignored go.work redirects this to ../../../sdks/go.
+	github.com/chatbotkit/go-sdk v0.1.1
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-isatty v0.0.20
 	gopkg.in/yaml.v3 v3.0.1
@@ -35,5 +38,3 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.3.8 // indirect
 )
-
-replace github.com/chatbotkit/go-sdk => ../../../sdks/go
