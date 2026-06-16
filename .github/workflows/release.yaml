@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Dispatched by tag-release.yaml at the new tag ref. Needed because tags
+  # pushed with GITHUB_TOKEN do not trigger the push-tags event above.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          LDFLAGS="-s -w -X github.com/chatbotkit/zot/internal/version.Version=${VERSION}"
+          EXT=""
+          if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+
+          OUTDIR="dist/zot-${VERSION}-${GOOS}-${GOARCH}"
+          mkdir -p "${OUTDIR}"
+
+          for cmd in zot; do
+            echo "Building ${cmd}..."
+            go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/${cmd}${EXT}" "./cmd/${cmd}"
+          done
+
+          cp configs/zot.example.yaml "${OUTDIR}/zot.example.yaml"
+          cp README.md "${OUTDIR}/README.md"
+
+          tar -czf "dist/zot-${VERSION}-${GOOS}-${GOARCH}.tar.gz" -C dist "zot-${VERSION}-${GOOS}-${GOARCH}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zot-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Release notes are the latest section of the curated CHANGELOG.md. Extract
+      # everything between the first "## [" version header and the next one.
+      - name: Generate release notes
+        id: notes
+        run: |
+          {
+            echo "content<<CHANGELOG_EOF"
+            awk '/^## \[/ { if (seen) exit; seen=1; next } seen { print }' CHANGELOG.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.notes.outputs.content }}
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
