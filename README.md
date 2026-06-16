@@ -1,10 +1,15 @@
+<p align="center">
+  <img src="https://zot.im/icon-dark.svg" alt="zot" width="96" height="96" />
+</p>
+
 <h1 align="center">zot</h1>
 
-**An autonomous coding agent for your terminal.** Brief it once on the command
-line and it plans, edits, and runs your code until the whole job is done - no
-prompting, no babysitting, no chat box. A read-only viewer streams every step.
+**An autonomous coding agent.** Brief it once and it plans, edits, and runs your
+code until the whole job is done - no prompting, no babysitting, no chat box.
 
-<img width="1504" height="1080" alt="zot" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
+<p align="center">
+  <img width="1504" height="1080" alt="zot demo" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
+</p>
 
 ## Status
 
@@ -40,17 +45,6 @@ All of the autonomy comes from the
 front-end. It launches the agent in a goroutine and renders the event stream
 (`ToolCallStart`, `ToolCallEnd`, `Iteration`, token narration, `AgentExit`, …)
 into a scrollable, read-only viewport. The UI deliberately has no text input.
-
-## Why CBK?
-
-CBK.AI is a capable cloud harness: the agentic loop - model calls, tool
-orchestration, planning, iteration - runs server-side. That pushes the heavy
-lifting off the executable, so the local runtime stays minimal. The binary is
-small, and the code that remains here is tiny: load some config, wire the SDK's
-tools, and render events. That makes zot easy to read, reason about, and extend.
-
-The backend is an implementation detail behind the agent package. We may add
-other backends in the future; for now ChatBotKit keeps things lightweight.
 
 ## Prerequisites
 
