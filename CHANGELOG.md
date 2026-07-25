@@ -2,6 +2,16 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-07-25
+
+### Features
+
+- Docker: official Linux amd64 and arm64 images are published to `ghcr.io/openzot/openzot` from every release tag, with provenance attestations and an SBOM. The agent works in `/workspace`, the entrypoint is `zot` itself, and the image carries `git`, `bash`, `curl` and `openssh-client` for the agent's `exec` tool. See [docs/docker.md](docs/docker.md) for credential, config and hardening recipes.
+
+### Changed
+
+- Build: the module now requires Go 1.25.12, matching the toolchain the container image builds with. The previous `go 1.25.0` directive had CI building against an unpatched standard library, which `govulncheck` flags.
+
 ## [0.4.0] - 2026-07-25
 
 ### Features

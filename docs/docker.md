@@ -199,7 +199,7 @@ A task that builds Go, installs npm packages, or runs a database client needs
 those tools present. Layer them on:
 
 ```dockerfile
-FROM ghcr.io/openzot/openzot:v0.4.0
+FROM ghcr.io/openzot/openzot:v0.4.1
 
 USER root
 RUN apk add --no-cache go nodejs npm make
@@ -212,7 +212,7 @@ change under a build you did not intend.
 ## Building locally
 
 ```bash
-docker build --build-arg VERSION=v0.4.0 --tag openzot/zot:local .
+docker build --build-arg VERSION=v0.4.1 --tag openzot/zot:local .
 docker run --rm openzot/zot:local --version
 ```
 
