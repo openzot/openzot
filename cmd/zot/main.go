@@ -12,6 +12,11 @@
 //
 //	# operate inside a specific directory and cap the work
 //	zot --dir ./scratch --max-iterations 40 "scaffold a snake game in python"
+//
+// The "acp" subcommand serves the same agent over the Agent Client Protocol
+// instead, so an editor or agent harness can drive it:
+//
+//	zot acp
 package main
 
 import (
@@ -36,10 +41,19 @@ func main() {
 	}
 }
 
+// acpCommand is the argv[0]-after-the-binary word that switches zot from
+// "run one task" to "serve the Agent Client Protocol". It is matched before
+// flags are parsed, so a literal task of "acp" needs --task-file.
+const acpCommand = "acp"
+
 func run() error {
 	// Load a .env from the working directory if present, so CHATBOTKIT_API_SECRET
 	// (and friends) can live alongside the project being worked on.
 	_ = godotenv.Load()
+
+	if len(os.Args) > 1 && os.Args[1] == acpCommand {
+		return runACP(os.Args[2:])
+	}
 
 	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
 	backend := flag.String("backend", "", "backend to run against (default: the configured default, cbk)")
@@ -156,10 +170,14 @@ func usage() {
 
 Usage:
   zot [flags] "your task in plain english"
+  zot acp [flags]
 
 Examples:
   zot "add input validation to the signup handler and a test"
   zot --dir ./scratch "scaffold a tiny http server in go"
+
+Commands:
+  acp   serve the agent over the Agent Client Protocol (see zot acp -h)
 
 Flags:`)
 	flag.PrintDefaults()

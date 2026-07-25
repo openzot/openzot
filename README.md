@@ -125,6 +125,9 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 
 # read the task from a file instead of the command line
 ./zot --task-file TASK.md
+
+# serve the agent to an ACP client instead of running a task
+./zot acp
 ```
 
 ### Flags
@@ -199,6 +202,73 @@ features:
 
 `--feature` flags replace the configured list when given. (The list isn't
 settable via a single env var - use the config file for options.)
+
+## ACP mode (`zot acp`)
+
+`zot acp` serves the same agent over the
+[**Agent Client Protocol**](https://agentclientprotocol.com/), so an ACP client -
+an editor, or an agent harness - can drive zot instead of you:
+
+```bash
+zot acp
+```
+
+The protocol is JSON-RPC on stdin/stdout, so this is meant to be **spawned by a
+client**, not run by hand. Everything else about zot is unchanged: the same
+agent loop, the same `read`/`write`/`edit`/`exec` tools, the same config and
+backends. What changes is the shape of a run:
+
+| | normal run | `zot acp` |
+| --- | --- | --- |
+| Work comes from | the task on the command line | `session/prompt`, turn by turn |
+| Working directory | `--dir` | the `cwd` the client opens each session with |
+| Output | the read-only viewer | `session/update` notifications |
+| Lifetime | one task, then exit | stays up until the client disconnects |
+
+Each session keeps its own conversation history, so follow-up prompts continue
+where the last turn left off, and `AGENT.md` / skills are loaded **per session**
+from the directory the client supplies - a client working across several
+repositories gets the right context in each.
+
+The mode takes `--config`, `--backend`, `--model`, `--max-iterations` and
+`--feature`. It takes no task and no `--dir`, and the viewer flags don't apply.
+Diagnostics go to stderr; stdout belongs to the protocol.
+
+### Connecting to Buzz
+
+[Buzz](https://github.com/block/buzz) is a self-hostable workspace where humans
+and agents share channels. Its `buzz-acp` harness spawns any ACP agent, so
+pointing it at zot is two environment variables:
+
+```bash
+export BUZZ_ACP_AGENT_COMMAND=zot
+export BUZZ_ACP_AGENT_ARGS=acp
+export CHATBOTKIT_API_SECRET="your-api-key"
+
+buzz-acp
+```
+
+Buzz's own operating instructions arrive with each prompt, and zot's `exec` tool
+runs the `buzz` CLI to post replies, open pull requests, and so on. Note that
+zot has **no MCP client**: any MCP servers the harness offers are logged and
+ignored, which costs nothing by default (`BUZZ_ACP_MCP_COMMAND` is empty).
+
+> ⚠️ An ACP-mode zot is an unattended `exec` on the machine that runs it,
+> reachable by whoever the client lets through. Buzz defaults to
+> `--respond-to owner-only`; keep it that way unless you mean otherwise, and see
+> [Safety](#️-safety).
+
+### Limits
+
+- **One turn at a time.** The SDK's file and shell tools resolve paths against
+  the process working directory, so a turn owns it. Clients that drive one
+  prompt at a time - `buzz-acp` does - never notice; a client wanting parallel
+  sessions should spawn a process per workspace.
+- **No permission prompts.** zot is autonomous by design: it does not call
+  `session/request_permission`, so the client sees tool calls as they happen
+  rather than being asked to approve them.
+- **No `session/load`.** History lives in the process; restarting an agent
+  starts its sessions fresh.
 
 ## Backends
 
@@ -297,15 +367,20 @@ to `--dir`. It will create, modify and delete files and run commands without
 asking. Point it at a scratch directory or a disposable git checkout you are
 happy for it to change - not your home directory.
 
+In [ACP mode](#acp-mode-zot-acp) the same applies to every directory a client
+opens a session in, and the prompts come from whoever that client lets through -
+so the blast radius is the client's access-control policy, not just yours.
+
 ## Architecture
 
 | Path                | Responsibility                                                        |
 | ------------------- | --------------------------------------------------------------------- |
-| `cmd/zot/`          | the binary: flag parsing, `.env`, working dir, then calls `zot.Run`   |
+| `cmd/zot/`          | the binary: flag parsing, `.env`, working dir, then `zot.Run`/`ServeACP` |
 | `zot.go`            | embeddable core: builds the SDK client + agent options and runs it    |
 | `internal/config/`  | layered config (defaults < file < env), XDG paths, env overrides      |
 | `internal/version/` | build-time version stamping and GitHub update checks                  |
 | `internal/tui/`     | the Bubble Tea read-only viewer (model, render, styles, agent bridge) |
+| `internal/acp/`     | the Agent Client Protocol server: sessions, turns, event bridge       |
 | `configs/`          | example configuration                                                 |
 
 Releasing is driven by the `VERSION` file and the GitHub workflows - see
