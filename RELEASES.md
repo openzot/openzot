@@ -14,8 +14,9 @@ binaries as a GitHub Release:
    dispatches the Release workflow.
 3. [`release.yaml`](.github/workflows/release.yaml) builds the binary for each
    target platform, packages each into a `.tar.gz` (with `README.md` and
-   `zot.example.yaml`), generates SHA-256 checksums, and creates a GitHub
-   Release with notes taken from the latest `CHANGELOG.md` section.
+   `zot.example.yaml`), publishes a multi-platform container image, generates
+   SHA-256 checksums, and creates a GitHub Release with notes taken from the
+   latest `CHANGELOG.md` section and the image coordinates on top.
 
 You can also release manually by pushing a tag yourself:
 
@@ -36,6 +37,18 @@ file itself holds the bare version (no `v` prefix); the tag adds it.
 | macOS   | amd64, arm64 |
 | Windows | amd64        |
 
+### Container images
+
+The same tag also publishes a Linux amd64/arm64 image to
+`ghcr.io/openzot/openzot`, built from the repository
+[`Dockerfile`](Dockerfile) with provenance attestations and an SBOM. Stable
+releases move `latest` and publish `vX.Y.Z`, `X.Y.Z` and `X.Y`; prereleases
+(a tag containing `-`) publish only their exact tags and leave `latest` alone.
+
+CI builds and smoke-tests the same Dockerfile on every code push, so a broken
+image fails before a tag is ever cut. See [docs/docker.md](docs/docker.md) for
+how the image is meant to be run.
+
 ## Version embedding
 
 The version is baked into the binary at build time via `-ldflags`:
@@ -52,6 +65,16 @@ Check the embedded version with:
 
 ```bash
 zot --version
+```
+
+## Local release checks
+
+```bash
+make test
+make build VERSION=v0.4.1
+./zot --version
+docker build --build-arg VERSION=v0.4.1 --tag openzot/zot:local .
+docker run --rm openzot/zot:local --version
 ```
 
 ## Changelog

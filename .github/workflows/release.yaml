@@ -8,8 +8,13 @@ on:
   # pushed with GITHUB_TOKEN do not trigger the push-tags event above.
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -70,8 +75,65 @@ jobs:
           name: zot-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*.tar.gz
 
-  publish:
+  image:
     needs: release
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.title=zot
+            org.opencontainers.image.description=An autonomous coding agent
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+  publish:
+    needs:
+      - release
+      - image
     runs-on: ubuntu-latest
 
     steps:
@@ -81,12 +143,20 @@ jobs:
           fetch-depth: 0
 
       # Release notes are the latest section of the curated CHANGELOG.md. Extract
-      # everything between the first "## [" version header and the next one.
+      # everything between the first "## [" version header and the next one, and
+      # lead with the container image coordinates.
       - name: Generate release notes
         id: notes
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           {
             echo "content<<CHANGELOG_EOF"
+            echo "Container image: \`${IMAGE}:${GITHUB_REF_NAME}\`"
+            echo
+            echo "Digest: \`${DIGEST}\`"
+            echo
             awk '/^## \[/ { if (seen) exit; seen=1; next } seen { print }' CHANGELOG.md
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"

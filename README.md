@@ -25,10 +25,10 @@ keyboard back. zot flips that - you describe the job once and it runs the whole
 loop (plan → act → observe → verify → exit) without you in it.
 
 The agentic loop - model calls, tool orchestration, planning, iteration - runs on
-a capable cloud harness ([ChatBotKit](https://chatbotkit.com)), not in the
-binary. That keeps the local runtime tiny: load config, wire the SDK's tools,
-render events. The backend is an implementation detail behind the agent package;
-other backends may come later.
+a capable cloud harness, not in the binary. The default `cbk` backend uses
+[ChatBotKit](https://chatbotkit.com); the built-in `relay` backend can use an
+OpenAI or OpenRouter key instead. That keeps the local runtime tiny: load
+config, wire the SDK's tools, and render events.
 
 ## How it works
 
@@ -48,21 +48,21 @@ into a scrollable, read-only viewport. The UI deliberately has no text input.
 
 ## Prerequisites
 
-- A ChatBotKit API token (see below)
-- Go 1.24+ - only if you build from source
+- A credential for the selected backend: a ChatBotKit token for `cbk`, or an
+  OpenAI/OpenRouter key for `relay`
+- Go 1.25+ - only if you build from source
 
-## API token
+## Backend credentials
 
-zot needs its own ChatBotKit API token to run. **Mint a new one for the tool** -
-don't reuse a token from elsewhere.
+The default `cbk` backend needs its own ChatBotKit API token. **Mint a new one
+for the tool** - don't reuse a token from elsewhere.
 
 We **recommend** creating a scoped token at
 [chatbotkit.com/apps/code](https://chatbotkit.com/apps/code). This issues a token
 limited to coding-harness operations only, so it **cannot** reach the rest of
 your account.
 
-This token is the credential for the default **`cbk`** backend (see
-[Backends](#backends)). Provide it either way:
+Provide the token either way:
 
 **1. Environment variable (preferred)** - export `CHATBOTKIT_API_SECRET`, or put
 it in a `.env` file in the working directory:
@@ -91,16 +91,16 @@ required. Pick the archive for your platform (`linux-amd64`, `linux-arm64`,
 `darwin-amd64`, `darwin-arm64`, `windows-amd64`):
 
 ```bash
-VERSION=v0.3.0           # see the releases page for the latest
+VERSION=vX.Y.Z           # replace with the latest release tag
 OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
 curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
-mv zot ~/.local/bin/     # or any directory on your PATH
+mv "zot-${VERSION}-${OS}-${ARCH}/zot" ~/.local/bin/ # or any directory on your PATH
 zot --version
 ```
 
 ### Build from source
 
-Requires Go 1.24+.
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/openzot/openzot
@@ -111,6 +111,45 @@ make build               # or: go build -o zot ./cmd/zot
 
 `make build` stamps the version into the binary; `make test`, `make vet`, and
 `make cross GOOS=… GOARCH=…` are also available.
+
+### Docker
+
+Official Linux amd64 and arm64 images are published to GitHub Container
+Registry from the same version tag as the binary release. The agent works in
+`/workspace` - mount the checkout you are happy for it to change there:
+
+```bash
+docker pull ghcr.io/openzot/openzot:latest
+
+docker run --rm -it \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp \
+  --env CHATBOTKIT_API_SECRET \
+  --volume "$PWD":/workspace \
+  ghcr.io/openzot/openzot:latest "add a /health endpoint and a test for it"
+```
+
+`--user` makes the files the agent writes belong to you rather than the image's
+`zot` user (uid 10001), and `HOME=/tmp` gives that user a writable home so
+tools like `git` can store their own config. Both are only needed for host bind
+mounts; with a named volume the defaults are fine.
+
+The entrypoint **is** `zot`, so everything after the image name is zot's own
+arguments (`--version`, `--diff`, `acp`, …). With `-it` you get the full-screen
+viewer; without a TTY it streams plain text, which is what you want in CI:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" --env HOME=/tmp \
+  --env CHATBOTKIT_API_SECRET \
+  --volume "$PWD":/workspace \
+  ghcr.io/openzot/openzot:latest --max-iterations 40 --task-file TASK.md | tee run.log
+```
+
+A container is also the cleanest answer to [Safety](#️-safety): file writes and
+shell commands are confined to the volume you mounted, so a run cannot reach the
+rest of your machine. See [docs/docker.md](docs/docker.md) for credentials,
+config and `AGENT.md` mounts, ACP mode, and hardening flags.
 
 ## Usage
 
@@ -134,8 +173,8 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 
 | Flag               | Default                     | Description                                                |
 | ------------------ | --------------------------- | ---------------------------------------------------------- |
-| `--model`          | `kimi-k2.7-code`            | Model name (resolved against the selected backend)        |
-| `--backend`        | `cbk`                       | Backend to run against: `cbk` or `relay`                  |
+| `--model`          | `kimi-k2.7-code`            | Model name (resolved against the selected backend)         |
+| `--backend`        | `cbk`                       | Backend to run against: `cbk` or `relay`                   |
 | `--dir`            | `.`                         | Working directory the agent reads, writes and runs in      |
 | `--max-iterations` | `1000`                      | Safety cap before the agent is forced to stop              |
 | `--task-file`      | _(none)_                    | Read the task from a file instead of the command line      |
@@ -218,12 +257,12 @@ client**, not run by hand. Everything else about zot is unchanged: the same
 agent loop, the same `read`/`write`/`edit`/`exec` tools, the same config and
 backends. What changes is the shape of a run:
 
-| | normal run | `zot acp` |
-| --- | --- | --- |
-| Work comes from | the task on the command line | `session/prompt`, turn by turn |
-| Working directory | `--dir` | the `cwd` the client opens each session with |
-| Output | the read-only viewer | `session/update` notifications |
-| Lifetime | one task, then exit | stays up until the client disconnects |
+|                   | normal run                   | `zot acp`                                    |
+| ----------------- | ---------------------------- | -------------------------------------------- |
+| Work comes from   | the task on the command line | `session/prompt`, turn by turn               |
+| Working directory | `--dir`                      | the `cwd` the client opens each session with |
+| Output            | the read-only viewer         | `session/update` notifications               |
+| Lifetime          | one task, then exit          | stays up until the client disconnects        |
 
 Each session keeps its own conversation history, so follow-up prompts continue
 where the last turn left off, and `AGENT.md` / skills are loaded **per session**
@@ -275,8 +314,8 @@ ignored, which costs nothing by default (`BUZZ_ACP_MCP_COMMAND` is empty).
 A run targets a **backend** - a provider zot talks to. Two ship built in, both
 speaking the same API:
 
-| Backend | Endpoint               | Credential                                  |
-| ------- | ---------------------- | ------------------------------------------- |
+| Backend | Endpoint               | Credential                                   |
+| ------- | ---------------------- | -------------------------------------------- |
 | `cbk`   | ChatBotKit (default)   | `CHATBOTKIT_API_SECRET`                      |
 | `relay` | `https://relay.cbk.ai` | `RELAY_API_KEY` (your OpenAI/OpenRouter key) |
 
@@ -371,21 +410,30 @@ In [ACP mode](#acp-mode-zot-acp) the same applies to every directory a client
 opens a session in, and the prompts come from whoever that client lets through -
 so the blast radius is the client's access-control policy, not just yours.
 
+The published [container image](#docker) is the practical way to bound this: the
+agent can only touch the volume you mounted, and `docker run` gives you the rest
+of the levers (read-only root, dropped capabilities, resource limits) in one
+place. [docs/docker.md](docs/docker.md) covers them.
+
 ## Architecture
 
-| Path                | Responsibility                                                        |
-| ------------------- | --------------------------------------------------------------------- |
+| Path                | Responsibility                                                           |
+| ------------------- | ------------------------------------------------------------------------ |
 | `cmd/zot/`          | the binary: flag parsing, `.env`, working dir, then `zot.Run`/`ServeACP` |
-| `zot.go`            | embeddable core: builds the SDK client + agent options and runs it    |
-| `internal/config/`  | layered config (defaults < file < env), XDG paths, env overrides      |
-| `internal/version/` | build-time version stamping and GitHub update checks                  |
-| `internal/tui/`     | the Bubble Tea read-only viewer (model, render, styles, agent bridge) |
-| `internal/acp/`     | the Agent Client Protocol server: sessions, turns, event bridge       |
-| `configs/`          | example configuration                                                 |
+| `zot.go`            | embeddable core: builds the SDK client + agent options and runs it       |
+| `internal/config/`  | layered config (defaults < file < env), XDG paths, env overrides         |
+| `internal/version/` | build-time version stamping and GitHub update checks                     |
+| `internal/tui/`     | the Bubble Tea read-only viewer (model, render, styles, agent bridge)    |
+| `internal/acp/`     | the Agent Client Protocol server: sessions, turns, event bridge          |
+| `configs/`          | example configuration                                                    |
 
 Releasing is driven by the `VERSION` file and the GitHub workflows - see
 [RELEASES.md](RELEASES.md) and [CHANGELOG.md](CHANGELOG.md).
 
-## Related
+## Ecosystem
 
-- [crmkit](https://github.com/crmkit/crmkit) - an agent-first CRM for AI agents.
+| Project                                       | Role                                                           |
+| --------------------------------------------- | -------------------------------------------------------------- |
+| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use |
+| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands      |
+| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP |
