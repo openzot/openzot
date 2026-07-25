@@ -1,0 +1,9 @@
+.git
+.github
+.env
+dist
+zot
+# Local development only: a go.work in the build context would redirect the
+# pinned go-sdk to a path that does not exist inside the image.
+go.work
+go.work.sum
