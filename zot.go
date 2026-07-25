@@ -18,6 +18,7 @@ import (
 	"github.com/chatbotkit/go-sdk/sdk"
 	"github.com/chatbotkit/go-sdk/types"
 
+	"github.com/chatbotkit/zot/internal/acp"
 	"github.com/chatbotkit/zot/internal/config"
 	"github.com/chatbotkit/zot/internal/tui"
 	"github.com/chatbotkit/zot/internal/version"
@@ -59,6 +60,24 @@ Operating rules:
 - Call "progress" as you complete steps so your reasoning is visible.
 - When the task is genuinely done (or truly cannot proceed), call "exit" with code 0 for success or a non-zero code for failure, and a short summary message.
 - Make reasonable assumptions instead of stopping. Do not ask for clarification.`
+
+// DefaultACPBackstory is the system instruction for ACP mode, used when the
+// configuration does not override it. It differs from DefaultBackstory in the
+// one way that matters: an ACP session is a conversation, so the agent is
+// finishing a turn rather than a whole engagement, and the client - not zot -
+// decides what comes next.
+const DefaultACPBackstory = `You are zot, an autonomous software engineering agent working inside a real directory on the user's machine. A client drives you over the Agent Client Protocol.
+
+Each message you receive is one turn of an ongoing conversation, and more may follow. Work the request end to end with your tools before the turn ends.
+
+Operating rules:
+- Use "plan" whenever the request takes more than a couple of steps, and "progress" as you complete them.
+- Use "read" to understand existing code before changing it. Prefer "edit" for surgical changes and "write" for new files.
+- Use "exec" to run builds, tests, linters, scaffolding and any non-interactive shell command. Never run interactive or long-lived commands.
+- Verify your work: after making changes, build and/or run the tests and fix what you broke.
+- The client may include its own instructions in a message - for example how to post a reply back to a chat channel. Follow them; they take priority over these defaults.
+- Call "exit" with code 0 once the turn's work is done, or a non-zero code if you genuinely could not proceed, with a short summary as the message.
+- You cannot block waiting for an answer mid-turn. Make reasonable assumptions instead; if something is truly ambiguous, say so in your reply and end the turn.`
 
 // Version reports the build version of the linked zot core.
 func Version() string { return version.Version }
@@ -130,12 +149,69 @@ func LoadProjectContext(cfg *Config, dirs ...string) error {
 // directory, so callers should chdir into the target project first. Run blocks
 // until the user quits the viewer or the program errors.
 func Run(ctx context.Context, cfg Config, task string) error {
+	client, opts, err := resolve(cfg, DefaultBackstory)
+	if err != nil {
+		return err
+	}
+	opts.Messages = []agent.Message{{Type: "user", Text: task}}
+
+	workdir, _ := os.Getwd()
+
+	return tui.Run(ctx, client, tui.Meta{
+		Task:     task,
+		Model:    cfg.Agent.Model,
+		Backend:  cfg.DefaultBackend,
+		Workdir:  workdir,
+		ShowDiff: cfg.UI.Diff,
+		Plain:    cfg.UI.Plain,
+	}, opts)
+}
+
+// ServeACP serves the agent over the Agent Client Protocol on stdin/stdout,
+// until the client disconnects or ctx is cancelled. There is no viewer and no
+// task: an ACP client - an editor, or a harness like Buzz's buzz-acp - opens
+// sessions and drives them turn by turn.
+//
+// Unlike Run, the working directory comes from the client with each session, so
+// callers must not chdir first. configDir is where global AGENT.md and skills
+// live; each session layers its own workspace context on top. Diagnostics go to
+// logf, which must not write to stdout - the protocol owns it.
+func ServeACP(ctx context.Context, cfg Config, configDir string, logf func(string, ...any)) error {
+	// Fail fast on credentials and model resolution, rather than at the first
+	// prompt when a client is already connected.
+	client, _, err := resolve(cfg, DefaultACPBackstory)
+	if err != nil {
+		return err
+	}
+
+	return acp.Serve(ctx, acp.Options{
+		Client:  client,
+		Name:    "zot",
+		Version: version.Version,
+		Log:     logf,
+		Prepare: func(cwd string) (agent.ExecuteWithToolsOptions, error) {
+			// Resolve project context per session so a client working across
+			// several repositories gets each one's AGENT.md and skills.
+			sessionCfg := cfg
+			sessionCfg.Features = append([]config.Feature{}, cfg.Features...)
+			if err := LoadProjectContext(&sessionCfg, configDir, cwd); err != nil {
+				return agent.ExecuteWithToolsOptions{}, err
+			}
+			_, opts, err := resolve(sessionCfg, DefaultACPBackstory)
+			return opts, err
+		},
+	})
+}
+
+// resolve turns a configuration into a backend client and the agent options a
+// run uses. The returned options carry no messages; callers supply those.
+func resolve(cfg Config, defaultBackstory string) (*sdk.Client, agent.ExecuteWithToolsOptions, error) {
 	backend, ok := cfg.Backends[cfg.DefaultBackend]
 	if !ok {
-		return fmt.Errorf("backend %q is not configured", cfg.DefaultBackend)
+		return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf("backend %q is not configured", cfg.DefaultBackend)
 	}
 	if backend.APISecret == "" {
-		return fmt.Errorf("no API secret for backend %q (set its credential via env or config)", cfg.DefaultBackend)
+		return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf("no API secret for backend %q (set its credential via env or config)", cfg.DefaultBackend)
 	}
 
 	// Resolve the model against the backend's custom model definitions. A custom
@@ -155,7 +231,7 @@ func Run(ctx context.Context, cfg Config, task string) error {
 
 	backstory := cfg.Agent.Backstory
 	if backstory == "" {
-		backstory = DefaultBackstory
+		backstory = defaultBackstory
 	}
 
 	client := sdk.New(sdk.Options{
@@ -163,11 +239,8 @@ func Run(ctx context.Context, cfg Config, task string) error {
 		BaseURL: backend.BaseURL,
 	})
 
-	workdir, _ := os.Getwd()
-
 	opts := agent.ExecuteWithToolsOptions{
 		Model:         model,
-		Messages:      []agent.Message{{Type: "user", Text: task}},
 		Backstory:     backstory,
 		Tools:         agent.DefaultTools(),
 		MaxIterations: maxIterations,
@@ -176,14 +249,7 @@ func Run(ctx context.Context, cfg Config, task string) error {
 		opts.Extensions = &types.ConversationCompleteRequestExtensions{Features: feats}
 	}
 
-	return tui.Run(ctx, client, tui.Meta{
-		Task:     task,
-		Model:    cfg.Agent.Model,
-		Backend:  cfg.DefaultBackend,
-		Workdir:  workdir,
-		ShowDiff: cfg.UI.Diff,
-		Plain:    cfg.UI.Plain,
-	}, opts)
+	return client, opts, nil
 }
 
 // sdkFeatures converts the configured features into the SDK's feature type.

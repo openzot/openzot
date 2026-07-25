@@ -2,6 +2,13 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-25
+
+### Features
+
+- ACP mode: `zot acp` serves the same agent over the [Agent Client Protocol](https://agentclientprotocol.com/) on stdin/stdout, so an editor or agent harness can drive zot conversationally. Each session works in the directory the client supplies and keeps its own history, `AGENT.md` and skills are resolved per session, and the agent's activity streams back as ACP session updates (message chunks, tool calls, and the `plan`/`progress` tools mapped onto ACP's plan).
+- Buzz: `zot acp` is a drop-in agent for [Buzz](https://github.com/block/buzz)'s `buzz-acp` harness - `BUZZ_ACP_AGENT_COMMAND=zot BUZZ_ACP_AGENT_ARGS=acp`.
+
 ## [0.3.0] - 2026-06-16
 
 ### Features
