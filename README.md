@@ -250,26 +250,6 @@ The endpoint must be `https` unless it is loopback, and a custom endpoint needs
 its own key - a credential is scoped to the host it was issued for, and zot will
 not forward one to a URL you just typed.
 
-### Migrating from a hosted backend
-
-Earlier versions ran through hosted backends - the CBK Relay, and the ChatBotKit
-API. zot reaches providers directly now, so those are gone.
-
-Point the backend at the provider you were already paying for:
-
-```yaml
-default_backend: openai
-
-backends:
-  openai:
-    api_key: '$OPENAI_API_KEY'
-```
-
-A credential written as `api_secret` or `authorization` is still read, so an
-older config keeps working once it names a provider. A key inlined into a model
-name (`--model 'gpt-4/authorization=sk-…'`) is decoded onto the client rather
-than forwarded.
-
 ### The Responses API
 
 On OpenAI, reasoning models use the

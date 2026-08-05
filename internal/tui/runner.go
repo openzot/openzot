@@ -3,7 +3,7 @@ package tui
 import (
 	"context"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

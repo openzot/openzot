@@ -1,6 +1,6 @@
 package session
 
-import "github.com/chatbotkit/zot/agent"
+import "github.com/openzot/openzot/agent"
 
 // Recorder adapts a session Writer to the agent's recorder interface.
 //

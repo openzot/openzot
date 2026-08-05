@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chatbotkit/zot/internal/catalogue"
-	"github.com/chatbotkit/zot/internal/compaction"
-	"github.com/chatbotkit/zot/internal/provider"
-	"github.com/chatbotkit/zot/internal/thread"
-	"github.com/chatbotkit/zot/internal/tokenizer"
+	"github.com/openzot/openzot/internal/catalogue"
+	"github.com/openzot/openzot/internal/compaction"
+	"github.com/openzot/openzot/internal/provider"
+	"github.com/openzot/openzot/internal/thread"
+	"github.com/openzot/openzot/internal/tokenizer"
 )
 
 // ToolHandler executes a tool call.

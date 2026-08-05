@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 
-	"github.com/chatbotkit/zot/internal/config"
-	"github.com/chatbotkit/zot/internal/session"
-	"github.com/chatbotkit/zot/internal/version"
+	"github.com/openzot/openzot/internal/config"
+	"github.com/openzot/openzot/internal/session"
+	"github.com/openzot/openzot/internal/version"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -119,18 +119,6 @@ func TestCredentialResolutionLayers(t *testing.T) {
 			model:  "gpt-4",
 		},
 		{
-			name:   "api_secret, the older spelling",
-			config: "    api_secret: sk-secret\n",
-			want:   "Bearer sk-secret",
-			model:  "gpt-4",
-		},
-		{
-			name:   "authorization, the other older spelling",
-			config: "    authorization: sk-auth\n",
-			want:   "Bearer sk-auth",
-			model:  "gpt-4",
-		},
-		{
 			name:   "a $VAR reference, so no secret is on disk",
 			env:    map[string]string{"MY_PROVIDER_KEY": "sk-from-env"},
 			config: "    api_key: $MY_PROVIDER_KEY\n",
@@ -140,15 +128,9 @@ func TestCredentialResolutionLayers(t *testing.T) {
 		{
 			name: "a per-model key overrides the backend's",
 			config: "    api_key: sk-backend\n" +
-				"    models:\n      gpt-4:\n        authorization: sk-for-gpt4\n",
+				"    models:\n      gpt-4:\n        api_key: sk-for-gpt4\n",
 			want:  "Bearer sk-for-gpt4",
 			model: "gpt-4",
-		},
-		{
-			name:   "a key inlined into the model name",
-			config: "    api_key: sk-backend\n",
-			want:   "Bearer sk-inline",
-			model:  "gpt-4/authorization=sk-inline",
 		},
 	}
 
@@ -198,10 +180,8 @@ backends:
 				t.Fatalf("resolve: %v", err)
 			}
 
-			// the credential is lifted off the model name, so what the provider
-			// is asked for is the model it actually knows
 			if got := client.Model(); got != "gpt-4" {
-				t.Errorf("model = %q, want the credential stripped off", got)
+				t.Errorf("model = %q", got)
 			}
 
 			if _, err := quietly(t, func() error {
@@ -275,8 +255,8 @@ func TestResolveProviderBackends(t *testing.T) {
 	}
 }
 
-// A custom model entry aliases a real id, caps iterations, and carries auth,
-// which is composed onto the aliased model on the relay.
+// A custom model entry aliases a real id, caps iterations, and carries its own
+// credential, all of which take priority over the run defaults.
 func TestResolveCustomModelAlias(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
@@ -284,15 +264,15 @@ func TestResolveCustomModelAlias(t *testing.T) {
 	path := writeCfg(t, `
 agent:
   model: fast
-default_backend: relay
+default_backend: mygateway
 backends:
-  relay:
+  mygateway:
     provider: openai
     models:
       fast:
         model: gpt-5
         max_iterations: 50
-        authorization: $OPENAI_API_KEY
+        api_key: $OPENAI_API_KEY
 `)
 	cfg, err := Load(path)
 	if err != nil {

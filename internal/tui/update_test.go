@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // sized returns a model that has been through a window-size message, which is

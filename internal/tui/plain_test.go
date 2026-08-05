@@ -3,7 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 	"net/http"
 	"net/http/httptest"
 	"os"

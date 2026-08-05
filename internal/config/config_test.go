@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -86,9 +88,12 @@ func TestLoadSeedsBackends(t *testing.T) {
 	}
 }
 
-// The hosted backends are gone: zot reaches providers directly, so nothing named
-// after the platform or the relay is seeded any more.
-func TestHostedBackendsAreNotSeeded(t *testing.T) {
+// The built-in backends are exactly the providers zot speaks to. Pinning the
+// whole set rather than spot-checking it catches an accidental addition and an
+// accidental removal with the same assertion - and does not need updating when
+// something is dropped, which is what a list of names-that-must-not-appear
+// would have required.
+func TestBuiltinBackendsAreExactlyTheProviders(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
 
@@ -97,9 +102,28 @@ func TestHostedBackendsAreNotSeeded(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	for _, name := range []string{"cbk", "chatbotkit", "relay"} {
-		if _, ok := cfg.Backends[name]; ok {
-			t.Errorf("backend %q should no longer be built in", name)
+	seeded := make([]string, 0, len(cfg.Backends))
+
+	for name := range cfg.Backends {
+		seeded = append(seeded, name)
+	}
+
+	sort.Strings(seeded)
+
+	want := []string{
+		"anthropic", "cerebras", "deepseek", "groq", "mistral", "moonshot",
+		"ollama", "openai", "openrouter", "qwen", "together", "xai", "zai",
+	}
+
+	if !reflect.DeepEqual(seeded, want) {
+		t.Errorf("built-in backends:\n got %v\nwant %v", seeded, want)
+	}
+
+	// every one of them must be reachable: a name with no endpoint is a backend
+	// that fails at the first request rather than at configuration time
+	for _, name := range seeded {
+		if BackendProvider(name, cfg.Backends[name]) == "" {
+			t.Errorf("backend %q names no provider", name)
 		}
 	}
 }
@@ -113,7 +137,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	path := writeConfig(t, `
 agent:
   model: from-file
-default_backend: relay
+default_backend: openai
 `)
 	t.Setenv("ZOT_AGENT_MODEL", "gpt-4o")
 	t.Setenv("ZOT_AGENT_MAX_ITERATIONS", "12")
@@ -152,41 +176,41 @@ func TestSecretEnvReference(t *testing.T) {
 default_backend: openai
 backends:
   openai:
-    api_secret: '$MY_PROVIDER_KEY'
+    api_key: '$MY_PROVIDER_KEY'
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Backends["openai"].APISecret; got != "sk-from-env" {
+	if got := cfg.Backends["openai"].APIKey; got != "sk-from-env" {
 		t.Errorf("resolved secret = %q, want sk-from-env", got)
 	}
 }
 
-// Backend-level and per-model authorization in the file may name env vars with
-// $VAR, and each is resolved.
+// A backend key and a per-model key may each be written as a $VAR, and both are
+// resolved.
 func TestAuthorizationEnvReference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("RELAY_DEFAULT_KEY", "sk-relay-default")
+	t.Setenv("GATEWAY_DEFAULT_KEY", "sk-gateway-default")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	path := writeConfig(t, `
-default_backend: relay
+default_backend: mygateway
 backends:
-  relay:
-    authorization: '$RELAY_DEFAULT_KEY'
+  mygateway:
+    api_key: '$GATEWAY_DEFAULT_KEY'
     models:
       gpt-4:
-        authorization: $OPENAI_API_KEY
+        api_key: $OPENAI_API_KEY
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Backends["relay"].Authorization; got != "sk-relay-default" {
-		t.Errorf("backend authorization = %q, want sk-relay-default", got)
+	if got := cfg.Backends["mygateway"].APIKey; got != "sk-gateway-default" {
+		t.Errorf("backend key = %q, want sk-gateway-default", got)
 	}
-	if got := cfg.Backends["relay"].Models["gpt-4"].Authorization; got != "sk-openai" {
-		t.Errorf("model authorization = %q, want sk-openai", got)
+	if got := cfg.Backends["mygateway"].Models["gpt-4"].APIKey; got != "sk-openai" {
+		t.Errorf("model key = %q, want sk-openai", got)
 	}
 }
 
@@ -206,7 +230,7 @@ func TestValidate(t *testing.T) {
 }
 
 // Scrubbing removes every resolved credential - Bearer secrets and provider
-// authorizations, backend-level and per-model - from the environment, while
+// keys, backend-level and per-model - from the environment, while
 // leaving unrelated variables intact.
 func TestScrubBackendSecrets(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -214,13 +238,13 @@ func TestScrubBackendSecrets(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("ZOT_TEST_UNRELATED", "keep-me")
 	path := writeConfig(t, `
-default_backend: relay
+default_backend: mygateway
 backends:
-  relay:
-    authorization: $ZAI_API_KEY
+  mygateway:
+    api_key: $ZAI_API_KEY
     models:
       gpt-4:
-        authorization: $OPENAI_API_KEY
+        api_key: $OPENAI_API_KEY
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -395,11 +419,10 @@ func TestValidateRejectsAnUnreachableBackend(t *testing.T) {
 }
 
 // A `$VAR` reference is the documented way to keep a key out of the config
-// file, so it has to work in every spelling the credential can be written in.
-// It silently did not for `api_key` - the documented one - which sent the
-// literal text "$MY_KEY" to the provider and came back as a 401 that reads like
-// a bad key rather than a config that never expanded.
-func TestEverySpellingExpandsAnEnvReference(t *testing.T) {
+// file. It silently did not expand, which sent the literal text "$MY_KEY" to
+// the provider and came back as a 401 that reads like a bad key rather than a
+// config that never resolved.
+func TestAnEnvReferenceIsExpanded(t *testing.T) {
 	t.Setenv("ZOT_TEST_PROVIDER_KEY", "sk-resolved")
 
 	tests := []struct {
@@ -407,8 +430,6 @@ func TestEverySpellingExpandsAnEnvReference(t *testing.T) {
 		backend Backend
 	}{
 		{name: "api_key", backend: Backend{APIKey: "$ZOT_TEST_PROVIDER_KEY"}},
-		{name: "api_secret", backend: Backend{APISecret: "$ZOT_TEST_PROVIDER_KEY"}},
-		{name: "authorization", backend: Backend{Authorization: "$ZOT_TEST_PROVIDER_KEY"}},
 		{name: "braced", backend: Backend{APIKey: "${ZOT_TEST_PROVIDER_KEY}"}},
 		{name: "padded", backend: Backend{APIKey: "  $ZOT_TEST_PROVIDER_KEY  "}},
 	}

@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // runAgent is the seam between the engine and the screen. It is a pure pump,

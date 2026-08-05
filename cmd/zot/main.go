@@ -29,11 +29,11 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/chatbotkit/zot"
-	"github.com/chatbotkit/zot/internal/build"
-	"github.com/chatbotkit/zot/internal/config"
-	"github.com/chatbotkit/zot/internal/session"
-	"github.com/chatbotkit/zot/internal/version"
+	"github.com/openzot/openzot"
+	"github.com/openzot/openzot/internal/buildinfo"
+	"github.com/openzot/openzot/internal/config"
+	"github.com/openzot/openzot/internal/session"
+	"github.com/openzot/openzot/internal/version"
 )
 
 func main() {
@@ -79,7 +79,7 @@ func run() error {
 		// the build kind is on the version line because it changes what the
 		// binary will read from disk, and "why is it not picking up my .env"
 		// should be answerable without reading the source
-		fmt.Printf("zot %s (%s)\n", version.Version, build.Kind)
+		fmt.Printf("zot %s (%s)\n", version.Version, buildinfo.Kind)
 		return nil
 	}
 
@@ -235,7 +235,7 @@ func oneLine(text string, width int) string {
 // take their credentials from the config file and the real environment, both of
 // which the operator chose deliberately.
 func loadEnv(dir string) {
-	if !build.Dev {
+	if !buildinfo.Dev {
 		return
 	}
 

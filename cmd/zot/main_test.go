@@ -3,10 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/chatbotkit/zot"
-	"github.com/chatbotkit/zot/internal/build"
-	"github.com/chatbotkit/zot/internal/config"
-	"github.com/chatbotkit/zot/internal/session"
+	"github.com/openzot/openzot"
+	"github.com/openzot/openzot/internal/buildinfo"
+	"github.com/openzot/openzot/internal/config"
+	"github.com/openzot/openzot/internal/session"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,7 +49,7 @@ func TestDotEnvIsOnlyReadOnADeveloperBuild(t *testing.T) {
 
 	got := os.Getenv(key)
 
-	if build.Dev {
+	if buildinfo.Dev {
 		if got != "loaded" {
 			t.Errorf("%s = %q, want a developer build to read the .env", key, got)
 		}
@@ -66,7 +66,7 @@ func TestDotEnvIsOnlyReadOnADeveloperBuild(t *testing.T) {
 // constant precisely so nothing at runtime - an env var, a config key, a flag -
 // can reach it.
 func TestNothingAtRuntimeCanEnableDotEnv(t *testing.T) {
-	if build.Dev {
+	if buildinfo.Dev {
 		t.Skip("this is a developer build")
 	}
 
@@ -431,8 +431,8 @@ func TestRunVersion(t *testing.T) {
 
 	// the build kind is on the version line because it changes what the binary
 	// reads from disk
-	if !strings.Contains(output, build.Kind) {
-		t.Errorf("output = %q, want the build kind %q in it", output, build.Kind)
+	if !strings.Contains(output, buildinfo.Kind) {
+		t.Errorf("output = %q, want the build kind %q in it", output, buildinfo.Kind)
 	}
 }
 

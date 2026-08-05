@@ -11,7 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // Meta is the header display information shown above the activity log.

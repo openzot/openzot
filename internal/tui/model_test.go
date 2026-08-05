@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // editEvent is a sample edit tool call.
@@ -22,7 +22,7 @@ func editEvent() agent.ToolCallStartEvent {
 }
 
 func TestModelShowsDiffWhenEnabled(t *testing.T) {
-	m := newModel("task", "model", "cbk", "/tmp", true)
+	m := newModel("task", "model", "openai", "/tmp", true)
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = sized.(model)
 
@@ -39,7 +39,7 @@ func TestModelShowsDiffWhenEnabled(t *testing.T) {
 }
 
 func TestModelNoDiffWhenDisabled(t *testing.T) {
-	m := newModel("task", "model", "cbk", "/tmp", false)
+	m := newModel("task", "model", "openai", "/tmp", false)
 	sized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = sized.(model)
 

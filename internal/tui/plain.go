@@ -8,7 +8,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // isInteractive reports whether stdout is a terminal capable of the full-screen

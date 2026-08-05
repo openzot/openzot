@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/chatbotkit/zot/internal/loop"
+import "github.com/openzot/openzot/internal/loop"
 
 // AgentEvent is one thing that happened during a run.
 //

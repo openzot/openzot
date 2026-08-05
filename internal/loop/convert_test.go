@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chatbotkit/zot/internal/provider"
+	"github.com/openzot/openzot/internal/provider"
 )
 
 // activity builds one half of a tool-call pair.

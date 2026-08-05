@@ -1,9 +1,9 @@
 package loop
 
 import (
-	"github.com/chatbotkit/zot/internal/compaction"
-	"github.com/chatbotkit/zot/internal/provider"
-	"github.com/chatbotkit/zot/internal/thread"
+	"github.com/openzot/openzot/internal/compaction"
+	"github.com/openzot/openzot/internal/provider"
+	"github.com/openzot/openzot/internal/thread"
 )
 
 // Conversions between the loop's message shape and the ones the subsystems use.

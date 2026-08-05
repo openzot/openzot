@@ -30,8 +30,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/chatbotkit/zot/internal/loop"
-	"github.com/chatbotkit/zot/internal/provider"
+	"github.com/openzot/openzot/internal/loop"
+	"github.com/openzot/openzot/internal/provider"
 )
 
 // Client is a configured connection to a model provider.

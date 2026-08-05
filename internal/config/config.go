@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // Config is the fully-resolved zot configuration.
@@ -42,14 +42,8 @@ type Backend struct {
 	Provider string `yaml:"provider"`
 	// BaseURL overrides the API endpoint. Empty uses the built-in default.
 	BaseURL string `yaml:"base_url"`
-	// APISecret is an older spelling of APIKey, kept so an existing config still
-	// loads. Supports "$ENV_VAR" references.
-	APISecret string `yaml:"api_secret"`
-	// Authorization is another older spelling of APIKey, kept for the same
-	// reason. Supports "$ENV_VAR".
-	Authorization string `yaml:"authorization"`
-	// APIKey is the provider credential. Preferred spelling; APISecret and
-	// Authorization are accepted as equivalents.
+	// APIKey is the provider credential. Supports "$ENV_VAR" references, so no
+	// secret need be written to disk.
 	APIKey string `yaml:"api_key"`
 	// Models holds custom, named model configurations for this backend. When a
 	// run's model name matches a key here, that entry's settings take priority.
@@ -67,9 +61,10 @@ type ModelConfig struct {
 	Model string `yaml:"model"`
 	// MaxIterations overrides the global iteration cap for this model.
 	MaxIterations int `yaml:"max_iterations"`
-	// Authorization is this model's own credential, overriding the backend's.
+	// APIKey is this model's own credential, overriding the backend's. Useful
+	// where one gateway fronts several providers, each wanting its own key.
 	// Supports "$ENV_VAR".
-	Authorization string `yaml:"authorization"`
+	APIKey string `yaml:"api_key"`
 }
 
 // builtinBackends are the providers zot ships with. Each falls back to its
@@ -109,20 +104,9 @@ func BackendProvider(name string, backend Backend) string {
 	return name
 }
 
-// BackendCredential returns the credential configured for a backend, whichever
-// field it was written in.
-//
-// `api_key` is the spelling to use. `api_secret` and `authorization` are
-// accepted so a config written for an earlier version still loads - they meant
-// the same thing to the hosted backends that have since been removed.
+// BackendCredential returns the credential configured for a backend.
 func BackendCredential(backend Backend) string {
-	for _, candidate := range []string{backend.APIKey, backend.APISecret, backend.Authorization} {
-		if candidate != "" {
-			return candidate
-		}
-	}
-
-	return ""
+	return backend.APIKey
 }
 
 // UI holds presentation options for the read-only viewer.
@@ -229,8 +213,6 @@ func resolveBackends(cfg *Config) {
 		// left unexpanded there would send the literal string "$MY_KEY" to the
 		// provider and come back as a 401 that reads like a bad key.
 		b.APIKey = resolveSecret(b.APIKey)
-		b.APISecret = resolveSecret(b.APISecret)
-		b.Authorization = resolveSecret(b.Authorization)
 
 		// A built-in backend with nothing configured falls back to its
 		// provider's conventional variable, which is what makes `export
@@ -241,8 +223,8 @@ func resolveBackends(cfg *Config) {
 
 		// Per-model authorization.
 		for mName, mc := range b.Models {
-			if mc.Authorization != "" {
-				mc.Authorization = resolveSecret(mc.Authorization)
+			if mc.APIKey != "" {
+				mc.APIKey = resolveSecret(mc.APIKey)
 				b.Models[mName] = mc
 			}
 		}
@@ -284,10 +266,9 @@ func ScrubBackendSecrets(cfg Config) {
 		}
 	}
 	for _, backend := range cfg.Backends {
-		add(backend.APISecret)
-		add(backend.Authorization)
+		add(backend.APIKey)
 		for _, mc := range backend.Models {
-			add(mc.Authorization)
+			add(mc.APIKey)
 		}
 	}
 	if len(secrets) == 0 {

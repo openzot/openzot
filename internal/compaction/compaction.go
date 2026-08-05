@@ -14,7 +14,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/chatbotkit/zot/internal/tokenizer"
+	"github.com/openzot/openzot/internal/tokenizer"
 )
 
 const (

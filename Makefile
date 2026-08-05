@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS  = -s -w -X github.com/chatbotkit/zot/internal/version.Version=$(VERSION)
+LDFLAGS  = -s -w -X github.com/openzot/openzot/internal/version.Version=$(VERSION)
 
 CMDS = zot
 
@@ -65,7 +65,7 @@ race:
 	go test -race ./... -count=1
 
 cover:
-	@go test -cover ./... -count=1 | grep coverage | sed 's|github.com/chatbotkit/zot||'
+	@go test -cover ./... -count=1 | grep coverage | sed 's|github.com/openzot/openzot||'
 
 # Both variants, because a build tag can break a compile the default never
 # reaches - and the developer build is the one no pipeline exercises.

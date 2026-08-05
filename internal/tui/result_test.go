@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 func TestModelRunErrorReportsFailedAgentExit(t *testing.T) {
-	m := newModel("task", "model", "cbk", "/tmp", false)
+	m := newModel("task", "model", "openai", "/tmp", false)
 	m.handleEvent(agent.AgentExitEvent{Code: 7, Message: "verification failed"})
 
 	err := m.runError()
@@ -28,7 +28,7 @@ func TestModelRunErrorReportsFailedAgentExit(t *testing.T) {
 
 func TestModelRunErrorReportsStreamError(t *testing.T) {
 	want := errors.New("backend unavailable")
-	m := newModel("task", "model", "cbk", "/tmp", false)
+	m := newModel("task", "model", "openai", "/tmp", false)
 	m.err = want
 
 	if got := m.runError(); !errors.Is(got, want) {
@@ -37,7 +37,7 @@ func TestModelRunErrorReportsStreamError(t *testing.T) {
 }
 
 func TestModelRunErrorRejectsEarlyViewerExit(t *testing.T) {
-	m := newModel("task", "model", "cbk", "/tmp", false)
+	m := newModel("task", "model", "openai", "/tmp", false)
 
 	if err := m.runError(); err == nil {
 		t.Fatal("runError() = nil while the agent is still running")

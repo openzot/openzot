@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/chatbotkit/zot/internal/catalogue"
+	"github.com/openzot/openzot/internal/catalogue"
 )
 
 // Known provider identifiers.

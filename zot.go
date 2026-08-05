@@ -18,12 +18,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 
-	"github.com/chatbotkit/zot/internal/config"
-	"github.com/chatbotkit/zot/internal/session"
-	"github.com/chatbotkit/zot/internal/tui"
-	"github.com/chatbotkit/zot/internal/version"
+	"github.com/openzot/openzot/internal/config"
+	"github.com/openzot/openzot/internal/session"
+	"github.com/openzot/openzot/internal/tui"
+	"github.com/openzot/openzot/internal/version"
 )
 
 // Names zot looks for under each context directory.
@@ -233,20 +233,8 @@ func resolve(cfg Config, defaultBackstory string) (*agent.Client, agent.ExecuteW
 		if mc.Provider != "" {
 			provider = mc.Provider
 		}
-		if mc.Authorization != "" {
-			credential = mc.Authorization
-		}
-	}
-
-	// A credential inlined into the model string is an older gateway convention.
-	// zot talks to providers directly, so the key is lifted out and the model
-	// name is sent as the provider expects it - forwarding it inline would make
-	// the model name unrecognisable.
-	if name, inline, found := strings.Cut(model, "/authorization="); found {
-		model = name
-
-		if inline != "" {
-			credential = inline
+		if mc.APIKey != "" {
+			credential = mc.APIKey
 		}
 	}
 

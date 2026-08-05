@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chatbotkit/zot/internal/provider"
+	"github.com/openzot/openzot/internal/provider"
 )
 
 // The context-limit recovery path: a provider rejecting an oversized prompt is

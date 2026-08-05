@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"github.com/chatbotkit/zot/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 // The recorder is the seam between the engine and the disk. What matters is

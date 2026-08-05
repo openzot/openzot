@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chatbotkit/zot/internal/provider"
+	"github.com/openzot/openzot/internal/provider"
 )
 
 // stub serves scripted turns over the OpenAI-compatible wire format, so the loop
