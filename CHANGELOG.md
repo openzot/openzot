@@ -4,6 +4,10 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ## [0.6.0] - 2026-08-05
 
+### Features
+
+- `zot config` opens the config file in your `$EDITOR`, creating it from a commented template (embedded in the binary) on first run. This is the setup path - choose a backend and model and set your provider key by editing the file. `zot config path` prints the file location.
+
 ### Changed
 
 - **Breaking (config):** the `relay` backend no longer reads a `RELAY_API_KEY` environment variable. Its credential is your own provider key, set per model (`backends.relay.models.<model>.authorization`) or as a backend-level default (`backends.relay.authorization`), or inlined into `--model` as `<model>/authorization=<key>`. A relay run with no such key fails with an actionable error rather than falling back to an env var.

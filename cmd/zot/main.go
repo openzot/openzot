@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -50,6 +51,16 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == acpCommand {
 		loadEnv(".")
 		return runACP(os.Args[2:])
+	}
+
+	// `zot config` opens the config file in $EDITOR, seeding it from the embedded
+	// template on first run. `zot config path` prints its location.
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		if len(os.Args) > 2 && os.Args[2] == "path" {
+			fmt.Println(config.DefaultConfigPath())
+			return nil
+		}
+		return editConfig()
 	}
 
 	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
@@ -150,6 +161,51 @@ func loadEnv(dir string) {
 // resolveTask determines the single task string from --task-file or the
 // positional arguments. There is intentionally no interactive prompt: zot is a
 // viewer, not a chat client.
+// editConfig ensures the config file exists - seeding it from the embedded
+// template on first run - and opens it in the user's editor. This is the setup
+// path: configure the backend, model and provider key by editing the file.
+func editConfig() error {
+	path := config.DefaultConfigPath()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, zot.ExampleConfigYAML, 0o600); err != nil {
+			return fmt.Errorf("write config template: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Created %s from the template.\n", path)
+	}
+
+	editor := firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"))
+	if editor == "" {
+		for _, candidate := range []string{"nano", "vi", "vim"} {
+			if _, err := exec.LookPath(candidate); err == nil {
+				editor = candidate
+				break
+			}
+		}
+	}
+	if editor == "" {
+		fmt.Println(path)
+		return fmt.Errorf("no editor found; set $EDITOR and re-run (the config is at the path above)")
+	}
+
+	cmd := exec.Command(editor, path)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func resolveTask(taskFile string, args []string) (string, error) {
 	if taskFile != "" {
 		data, err := os.ReadFile(taskFile)
@@ -176,6 +232,7 @@ func usage() {
 
 Usage:
   zot [flags] "your task in plain english"
+  zot config
   zot acp [flags]
 
 Examples:
@@ -183,7 +240,8 @@ Examples:
   zot --dir ./scratch "scaffold a tiny http server in go"
 
 Commands:
-  acp   serve the agent over the Agent Client Protocol (see zot acp -h)
+  config   edit the config file in $EDITOR (creates it on first run)
+  acp      serve the agent over the Agent Client Protocol (see zot acp -h)
 
 Flags:`)
 	flag.PrintDefaults()

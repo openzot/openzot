@@ -336,23 +336,26 @@ ignored, which costs nothing by default (`BUZZ_ACP_MCP_COMMAND` is empty).
 
 ## Backends
 
-A run targets a **backend** - the provider zot talks to. Three ship built in:
+A run targets a **backend** - the provider zot talks to. zot defaults to
+**`relay`**; the ChatBotKit backends are an alternative for account holders. Pick
+one with `--backend` or `default_backend` in config.
 
-| Backend      | Endpoint                     | Auth style | Credential              |
-| ------------ | ---------------------------- | ---------- | ----------------------- |
-| `relay`      | `https://relay.cbk.ai`       | per-model  | provider key per model  |
-| `cbk`        | `https://api.cbk.ai`         | Bearer     | `CBK_API_SECRET`        |
-| `chatbotkit` | `https://api.chatbotkit.com` | Bearer     | `CHATBOTKIT_API_SECRET` |
+| Backend      | Endpoint                     | Auth style | Credential                   |
+| ------------ | ---------------------------- | ---------- | ---------------------------- |
+| `relay`      | `https://relay.cbk.ai`       | per-model  | your provider key, per model |
+| `cbk`        | `https://api.cbk.ai`         | Bearer     | `CBK_API_SECRET`             |
+| `chatbotkit` | `https://api.chatbotkit.com` | Bearer     | `CHATBOTKIT_API_SECRET`      |
 
-zot defaults to **`relay`**. Pick another with `--backend` (or `default_backend`
-in config). The model is resolved against the chosen backend, so it must be one
-that backend serves.
+The model is resolved against the chosen backend, so it must be one that backend
+serves.
 
-The two ChatBotKit backends authenticate with a Bearer token. The **relay is
-different**: it authenticates each model with *its own provider key*, carried
-inside the model string as `<model>/authorization=<key>` - because on the relay
-each model is a different provider (Z.AI, Moonshot, DeepSeek, …) with a different
-key. So relay auth is configured **per model**:
+### `relay` — the default (bring your own key)
+
+The CBK Relay is a free proxy, and **there is no relay API key.** It
+authenticates each model with _your own provider key_, carried inside the model
+string as `<model>/authorization=<key>` - because on the relay each model is a
+different provider (Z.AI, Moonshot, DeepSeek, …) with its own key. So you set the
+key **per model** in config (paste it literally, or reference an env var):
 
 ```yaml
 default_backend: relay
@@ -361,31 +364,35 @@ backends:
     # authorization: $ZAI_API_KEY   # optional: one default key for all relay models
     models:
       glm-5.2:
-        authorization: $ZAI_API_KEY
+        authorization: $ZAI_API_KEY      # or paste the key literally
       kimi-k3:
         authorization: $MOONSHOT_API_KEY
       deepseek-v4-flash:
         authorization: $DEEPSEEK_API_KEY
 ```
 
-There is no single relay API key - the credential is your own provider key, set
-per model (or as a backend-level default) in config.
-
 ```bash
 export ZAI_API_KEY="sk-..."
-zot --model glm-5.2 "…"          # → sends model glm-5.2/authorization=sk-... to the relay
-
-# You can also inline the key yourself; zot leaves it untouched:
-zot --model 'glm-5.2/authorization=sk-...' "…"
-
-# The ChatBotKit backends just need their Bearer token:
-export CBK_API_SECRET="..."
-zot --backend cbk --model kimi-k3 "…"
+zot --model glm-5.2 "…"                           # sends glm-5.2/authorization=sk-... to the relay
+zot --model 'glm-5.2/authorization=sk-...' "…"    # or inline it; zot leaves it as-is
 ```
 
 zot composes the `authorization=` param onto the model automatically from the
-per-model (or backend-level) config; a key you inline into `--model` yourself is
-left as-is.
+per-model (or backend-level) config; a key you inline into `--model` is left as-is.
+
+### `cbk` / `chatbotkit` — ChatBotKit account backends
+
+If you have a ChatBotKit account, target it directly with a Bearer token instead
+of bringing per-model keys. `cbk` and `chatbotkit` are the same platform on its
+two hosts and take the same credential value under their own variable:
+
+```bash
+export CBK_API_SECRET="..."          # or CHATBOTKIT_API_SECRET for --backend chatbotkit
+zot --backend cbk --model glm-5.2 "…"
+```
+
+Provide the token via that env var, or as `api_secret` under the backend in
+config.
 
 Each backend can also define **custom models** in the config; when `--model`
 matches a key, that entry's settings take priority (alias the real id, cap
@@ -418,8 +425,8 @@ Configuration is layered: built-in defaults < config file < `ZOT_*` environment
 variables < CLI flags. The config file is optional - env vars alone are enough.
 
 ```bash
-mkdir -p ~/.config/zot
-cp configs/zot.example.yaml ~/.config/zot/config.yaml
+zot config        # opens the config in $EDITOR, creating it from a template
+zot config path   # print the config file location
 ```
 
 Scalar fields have a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
