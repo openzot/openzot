@@ -243,8 +243,8 @@ func resolve(cfg Config, defaultBackstory string) (*sdk.Client, agent.ExecuteWit
 		if !strings.Contains(model, "/authorization=") {
 			if auth == "" {
 				return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf(
-					"no authorization for model %q on backend %q (set authorization on the model or backend in config, %s in the environment, or inline it as %s/authorization=KEY)",
-					model, cfg.DefaultBackend, config.AuthEnvName(cfg.DefaultBackend), model)
+					"no authorization for model %q on backend %q (set authorization on the model or the backend in config, or inline it as %s/authorization=KEY)",
+					model, cfg.DefaultBackend, model)
 			}
 			model = model + "/authorization=" + auth
 		}

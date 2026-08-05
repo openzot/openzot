@@ -38,8 +38,9 @@ type Backend struct {
 	// "$ENV_VAR" references; for the built-ins it defaults from the environment.
 	APISecret string `yaml:"api_secret"`
 	// Authorization is the relay's default model credential, applied to every
-	// model on this backend that does not set its own. Supports "$ENV_VAR"; for
-	// the relay it defaults from RELAY_API_KEY. Ignored by the Bearer backends.
+	// model on this backend that does not set its own. Supports "$ENV_VAR" (point
+	// it at your own provider key). It has no built-in environment default.
+	// Ignored by the Bearer backends.
 	Authorization string `yaml:"authorization"`
 	// Models holds custom, named model configurations for this backend. When a
 	// run's model name matches a key here, that entry's settings take priority.
@@ -75,17 +76,18 @@ const (
 	AuthModelParam
 )
 
-// builtinBackends are the providers zot ships with: their default endpoint, how
-// they authenticate, and the environment variable their credential falls back
-// to. "cbk" and "chatbotkit" are the same platform on its two hosts; the
-// credential value is the same but each reads its own brand-named variable.
+// builtinBackends are the providers zot ships with: their default endpoint and
+// how they authenticate. The Bearer backends fall back to a brand-named
+// environment variable for their credential; the relay has no such default -
+// its per-model provider credential comes from config (or is inlined into the
+// model). "cbk" and "chatbotkit" are the same platform on its two hosts and
+// take the same credential value under their own variable.
 var builtinBackends = map[string]struct {
 	baseURL   string
 	style     AuthStyle
 	secretEnv string // Bearer credential fallback (AuthBearer)
-	authEnv   string // model-authorization fallback (AuthModelParam)
 }{
-	"relay":      {baseURL: "https://relay.cbk.ai", style: AuthModelParam, authEnv: "RELAY_API_KEY"},
+	"relay":      {baseURL: "https://relay.cbk.ai", style: AuthModelParam},
 	"cbk":        {baseURL: "https://api.cbk.ai", style: AuthBearer, secretEnv: "CBK_API_SECRET"},
 	"chatbotkit": {baseURL: "https://api.chatbotkit.com", style: AuthBearer, secretEnv: "CHATBOTKIT_API_SECRET"},
 }
@@ -97,15 +99,6 @@ func BackendStyle(name string) AuthStyle {
 		return b.style
 	}
 	return AuthBearer
-}
-
-// AuthEnvName returns the environment variable a built-in relay-style backend's
-// model authorization falls back to, for use in actionable error messages.
-func AuthEnvName(backend string) string {
-	if b, ok := builtinBackends[backend]; ok && b.authEnv != "" {
-		return b.authEnv
-	}
-	return "the backend authorization"
 }
 
 // SecretEnvName returns the environment variable a built-in Bearer backend's
@@ -164,7 +157,7 @@ type Agent struct {
 func Defaults() Config {
 	return Config{
 		Agent: Agent{
-			Model:         "kimi-k2.7-code",
+			Model:         "glm-5.2",
 			MaxIterations: 1000,
 		},
 		DefaultBackend: "relay",
@@ -235,11 +228,11 @@ func resolveBackends(cfg *Config) {
 			b.APISecret = strings.TrimSpace(os.Getenv(builtin.secretEnv))
 		}
 
-		// Backend-level model authorization (AuthModelParam backends).
+		// Backend-level model authorization (AuthModelParam backends). No
+		// environment default - the relay's provider credential comes from config
+		// (or is inlined into the model).
 		if a := strings.TrimSpace(b.Authorization); a != "" {
 			b.Authorization = resolveSecret(a)
-		} else if isBuiltin && builtin.authEnv != "" {
-			b.Authorization = strings.TrimSpace(os.Getenv(builtin.authEnv))
 		}
 
 		// Per-model authorization.

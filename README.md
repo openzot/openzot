@@ -63,19 +63,20 @@ deliberately has no text input.
 
 ## Prerequisites
 
-- A credential for the selected backend: a provider key for the default `relay`
-  (`RELAY_API_KEY`), or a ChatBotKit token for `cbk` / `chatbotkit`
+- A credential for the selected backend: your own provider key for the default
+  `relay` (set per model in config), or a ChatBotKit token for `cbk` /
+  `chatbotkit`
 - Go 1.25+ - only if you build from source
 
 ## Backend credentials
 
 zot defaults to the **`relay`** backend, which carries *your own provider key*
 per model - see [Backends](#backends) for how relay auth is composed into the
-model string. Point a provider key at it with `RELAY_API_KEY` (or per-model
-`authorization` in config):
+model string. There is no single relay API key: set your provider key per model
+(or as a backend-level default) in config, referencing a variable you export:
 
 ```bash
-export RELAY_API_KEY="sk-…"   # your OpenAI / provider key
+export ZAI_API_KEY="sk-…"   # your provider key, referenced from config
 ```
 
 The **`cbk`** and **`chatbotkit`** backends instead need a ChatBotKit API token.
@@ -197,7 +198,7 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 
 | Flag               | Default                     | Description                                                |
 | ------------------ | --------------------------- | ---------------------------------------------------------- |
-| `--model`          | `kimi-k2.7-code`            | Model name (resolved against the selected backend)         |
+| `--model`          | `glm-5.2`                   | Model name (resolved against the selected backend)         |
 | `--backend`        | `relay`                     | Backend to run against: `relay`, `cbk`, or `chatbotkit`    |
 | `--dir`            | `.`                         | Working directory the agent reads, writes and runs in      |
 | `--max-iterations` | `1000`                      | Safety cap before the agent is forced to stop              |
@@ -350,35 +351,36 @@ that backend serves.
 The two ChatBotKit backends authenticate with a Bearer token. The **relay is
 different**: it authenticates each model with *its own provider key*, carried
 inside the model string as `<model>/authorization=<key>` - because on the relay
-each model is a different provider (OpenAI, Mistral, …) with a different key. So
-relay auth is configured **per model**:
+each model is a different provider (Z.AI, Moonshot, DeepSeek, …) with a different
+key. So relay auth is configured **per model**:
 
 ```yaml
 default_backend: relay
 backends:
   relay:
-    # authorization: $RELAY_API_KEY   # optional: one default key for all models
+    # authorization: $ZAI_API_KEY   # optional: one default key for all relay models
     models:
-      gpt-4:
-        authorization: $OPENAI_API_KEY
-      mistral-large:
-        authorization: $MISTRAL_API_KEY
+      glm-5.2:
+        authorization: $ZAI_API_KEY
+      kimi-k3:
+        authorization: $MOONSHOT_API_KEY
+      deepseek-v4-flash:
+        authorization: $DEEPSEEK_API_KEY
 ```
 
-```bash
-export OPENAI_API_KEY="sk-..."
-zot --model gpt-4 "…"            # → sends model gpt-4/authorization=sk-... to the relay
+There is no single relay API key - the credential is your own provider key, set
+per model (or as a backend-level default) in config.
 
-# A single default key for every relay model (composed the same way):
-export RELAY_API_KEY="sk-..."
-zot --model gpt-4 "…"
+```bash
+export ZAI_API_KEY="sk-..."
+zot --model glm-5.2 "…"          # → sends model glm-5.2/authorization=sk-... to the relay
 
 # You can also inline the key yourself; zot leaves it untouched:
-zot --model 'gpt-4/authorization=sk-...' "…"
+zot --model 'glm-5.2/authorization=sk-...' "…"
 
 # The ChatBotKit backends just need their Bearer token:
 export CBK_API_SECRET="..."
-zot --backend cbk --model kimi-k2.7-code "…"
+zot --backend cbk --model kimi-k3 "…"
 ```
 
 zot composes the `authorization=` param onto the model automatically from the
@@ -395,14 +397,14 @@ backends:
   relay:
     models:
       fast:
-        model: gpt-4o-mini
-        authorization: $OPENAI_API_KEY
+        model: glm-5-turbo
+        authorization: $ZAI_API_KEY
         max_iterations: 50
   cbk:
     # api_secret: '$CBK_API_SECRET'   # default
     models:
       cheap:
-        model: kimi-k2.7-code
+        model: kimi-k3
         max_iterations: 50
 ```
 
@@ -421,10 +423,11 @@ cp configs/zot.example.yaml ~/.config/zot/config.yaml
 ```
 
 Scalar fields have a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
-`ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Backend
-credentials come from their own env vars (`RELAY_API_KEY` for `relay`,
-`CBK_API_SECRET` for `cbk`, `CHATBOTKIT_API_SECRET` for `chatbotkit`), so they
-don't need the `ZOT_` prefix. See [configs/zot.example.yaml](configs/zot.example.yaml).
+`ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Bearer backend
+credentials come from their own env vars (`CBK_API_SECRET` for `cbk`,
+`CHATBOTKIT_API_SECRET` for `chatbotkit`), so they don't need the `ZOT_` prefix;
+the `relay` backend's per-model provider key is set in config (referencing a
+variable you export). See [configs/zot.example.yaml](configs/zot.example.yaml).
 
 ### Controls
 
