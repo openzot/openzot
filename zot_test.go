@@ -87,14 +87,18 @@ func writeCfg(t *testing.T, body string) string {
 }
 
 // The default run targets the CBK relay, which authenticates the provider per
-// model inside the model string, so the backend-level RELAY_API_KEY is composed
-// onto the default model.
+// model inside the model string. There is no RELAY_API_KEY; a backend-level
+// authorization set in config (the user's own provider key) is composed onto
+// the default model.
 func TestResolveRelayComposesModel(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("ZOT_CONFIG", "")
-	t.Setenv("RELAY_API_KEY", "relay-key")
-
-	cfg, err := Load("")
+	t.Setenv("MY_PROVIDER_KEY", "sk-provider")
+	path := writeCfg(t, `
+default_backend: relay
+backends:
+  relay:
+    authorization: $MY_PROVIDER_KEY
+`)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -108,7 +112,7 @@ func TestResolveRelayComposesModel(t *testing.T) {
 	if client == nil {
 		t.Fatal("expected a client")
 	}
-	want := cfg.Agent.Model + "/authorization=relay-key"
+	want := cfg.Agent.Model + "/authorization=sk-provider"
 	if opts.Model != want {
 		t.Errorf("model = %q, want %q", opts.Model, want)
 	}
@@ -169,7 +173,6 @@ default_backend: relay
 func TestResolveRelayErrorsWithoutAuthorization(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
-	t.Setenv("RELAY_API_KEY", "")
 
 	cfg, err := Load("")
 	if err != nil {

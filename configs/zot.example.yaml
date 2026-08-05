@@ -13,14 +13,16 @@
 #
 # Credentials are read from the environment by default (no ZOT_ prefix). Keep
 # secrets in the environment - the file only references them with $VAR:
-#   relay      -> RELAY_API_KEY  (default provider key, see below)
+#   relay      -> a per-model provider key set in config (no single env var)
 #   cbk        -> CBK_API_SECRET
 #   chatbotkit -> CHATBOTKIT_API_SECRET   (cbk and chatbotkit take the same value)
 
 agent:
-  # Model name that drives the agent. Resolved against the selected backend, so
-  # it must be a model that backend serves (a provider-style id under "relay").
-  model: 'kimi-k2.7-code'
+  # Model name that drives the agent, from the ChatBotKit model catalogue and
+  # resolved against the selected backend. zot works well across open models
+  # (glm-5.2, kimi-k3, deepseek-v4-flash) and top coding models from OpenAI and
+  # Anthropic (gpt-5.6-sol, gpt-5.4-mini, claude-5-sonnet, claude-5-opus).
+  model: 'glm-5.2'
 
   # Safety cap on plan/act/observe cycles before the agent is forced to stop.
   max_iterations: 1000
@@ -43,25 +45,27 @@ default_backend: relay
 backends:
   # relay: CBK Relay. Auth is per model. Set a model's provider key with
   # `authorization` (or a backend-level default applied to every model). A key is
-  # composed onto the model as gpt-4/authorization=<key> before the request.
+  # composed onto the model as glm-5.2/authorization=<key> before the request.
   relay:
     # base_url: 'https://relay.cbk.ai'
 
-    # Default provider key for every model on the relay. Defaults to
-    # $RELAY_API_KEY. Use this if all your models share one provider key.
-    # authorization: '$RELAY_API_KEY'
+    # Default provider key for every model on the relay (optional). Point it at
+    # your own provider key; use this if all your relay models share one key.
+    # authorization: '$ZAI_API_KEY'
 
     # Per-model provider keys - the case one backend key cannot express. When
     # --model matches a key here, its settings take priority. `model` aliases the
     # real id; `authorization` is that model's provider key.
     models: {}
-    #   gpt-4:
-    #     authorization: $OPENAI_API_KEY
-    #   mistral-large:
-    #     authorization: $MISTRAL_API_KEY
+    #   glm-5.2:
+    #     authorization: $ZAI_API_KEY          # your Z.AI key
+    #   kimi-k3:
+    #     authorization: $MOONSHOT_API_KEY     # your Moonshot key
+    #   deepseek-v4-flash:
+    #     authorization: $DEEPSEEK_API_KEY     # your DeepSeek key
     #   fast:
-    #     model: gpt-4o-mini
-    #     authorization: $OPENAI_API_KEY
+    #     model: glm-5-turbo
+    #     authorization: $ZAI_API_KEY
     #     max_iterations: 200
 
   # cbk: ChatBotKit at api.cbk.ai. Bearer credential, defaults to $CBK_API_SECRET.

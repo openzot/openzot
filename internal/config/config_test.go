@@ -42,13 +42,12 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-// The three built-in backends are seeded with their endpoints and each resolves
-// its own credential: the relay's provider key from RELAY_API_KEY (its
-// backend-level authorization), and the Bearer secrets from their own variables.
+// The three built-in backends are seeded with their endpoints. The relay has no
+// environment default for its provider credential (that comes from config), and
+// the Bearer backends resolve their secrets from their own variables.
 func TestLoadSeedsBackends(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
-	t.Setenv("RELAY_API_KEY", "relay-key")
 	t.Setenv("CBK_API_SECRET", "cbk-secret")
 	t.Setenv("CHATBOTKIT_API_SECRET", "chatbotkit-secret")
 
@@ -64,8 +63,8 @@ func TestLoadSeedsBackends(t *testing.T) {
 	if relay.BaseURL != "https://relay.cbk.ai" {
 		t.Errorf("relay base_url = %q, want https://relay.cbk.ai", relay.BaseURL)
 	}
-	if relay.Authorization != "relay-key" {
-		t.Errorf("relay authorization = %q, want it from RELAY_API_KEY", relay.Authorization)
+	if relay.Authorization != "" {
+		t.Errorf("relay authorization = %q, want empty (no environment default)", relay.Authorization)
 	}
 	// The relay uses no Bearer secret; its credential rides in the model string.
 	if relay.APISecret != "" {
@@ -212,13 +211,14 @@ func TestValidateFeatures(t *testing.T) {
 // leaving unrelated variables intact.
 func TestScrubBackendSecrets(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("RELAY_API_KEY", "relay-default")
+	t.Setenv("ZAI_API_KEY", "sk-zai")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("ZOT_TEST_UNRELATED", "keep-me")
 	path := writeConfig(t, `
 default_backend: relay
 backends:
   relay:
+    authorization: $ZAI_API_KEY
     models:
       gpt-4:
         authorization: $OPENAI_API_KEY
@@ -229,8 +229,8 @@ backends:
 	}
 	ScrubBackendSecrets(cfg)
 
-	if _, ok := os.LookupEnv("RELAY_API_KEY"); ok {
-		t.Error("RELAY_API_KEY should be removed after scrub")
+	if _, ok := os.LookupEnv("ZAI_API_KEY"); ok {
+		t.Error("ZAI_API_KEY should be removed after scrub")
 	}
 	if _, ok := os.LookupEnv("OPENAI_API_KEY"); ok {
 		t.Error("OPENAI_API_KEY should be removed after scrub")

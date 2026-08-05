@@ -2,6 +2,14 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-08-05
+
+### Changed
+
+- **Breaking (config):** the `relay` backend no longer reads a `RELAY_API_KEY` environment variable. Its credential is your own provider key, set per model (`backends.relay.models.<model>.authorization`) or as a backend-level default (`backends.relay.authorization`), or inlined into `--model` as `<model>/authorization=<key>`. A relay run with no such key fails with an actionable error rather than falling back to an env var.
+- The default model is now `glm-5.2` (was `kimi-k2.7-code`).
+- The example config advertises open models (`glm-5.2`, `kimi-k3`, `deepseek-v4-flash`) alongside strong OpenAI/Anthropic coding models.
+
 ## [0.5.0] - 2026-08-05
 
 ### Features
