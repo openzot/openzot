@@ -11,11 +11,12 @@
 #   agent.max_iterations  -> ZOT_AGENT_MAX_ITERATIONS
 #   default_backend       -> ZOT_DEFAULT_BACKEND
 #
-# Credentials are read from the environment by default (no ZOT_ prefix). Keep
-# secrets in the environment - the file only references them with $VAR:
-#   relay      -> a per-model provider key set in config (no single env var)
-#   cbk        -> CBK_API_SECRET
-#   chatbotkit -> CHATBOTKIT_API_SECRET   (cbk and chatbotkit take the same value)
+# Credentials: put the key DIRECTLY in this file, or reference an environment
+# variable with $VAR - either works. There is no single RELAY_API_KEY.
+#   relay      -> a per-model provider key, set in this file (see below)
+#   cbk        -> CBK_API_SECRET in the environment, or api_secret in this file
+#   chatbotkit -> CHATBOTKIT_API_SECRET in the environment, or api_secret here
+#                 (cbk and chatbotkit take the same credential value)
 
 agent:
   # Model name that drives the agent, from the ChatBotKit model catalogue and
@@ -43,30 +44,29 @@ agent:
 default_backend: relay
 
 backends:
-  # relay: CBK Relay. Auth is per model. Set a model's provider key with
-  # `authorization` (or a backend-level default applied to every model). A key is
-  # composed onto the model as glm-5.2/authorization=<key> before the request.
+  # relay: CBK Relay. Auth is per model: the key is carried inside the model
+  # string as "<model>/authorization=<key>". Put the key directly after
+  # `authorization:` (no quotes needed), or reference an env var with $VAR.
   relay:
     # base_url: 'https://relay.cbk.ai'
 
-    # Default provider key for every model on the relay (optional). Point it at
-    # your own provider key; use this if all your relay models share one key.
-    # authorization: '$ZAI_API_KEY'
+    # Optional: one default key applied to every relay model that has none.
+    # authorization: 'paste-a-key-here-or-$VAR'
 
-    # Per-model provider keys - the case one backend key cannot express. When
-    # --model matches a key here, its settings take priority. `model` aliases the
-    # real id; `authorization` is that model's provider key.
-    models: {}
-    #   glm-5.2:
-    #     authorization: $ZAI_API_KEY          # your Z.AI key
-    #   kimi-k3:
-    #     authorization: $MOONSHOT_API_KEY     # your Moonshot key
-    #   deepseek-v4-flash:
-    #     authorization: $DEEPSEEK_API_KEY     # your DeepSeek key
-    #   fast:
-    #     model: glm-5-turbo
-    #     authorization: $ZAI_API_KEY
-    #     max_iterations: 200
+    # Per-model provider keys - each open model is a different provider with its
+    # own key. `model` aliases a real id; `authorization` is that model's key.
+    # The default model is kept ready below - just fill in your key.
+    models:
+      glm-5.2:
+        authorization: ''                    # <- paste your Z.AI key here
+      # kimi-k3:
+      #   authorization: ''                   # your Moonshot key
+      # deepseek-v4-flash:
+      #   authorization: ''                   # your DeepSeek key
+      # fast:                                 # a custom alias: rename + cap iterations
+      #   model: glm-5-turbo
+      #   authorization: ''
+      #   max_iterations: 200
 
   # cbk: ChatBotKit at api.cbk.ai. Bearer credential, defaults to $CBK_API_SECRET.
   cbk:
