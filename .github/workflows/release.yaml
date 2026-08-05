@@ -184,9 +184,13 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Download all artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
+          # Only the platform tarballs are needed for checksums and the release;
+          # skip the buildx ".dockerbuild" provenance artifact the image job
+          # emits, which is unused here and one more thing to flake on download.
+          pattern: zot-v*
           path: dist
           merge-multiple: true
 
