@@ -75,3 +75,184 @@ func mustWrite(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// writeCfg writes a config file and returns its path.
+func writeCfg(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+// The default run targets the CBK relay, which authenticates the provider per
+// model inside the model string, so the backend-level RELAY_API_KEY is composed
+// onto the default model.
+func TestResolveRelayComposesModel(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("RELAY_API_KEY", "relay-key")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultBackend != "relay" {
+		t.Fatalf("default backend = %q, want relay", cfg.DefaultBackend)
+	}
+	client, opts, err := resolve(cfg, DefaultBackstory)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if client == nil {
+		t.Fatal("expected a client")
+	}
+	want := cfg.Agent.Model + "/authorization=relay-key"
+	if opts.Model != want {
+		t.Errorf("model = %q, want %q", opts.Model, want)
+	}
+}
+
+// Per-model authorization: each relay model carries its own provider key,
+// composed into the model string.
+func TestResolveRelayPerModelAuthorization(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+	path := writeCfg(t, `
+agent:
+  model: gpt-4
+default_backend: relay
+backends:
+  relay:
+    models:
+      gpt-4:
+        authorization: $OPENAI_API_KEY
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	_, opts, err := resolve(cfg, DefaultBackstory)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if opts.Model != "gpt-4/authorization=sk-openai" {
+		t.Errorf("model = %q, want gpt-4/authorization=sk-openai", opts.Model)
+	}
+}
+
+// A key already inlined into the model name is respected, not double-composed.
+func TestResolveRelayInlineAuthorizationRespected(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	path := writeCfg(t, `
+agent:
+  model: 'gpt-4/authorization=sk-inline'
+default_backend: relay
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	_, opts, err := resolve(cfg, DefaultBackstory)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if opts.Model != "gpt-4/authorization=sk-inline" {
+		t.Errorf("model = %q, want it unchanged", opts.Model)
+	}
+}
+
+// No provider key anywhere for the relay is a clear, actionable error.
+func TestResolveRelayErrorsWithoutAuthorization(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("RELAY_API_KEY", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, _, err := resolve(cfg, DefaultBackstory); err == nil {
+		t.Fatal("expected an error when the relay model has no authorization")
+	}
+}
+
+// The Bearer backends resolve to their endpoints and read their own credential;
+// they never touch the model string.
+func TestResolveBearerBackends(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("CBK_API_SECRET", "cbk-key")
+	t.Setenv("CHATBOTKIT_API_SECRET", "chatbotkit-key")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, name := range []string{"cbk", "chatbotkit"} {
+		cfg.DefaultBackend = name
+		client, opts, err := resolve(cfg, DefaultBackstory)
+		if err != nil {
+			t.Fatalf("resolve(%s): %v", name, err)
+		}
+		if client == nil {
+			t.Fatalf("resolve(%s): expected a client", name)
+		}
+		if opts.Model != cfg.Agent.Model {
+			t.Errorf("%s model = %q, want %q unchanged", name, opts.Model, cfg.Agent.Model)
+		}
+	}
+}
+
+// A missing Bearer credential for a ChatBotKit backend is a clear error.
+func TestResolveBearerErrorsWithoutSecret(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("CBK_API_SECRET", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.DefaultBackend = "cbk"
+	if _, _, err := resolve(cfg, DefaultBackstory); err == nil {
+		t.Fatal("expected an error when the cbk backend has no secret")
+	}
+}
+
+// A custom model entry aliases a real id, caps iterations, and carries auth,
+// which is composed onto the aliased model on the relay.
+func TestResolveCustomModelAlias(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+	path := writeCfg(t, `
+agent:
+  model: fast
+default_backend: relay
+backends:
+  relay:
+    models:
+      fast:
+        model: gpt-5
+        max_iterations: 50
+        authorization: $OPENAI_API_KEY
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	_, opts, err := resolve(cfg, DefaultBackstory)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if opts.Model != "gpt-5/authorization=sk-openai" {
+		t.Errorf("model = %q, want gpt-5/authorization=sk-openai", opts.Model)
+	}
+	if opts.MaxIterations != 50 {
+		t.Errorf("max iterations = %d, want 50 (from custom model)", opts.MaxIterations)
+	}
+}

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -134,7 +135,7 @@ func (s *stream) toolStart(ctx context.Context, e agent.ToolCallStartEvent) erro
 	opts := []acpsdk.ToolCallStartOpt{
 		acpsdk.WithStartKind(toolKind(e.Name)),
 		acpsdk.WithStartStatus(acpsdk.ToolCallStatusInProgress),
-		acpsdk.WithStartRawInput(e.Args),
+		acpsdk.WithStartRawInput(boundedRawData(e.Args)),
 	}
 	if path := str(e.Args, "path"); path != "" {
 		opts = append(opts, acpsdk.WithStartLocations([]acpsdk.ToolCallLocation{{Path: path}}))
@@ -157,13 +158,13 @@ func (s *stream) toolEnd(ctx context.Context, e agent.ToolCallEndEvent) error {
 		return s.update(ctx, acpsdk.UpdateToolCall(call.id,
 			acpsdk.WithUpdateStatus(acpsdk.ToolCallStatusFailed),
 			acpsdk.WithUpdateContent(textContent(str(result, "error"))),
-			acpsdk.WithUpdateRawOutput(e.Result),
+			acpsdk.WithUpdateRawOutput(boundedRawData(e.Result)),
 		))
 	}
 
 	opts := []acpsdk.ToolCallUpdateOpt{
 		acpsdk.WithUpdateStatus(acpsdk.ToolCallStatusCompleted),
-		acpsdk.WithUpdateRawOutput(e.Result),
+		acpsdk.WithUpdateRawOutput(boundedRawData(e.Result)),
 	}
 	if content := toolContent(e.Name, call.args, result); len(content) > 0 {
 		opts = append(opts, acpsdk.WithUpdateContent(content))
@@ -286,7 +287,11 @@ func toolContent(name string, args, result map[string]any) []acpsdk.ToolCallCont
 			return nil
 		}
 		return []acpsdk.ToolCallContent{
-			acpsdk.ToolDiffContent(path, str(args, "newString"), str(args, "oldString")),
+			acpsdk.ToolDiffContent(
+				path,
+				truncate(str(args, "newString"), maxToolContent/2),
+				truncate(str(args, "oldString"), maxToolContent/2),
+			),
 		}
 
 	case "write":
@@ -294,7 +299,9 @@ func toolContent(name string, args, result map[string]any) []acpsdk.ToolCallCont
 		if path == "" {
 			return nil
 		}
-		return []acpsdk.ToolCallContent{acpsdk.ToolDiffContent(path, str(args, "content"))}
+		return []acpsdk.ToolCallContent{
+			acpsdk.ToolDiffContent(path, truncate(str(args, "content"), maxToolContent)),
+		}
 
 	case "read":
 		return textContent(str(result, "content"))
@@ -319,6 +326,20 @@ func textContent(text string) []acpsdk.ToolCallContent {
 		return nil
 	}
 	return []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(truncate(text, maxToolContent)))}
+}
+
+func boundedRawData(value any) any {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return map[string]any{"unavailable": true}
+	}
+	if len(data) <= maxToolContent {
+		return value
+	}
+	return map[string]any{
+		"truncated":     true,
+		"originalBytes": len(data),
+	}
 }
 
 func str(m map[string]any, key string) string {

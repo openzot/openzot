@@ -1,4 +1,4 @@
-// Package zot is the embeddable core of the zot autonomous coding agent. It
+// Package zot is the embeddable core of the zot automated software factory. It
 // turns a single plain-English task into an agentic run - plan, act, observe,
 // exit - driven entirely by the ChatBotKit Go SDK's agent package, and renders
 // the run in a read-only terminal UI.
@@ -149,6 +149,8 @@ func LoadProjectContext(cfg *Config, dirs ...string) error {
 // directory, so callers should chdir into the target project first. Run blocks
 // until the user quits the viewer or the program errors.
 func Run(ctx context.Context, cfg Config, task string) error {
+	config.ScrubBackendSecrets(cfg)
+
 	client, opts, err := resolve(cfg, DefaultBackstory)
 	if err != nil {
 		return err
@@ -177,6 +179,8 @@ func Run(ctx context.Context, cfg Config, task string) error {
 // live; each session layers its own workspace context on top. Diagnostics go to
 // logf, which must not write to stdout - the protocol owns it.
 func ServeACP(ctx context.Context, cfg Config, configDir string, logf func(string, ...any)) error {
+	config.ScrubBackendSecrets(cfg)
+
 	// Fail fast on credentials and model resolution, rather than at the first
 	// prompt when a client is already connected.
 	client, _, err := resolve(cfg, DefaultACPBackstory)
@@ -210,15 +214,13 @@ func resolve(cfg Config, defaultBackstory string) (*sdk.Client, agent.ExecuteWit
 	if !ok {
 		return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf("backend %q is not configured", cfg.DefaultBackend)
 	}
-	if backend.APISecret == "" {
-		return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf("no API secret for backend %q (set its credential via env or config)", cfg.DefaultBackend)
-	}
 
 	// Resolve the model against the backend's custom model definitions. A custom
 	// entry's settings take priority over the run defaults.
 	model := cfg.Agent.Model
 	maxIterations := cfg.Agent.MaxIterations
 	features := cfg.Features
+	auth := backend.Authorization
 	if mc, ok := backend.Models[model]; ok {
 		if mc.Model != "" {
 			model = mc.Model
@@ -226,7 +228,32 @@ func resolve(cfg Config, defaultBackstory string) (*sdk.Client, agent.ExecuteWit
 		if mc.MaxIterations > 0 {
 			maxIterations = mc.MaxIterations
 		}
+		if mc.Authorization != "" {
+			auth = mc.Authorization
+		}
 		features = append(append([]config.Feature{}, features...), mc.Features...)
+	}
+
+	// Turn the backend choice into concrete client auth. The relay authenticates
+	// each provider per model, inside the model string; the ChatBotKit backends
+	// send a Bearer credential.
+	switch config.BackendStyle(cfg.DefaultBackend) {
+	case config.AuthModelParam:
+		// Respect a key the caller already inlined into --model.
+		if !strings.Contains(model, "/authorization=") {
+			if auth == "" {
+				return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf(
+					"no authorization for model %q on backend %q (set authorization on the model or backend in config, %s in the environment, or inline it as %s/authorization=KEY)",
+					model, cfg.DefaultBackend, config.AuthEnvName(cfg.DefaultBackend), model)
+			}
+			model = model + "/authorization=" + auth
+		}
+	default: // AuthBearer
+		if backend.APISecret == "" {
+			return nil, agent.ExecuteWithToolsOptions{}, fmt.Errorf(
+				"no API secret for backend %q (set %s in the environment or api_secret in config)",
+				cfg.DefaultBackend, config.SecretEnvName(cfg.DefaultBackend))
+		}
 	}
 
 	backstory := cfg.Agent.Backstory

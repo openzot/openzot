@@ -4,8 +4,9 @@
 
 <h1 align="center">zot</h1>
 
-**An autonomous coding agent.** Brief it once and it plans, edits, and runs your
-code until the whole job is done - no prompting, no babysitting, no chat box.
+**An automated software factory in a single binary.** Give it a software job and
+its autonomous coding harness plans, edits, runs, and verifies your code until
+the work is complete.
 
 <p align="center">
   <img width="1504" height="1080" alt="zot demo" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
@@ -20,19 +21,32 @@ upgrading.
 
 ## Why zot exists
 
-Coding agents are usually copilots: they wait for a prompt, suggest, and hand the
-keyboard back. zot flips that - you describe the job once and it runs the whole
-loop (plan → act → observe → verify → exit) without you in it.
+Most coding tools optimize the conversation between a developer and an agent.
+zot optimizes the production run. A software brief goes in, the repository moves
+toward the requested outcome, and a verified working tree comes out.
 
-The agentic loop - model calls, tool orchestration, planning, iteration - runs on
-a capable cloud harness, not in the binary. The default `cbk` backend uses
-[ChatBotKit](https://chatbotkit.com); the built-in `relay` backend can use an
-OpenAI or OpenRouter key instead. That keeps the local runtime tiny: load
-config, wire the SDK's tools, and render events.
+The factory is powered by an autonomous coding harness. It runs the whole loop
+(plan → act → observe → verify → exit) from one brief, without waiting for
+follow-up prompts at every step. Model calls, tool orchestration, planning, and
+iteration run on a capable cloud harness, not in the binary. zot defaults to the
+built-in `relay` backend, which reaches models through the CBK Relay with your
+own provider key (OpenAI, Mistral, …); the `cbk` / `chatbotkit` backends use a
+[ChatBotKit](https://chatbotkit.com) token instead. That keeps the local runtime
+tiny: load config, wire the SDK's tools, and render events.
+
+## The factory model
+
+| Stage  | What zot does                                                    |
+| ------ | ---------------------------------------------------------------- |
+| Brief  | Accepts one task plus the repository's `AGENT.md` and skills     |
+| Plan   | Breaks the requested outcome into executable work                |
+| Build  | Reads, writes, and edits files, then runs commands in the repo   |
+| Verify | Inspects results and iterates when the job is not complete       |
+| Output | Leaves the completed work in the working tree with a visible log |
 
 ## How it works
 
-All of the autonomy comes from the
+The automated coding harness comes from the
 [**ChatBotKit Go SDK**](https://github.com/chatbotkit/go-sdk):
 
 - `agent.ExecuteWithTools` runs the model in a loop - _plan → act → observe →
@@ -41,37 +55,47 @@ All of the autonomy comes from the
 - `agent.DefaultTools()` gives it the coding toolbox: `read`, `write`, `edit`,
   and `exec` (shell).
 
-`zot` itself is just a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-front-end. It launches the agent in a goroutine and renders the event stream
-(`ToolCallStart`, `ToolCallEnd`, `Iteration`, token narration, `AgentExit`, …)
-into a scrollable, read-only viewport. The UI deliberately has no text input.
+`zot` itself is a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+front-end for that production run. It launches the harness in a goroutine and
+renders the event stream (`ToolCallStart`, `ToolCallEnd`, `Iteration`, token
+narration, `AgentExit`, …) into a scrollable, read-only viewport. The UI
+deliberately has no text input.
 
 ## Prerequisites
 
-- A credential for the selected backend: a ChatBotKit token for `cbk`, or an
-  OpenAI/OpenRouter key for `relay`
+- A credential for the selected backend: a provider key for the default `relay`
+  (`RELAY_API_KEY`), or a ChatBotKit token for `cbk` / `chatbotkit`
 - Go 1.25+ - only if you build from source
 
 ## Backend credentials
 
-The default `cbk` backend needs its own ChatBotKit API token. **Mint a new one
-for the tool** - don't reuse a token from elsewhere.
+zot defaults to the **`relay`** backend, which carries *your own provider key*
+per model - see [Backends](#backends) for how relay auth is composed into the
+model string. Point a provider key at it with `RELAY_API_KEY` (or per-model
+`authorization` in config):
 
-We **recommend** creating a scoped token at
+```bash
+export RELAY_API_KEY="sk-…"   # your OpenAI / provider key
+```
+
+The **`cbk`** and **`chatbotkit`** backends instead need a ChatBotKit API token.
+**Mint a new one for the tool** - don't reuse a token from elsewhere. We
+**recommend** creating a scoped token at
 [chatbotkit.com/apps/code](https://chatbotkit.com/apps/code). This issues a token
 limited to coding-harness operations only, so it **cannot** reach the rest of
 your account.
 
 Provide the token either way:
 
-**1. Environment variable (preferred)** - export `CHATBOTKIT_API_SECRET`, or put
-it in a `.env` file in the working directory:
+**1. Environment variable (preferred)** - export `CBK_API_SECRET` (for `cbk`) or
+`CHATBOTKIT_API_SECRET` (for `chatbotkit`), or put it in a `.env` file in the
+working directory:
 
 ```bash
-export CHATBOTKIT_API_SECRET="cbk_…"
+export CBK_API_SECRET="cbk_…"
 ```
 
-**2. Config file** - set `api_secret` under the `cbk` backend in your config file
+**2. Config file** - set `api_secret` under the backend in your config file
 (`~/.config/zot/config.yaml`, or the path given to `--config`):
 
 ```yaml
@@ -159,7 +183,7 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 # run it on a task
 ./zot "add input validation to the signup handler and a test"
 
-# sandbox it to a scratch directory and cap the work
+# use a scratch directory as the working directory and cap the work
 ./zot --dir ./scratch --max-iterations 40 "scaffold a tiny snake game in python"
 
 # read the task from a file instead of the command line
@@ -174,7 +198,7 @@ export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
 | Flag               | Default                     | Description                                                |
 | ------------------ | --------------------------- | ---------------------------------------------------------- |
 | `--model`          | `kimi-k2.7-code`            | Model name (resolved against the selected backend)         |
-| `--backend`        | `cbk`                       | Backend to run against: `cbk` or `relay`                   |
+| `--backend`        | `relay`                     | Backend to run against: `relay`, `cbk`, or `chatbotkit`    |
 | `--dir`            | `.`                         | Working directory the agent reads, writes and runs in      |
 | `--max-iterations` | `1000`                      | Safety cap before the agent is forced to stop              |
 | `--task-file`      | _(none)_                    | Read the task from a file instead of the command line      |
@@ -311,42 +335,79 @@ ignored, which costs nothing by default (`BUZZ_ACP_MCP_COMMAND` is empty).
 
 ## Backends
 
-A run targets a **backend** - a provider zot talks to. Two ship built in, both
-speaking the same API:
+A run targets a **backend** - the provider zot talks to. Three ship built in:
 
-| Backend | Endpoint               | Credential                                   |
-| ------- | ---------------------- | -------------------------------------------- |
-| `cbk`   | ChatBotKit (default)   | `CHATBOTKIT_API_SECRET`                      |
-| `relay` | `https://relay.cbk.ai` | `RELAY_API_KEY` (your OpenAI/OpenRouter key) |
+| Backend      | Endpoint                     | Auth style | Credential              |
+| ------------ | ---------------------------- | ---------- | ----------------------- |
+| `relay`      | `https://relay.cbk.ai`       | per-model  | provider key per model  |
+| `cbk`        | `https://api.cbk.ai`         | Bearer     | `CBK_API_SECRET`        |
+| `chatbotkit` | `https://api.chatbotkit.com` | Bearer     | `CHATBOTKIT_API_SECRET` |
 
-Pick one with `--backend` (or `default_backend` in config); otherwise `cbk` is
-used. You select a model by name - it's resolved against the chosen backend:
+zot defaults to **`relay`**. Pick another with `--backend` (or `default_backend`
+in config). The model is resolved against the chosen backend, so it must be one
+that backend serves.
 
-```bash
-zot "fix the failing test"                     # cbk + default model
-zot --backend relay --model gpt-5 "…"          # relay + gpt-5
-```
-
-Each backend can define **custom models** in the config; when `--model` matches a
-key, that entry's settings take priority (alias the real id, cap iterations, add
-features):
+The two ChatBotKit backends authenticate with a Bearer token. The **relay is
+different**: it authenticates each model with *its own provider key*, carried
+inside the model string as `<model>/authorization=<key>` - because on the relay
+each model is a different provider (OpenAI, Mistral, …) with a different key. So
+relay auth is configured **per model**:
 
 ```yaml
-default_backend: cbk
+default_backend: relay
 backends:
-  cbk:
-    # api_secret: '$CHATBOTKIT_API_SECRET'   # default
-    models:
-      fast:
-        model: kimi-k2.7-code
-        max_iterations: 50
   relay:
-    api_secret: '$OPENAI_API_KEY'
-    # base_url: 'https://relay.cbk.ai'        # default
+    # authorization: $RELAY_API_KEY   # optional: one default key for all models
+    models:
+      gpt-4:
+        authorization: $OPENAI_API_KEY
+      mistral-large:
+        authorization: $MISTRAL_API_KEY
 ```
 
 ```bash
-zot --model fast "…"   # uses cbk's "fast" model config
+export OPENAI_API_KEY="sk-..."
+zot --model gpt-4 "…"            # → sends model gpt-4/authorization=sk-... to the relay
+
+# A single default key for every relay model (composed the same way):
+export RELAY_API_KEY="sk-..."
+zot --model gpt-4 "…"
+
+# You can also inline the key yourself; zot leaves it untouched:
+zot --model 'gpt-4/authorization=sk-...' "…"
+
+# The ChatBotKit backends just need their Bearer token:
+export CBK_API_SECRET="..."
+zot --backend cbk --model kimi-k2.7-code "…"
+```
+
+zot composes the `authorization=` param onto the model automatically from the
+per-model (or backend-level) config; a key you inline into `--model` yourself is
+left as-is.
+
+Each backend can also define **custom models** in the config; when `--model`
+matches a key, that entry's settings take priority (alias the real id, cap
+iterations, add features, and - on the relay - carry that model's provider key):
+
+```yaml
+default_backend: relay
+backends:
+  relay:
+    models:
+      fast:
+        model: gpt-4o-mini
+        authorization: $OPENAI_API_KEY
+        max_iterations: 50
+  cbk:
+    # api_secret: '$CBK_API_SECRET'   # default
+    models:
+      cheap:
+        model: kimi-k2.7-code
+        max_iterations: 50
+```
+
+```bash
+zot --model fast "…"   # uses the relay's "fast" model config
 ```
 
 ## Configuration
@@ -361,9 +422,9 @@ cp configs/zot.example.yaml ~/.config/zot/config.yaml
 
 Scalar fields have a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
 `ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Backend
-credentials come from their own env vars (`CHATBOTKIT_API_SECRET` for `cbk`,
-`RELAY_API_KEY` for `relay`), so they don't need the `ZOT_` prefix. See
-[configs/zot.example.yaml](configs/zot.example.yaml).
+credentials come from their own env vars (`RELAY_API_KEY` for `relay`,
+`CBK_API_SECRET` for `cbk`, `CHATBOTKIT_API_SECRET` for `chatbotkit`), so they
+don't need the `ZOT_` prefix. See [configs/zot.example.yaml](configs/zot.example.yaml).
 
 ### Controls
 
@@ -402,9 +463,15 @@ Everything here is optional - missing files and directories are ignored.
 ## ⚠️ Safety
 
 `zot` is fully autonomous and has **real** file-write and shell-exec access
-to `--dir`. It will create, modify and delete files and run commands without
-asking. Point it at a scratch directory or a disposable git checkout you are
-happy for it to change - not your home directory.
+from `--dir`. The flag changes the process working directory; it is **not a
+filesystem sandbox**. Absolute paths and shell commands retain all permissions
+of the zot process. Point it at a scratch directory or a disposable git checkout
+you are happy for it to change - not your home directory.
+
+Configured backend credentials are resolved into zot's in-memory configuration
+and then removed from the process environment before the agent starts, so its
+shell commands do not inherit those API keys. Other secrets already present in
+the environment or readable from disk remain accessible to those commands.
 
 In [ACP mode](#acp-mode-zot-acp) the same applies to every directory a client
 opens a session in, and the prompts come from whoever that client lets through -

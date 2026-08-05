@@ -2,6 +2,21 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-08-05
+
+### Features
+
+- Third backend: `chatbotkit` (`https://api.chatbotkit.com`), alongside `cbk` (now `https://api.cbk.ai`) and `relay`. `cbk` and `chatbotkit` are the same platform on its two hosts, each reading its own brand-named credential.
+- Relay per-model auth: the `relay` backend now authenticates each model with its own provider key, carried inside the model string as `<model>/authorization=<key>`. zot composes it automatically from a per-model `authorization`, falling back to a backend-level `authorization` (or `$RELAY_API_KEY`); a key you inline into `--model` yourself is left untouched. This is the case a single backend key cannot express - on the relay each model can be a different provider (OpenAI, Mistral, …) with a different key.
+- Per-model `authorization` under `backends.<name>.models.<model>` (joins the existing `model`, `max_iterations` and `features` overrides).
+- Secret scrubbing now strips provider authorizations (backend-level and per-model) from the child-process environment in addition to Bearer secrets, so shell commands the agent runs cannot read them.
+
+### Changed
+
+- **Breaking (config):** the default backend is now `relay` (was `cbk`). A run with no config brings its own provider key (`RELAY_API_KEY`, or per-model `authorization`) and reaches models through `relay.cbk.ai`; target ChatBotKit explicitly with `--backend cbk` / `--backend chatbotkit`.
+- **Breaking (config):** the `cbk` backend now points at `https://api.cbk.ai` and reads `CBK_API_SECRET` (previously `api.chatbotkit.com` / `CHATBOTKIT_API_SECRET`). `CHATBOTKIT_API_SECRET` now configures the new `chatbotkit` backend.
+- **Breaking (config):** on the `relay` backend a single `RELAY_API_KEY` is no longer sent as a Bearer credential; it is used as the default provider key composed into the model string. Provide provider keys per model where they differ.
+
 ## [0.4.1] - 2026-07-25
 
 ### Features

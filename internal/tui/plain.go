@@ -31,6 +31,8 @@ func runPlain(ctx context.Context, client *sdk.Client, meta Meta, opts agent.Exe
 	events, errs := agent.ExecuteWithTools(ctx, client, opts)
 
 	var pending strings.Builder
+	var exitErr error
+	var sawExit bool
 	flush := func() {
 		if s := strings.TrimSpace(pending.String()); s != "" {
 			fmt.Printf("  • %s\n", s)
@@ -65,10 +67,12 @@ func runPlain(ctx context.Context, client *sdk.Client, meta Meta, opts agent.Exe
 		case agent.ToolCallErrorEvent:
 			fmt.Printf("    error: %s: %s\n", e.Name, e.Error)
 		case agent.AgentExitEvent:
+			sawExit = true
 			flush()
 			status := "done"
 			if e.Code != 0 {
 				status = fmt.Sprintf("failed (code %d)", e.Code)
+				exitErr = &AgentExitError{Code: e.Code, Message: e.Message}
 			}
 			fmt.Printf("\n%s: %s\n", status, e.Message)
 		}
@@ -77,7 +81,10 @@ func runPlain(ctx context.Context, client *sdk.Client, meta Meta, opts agent.Exe
 	if err := <-errs; err != nil {
 		return err
 	}
-	return nil
+	if !sawExit {
+		return fmt.Errorf("agent stream ended without an exit")
+	}
+	return exitErr
 }
 
 func plainArg(name string, args map[string]interface{}) string {
