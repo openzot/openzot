@@ -155,6 +155,42 @@ func TestStreamToolCallLifecycle(t *testing.T) {
 	}
 }
 
+func TestStreamBoundsLargeToolDataOnTheWire(t *testing.T) {
+	r := newRecorder(t, 10)
+	large := strings.Repeat("sensitive-output-", 1000)
+
+	r.handle(t,
+		agent.ToolCallStartEvent{Name: "write", Args: map[string]any{
+			"path":    "/repo/generated.txt",
+			"content": large,
+		}},
+		agent.ToolCallEndEvent{Name: "write", Result: map[string]any{
+			"success": true,
+			"message": large,
+		}},
+	)
+
+	updates := r.updates()
+	if len(updates) != 2 {
+		t.Fatalf("got %d updates, want 2: %+v", len(updates), updates)
+	}
+
+	for i, update := range updates {
+		wire := marshal(t, update)
+		if strings.Contains(wire, large) {
+			t.Errorf("update %d contains the complete large payload", i)
+		}
+		if len(wire) > maxToolContent*2 {
+			t.Errorf("update %d is %d bytes, want a bounded protocol message", i, len(wire))
+		}
+	}
+
+	raw, _ := updates[1].Update["rawOutput"].(map[string]any)
+	if raw["truncated"] != true {
+		t.Errorf("large raw output = %v, want a truncated summary", raw)
+	}
+}
+
 func TestStreamToolFailureIsReported(t *testing.T) {
 	tests := []struct {
 		name  string

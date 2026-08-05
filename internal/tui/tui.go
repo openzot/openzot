@@ -48,6 +48,16 @@ func Run(ctx context.Context, client *sdk.Client, meta Meta, opts agent.ExecuteW
 
 	go runAgent(ctx, p, client, opts)
 
-	_, err := p.Run()
-	return err
+	final, err := p.Run()
+	if err != nil {
+		return err
+	}
+	switch m := final.(type) {
+	case model:
+		return m.runError()
+	case *model:
+		return m.runError()
+	default:
+		return nil
+	}
 }

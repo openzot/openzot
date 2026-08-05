@@ -156,7 +156,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentDoneMsg:
 		// The stream ended without an explicit exit (e.g. iteration cap reached).
 		if m.status == statusRunning {
-			m.status = statusDone
+			m.status = statusFailed
+			m.err = fmt.Errorf("agent stream ended without an exit")
 			m.flushPending()
 			m.appendEntry(dividerStyle.Render("- stream ended -"))
 		}

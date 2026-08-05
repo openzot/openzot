@@ -43,13 +43,18 @@ built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
 
 ## Running a task
 
+The image defaults to the `relay` backend, so these examples select ChatBotKit
+explicitly with `--backend chatbotkit` (which uses the `CHATBOTKIT_API_SECRET`
+they already pass). Drop the flag to use the relay - see
+[Backends](../README.md#backends) for its per-model provider keys.
+
 ```bash
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   --env CHATBOTKIT_API_SECRET \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest "add input validation to the signup handler and a test"
+  ghcr.io/openzot/openzot:latest --backend chatbotkit "add input validation to the signup handler and a test"
 ```
 
 Two flags need explaining, and both are about **bind mounts**, not about zot:
@@ -71,7 +76,7 @@ initialises it from the image and the default user owns it:
 docker run --rm -it \
   --env CHATBOTKIT_API_SECRET \
   --volume zot-workspace:/workspace \
-  ghcr.io/openzot/openzot:latest "scaffold a tiny snake game in python"
+  ghcr.io/openzot/openzot:latest --backend chatbotkit "scaffold a tiny snake game in python"
 ```
 
 That is the safest shape available: the run cannot see your filesystem at all.
@@ -91,10 +96,12 @@ docker run --env CHATBOTKIT_API_SECRET …
 docker run --env-file ./zot.env …
 ```
 
-zot also loads a `.env` from its working directory, so a `.env` sitting in the
-mounted checkout is picked up with no flags at all. That is convenient locally
-and a mistake in CI - prefer `--env` there, where the value comes from the
-runner's secret store.
+zot also loads a `.env` from its working directory, including the directory
+selected with `--dir`, so a `.env` sitting in the mounted checkout is picked up
+with no extra flag. That is convenient locally and a mistake in CI - prefer
+`--env` there, where the value comes from the runner's secret store. After zot
+loads its configuration, configured backend credentials are removed from the
+environment inherited by agent shell commands.
 
 Use a scoped token from [chatbotkit.com/apps/code](https://chatbotkit.com/apps/code)
 rather than a general-purpose account token. A container run unattended is
@@ -113,7 +120,7 @@ docker run --rm -it \
   --env CHATBOTKIT_API_SECRET \
   --volume "$PWD":/workspace \
   --volume "$HOME/.config/zot":/home/zot/.config/zot:ro \
-  ghcr.io/openzot/openzot:latest "…"
+  ghcr.io/openzot/openzot:latest --backend chatbotkit "…"
 ```
 
 `ZOT_CONFIG` already points at `/home/zot/.config/zot/config.yaml`; a missing
@@ -131,7 +138,7 @@ docker run --rm \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
   --env CHATBOTKIT_API_SECRET \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --max-iterations 40 --task-file TASK.md | tee run.log
+  ghcr.io/openzot/openzot:latest --backend chatbotkit --max-iterations 40 --task-file TASK.md | tee run.log
 ```
 
 `--max-iterations` is worth setting explicitly for unattended runs; the default
@@ -146,7 +153,7 @@ with stdin attached and **without** `-t`:
 docker run --rm -i \
   --env CHATBOTKIT_API_SECRET \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest acp
+  ghcr.io/openzot/openzot:latest acp --backend chatbotkit
 ```
 
 An ACP client normally spawns the agent itself, so the command it is configured
@@ -174,7 +181,7 @@ docker run --rm \
   --pids-limit 512 --memory 2g --cpus 2 \
   --env CHATBOTKIT_API_SECRET \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --task-file TASK.md
+  ghcr.io/openzot/openzot:latest --backend chatbotkit --task-file TASK.md
 ```
 
 `--read-only` works because everything zot writes goes to the workspace volume;
@@ -184,8 +191,9 @@ mid-run, which is usually what you want and occasionally the thing that breaks a
 task.
 
 **Egress cannot be closed.** The agentic loop runs on the backend, so the
-container needs outbound HTTPS to `api.chatbotkit.com` (the `cbk` backend) or
-`relay.cbk.ai` (the `relay` backend), plus whatever the task itself fetches.
+container needs outbound HTTPS to whichever backend it targets - `relay.cbk.ai`
+(`relay`, the default), `api.cbk.ai` (`cbk`) or `api.chatbotkit.com`
+(`chatbotkit`) - plus whatever the task itself fetches.
 `--network none` gives you a container that cannot do anything. If you need
 containment, restrict egress to those hosts rather than removing it.
 

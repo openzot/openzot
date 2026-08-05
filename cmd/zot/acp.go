@@ -24,7 +24,7 @@ func runACP(args []string) error {
 	fs.SetOutput(os.Stderr)
 
 	configPath := fs.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := fs.String("backend", "", "backend to run against (default: the configured default, cbk)")
+	backend := fs.String("backend", "", "backend to run against: relay (default), cbk, or chatbotkit")
 	model := fs.String("model", "", "override the model name")
 	maxIter := fs.Int("max-iterations", 0, "override the safety cap on agent iterations per turn")
 	var featureFlags stringSlice

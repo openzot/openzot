@@ -19,21 +19,28 @@ type Config struct {
 	Features []Feature `yaml:"features"`
 	// DefaultBackend is the backend used when --backend is not given.
 	DefaultBackend string `yaml:"default_backend"`
-	// Backends are the named providers a run can target. zot ships with two -
-	// "cbk" (ChatBotKit, the default) and "relay" (CBK Relay) - and a config file
-	// can override their credentials/endpoint or add custom model entries.
+	// Backends are the named providers a run can target. zot ships with three -
+	// "relay" (CBK Relay, the default), "cbk" (ChatBotKit at api.cbk.ai) and
+	// "chatbotkit" (ChatBotKit at api.chatbotkit.com) - and a config file can
+	// override their credentials/endpoint or add custom model entries.
 	Backends map[string]Backend `yaml:"backends"`
 }
 
-// Backend is a provider zot can run against. Both built-in backends speak the
-// same API, so a backend is just an endpoint + credential plus optional custom
-// model definitions.
+// Backend is a provider zot can run against. How a run authenticates depends on
+// the backend's style: the ChatBotKit backends send a Bearer credential
+// (APISecret); the relay carries the provider credential per model, inside the
+// model string (Authorization), because on the relay each model is a different
+// provider with its own key.
 type Backend struct {
-	// BaseURL overrides the API endpoint. Empty uses the SDK default.
+	// BaseURL overrides the API endpoint. Empty uses the built-in default.
 	BaseURL string `yaml:"base_url"`
-	// APISecret is the credential. Supports "$ENV_VAR" references. For the
-	// built-in backends it defaults from the environment (see builtinBackends).
+	// APISecret is the Bearer credential for the ChatBotKit backends. Supports
+	// "$ENV_VAR" references; for the built-ins it defaults from the environment.
 	APISecret string `yaml:"api_secret"`
+	// Authorization is the relay's default model credential, applied to every
+	// model on this backend that does not set its own. Supports "$ENV_VAR"; for
+	// the relay it defaults from RELAY_API_KEY. Ignored by the Bearer backends.
+	Authorization string `yaml:"authorization"`
 	// Models holds custom, named model configurations for this backend. When a
 	// run's model name matches a key here, that entry's settings take priority.
 	Models map[string]ModelConfig `yaml:"models"`
@@ -47,18 +54,67 @@ type ModelConfig struct {
 	Model string `yaml:"model"`
 	// MaxIterations overrides the global iteration cap for this model.
 	MaxIterations int `yaml:"max_iterations"`
+	// Authorization is this model's provider credential on the relay, composed
+	// into the model string as "<model>/authorization=<value>". Supports
+	// "$ENV_VAR". Overrides the backend-level Authorization. Ignored by the
+	// Bearer backends.
+	Authorization string `yaml:"authorization"`
 	// Features are extra conversation features enabled for this model.
 	Features []Feature `yaml:"features"`
 }
 
-// builtinBackends are the providers zot ships with: their default endpoint and
-// the environment variable their credential falls back to.
+// AuthStyle is how a backend authenticates a run.
+type AuthStyle int
+
+const (
+	// AuthBearer sends the credential as an Authorization: Bearer header.
+	AuthBearer AuthStyle = iota
+	// AuthModelParam carries the credential inside the model string, as
+	// "<model>/authorization=<value>" - the CBK Relay's convention, where each
+	// model is a distinct provider authenticated with its own key.
+	AuthModelParam
+)
+
+// builtinBackends are the providers zot ships with: their default endpoint, how
+// they authenticate, and the environment variable their credential falls back
+// to. "cbk" and "chatbotkit" are the same platform on its two hosts; the
+// credential value is the same but each reads its own brand-named variable.
 var builtinBackends = map[string]struct {
 	baseURL   string
-	secretEnv string
+	style     AuthStyle
+	secretEnv string // Bearer credential fallback (AuthBearer)
+	authEnv   string // model-authorization fallback (AuthModelParam)
 }{
-	"cbk":   {baseURL: "", secretEnv: "CHATBOTKIT_API_SECRET"},
-	"relay": {baseURL: "https://relay.cbk.ai", secretEnv: "RELAY_API_KEY"},
+	"relay":      {baseURL: "https://relay.cbk.ai", style: AuthModelParam, authEnv: "RELAY_API_KEY"},
+	"cbk":        {baseURL: "https://api.cbk.ai", style: AuthBearer, secretEnv: "CBK_API_SECRET"},
+	"chatbotkit": {baseURL: "https://api.chatbotkit.com", style: AuthBearer, secretEnv: "CHATBOTKIT_API_SECRET"},
+}
+
+// BackendStyle reports how the named backend authenticates. Unknown/custom
+// backends default to Bearer.
+func BackendStyle(name string) AuthStyle {
+	if b, ok := builtinBackends[name]; ok {
+		return b.style
+	}
+	return AuthBearer
+}
+
+// AuthEnvName returns the environment variable a built-in relay-style backend's
+// model authorization falls back to, for use in actionable error messages.
+func AuthEnvName(backend string) string {
+	if b, ok := builtinBackends[backend]; ok && b.authEnv != "" {
+		return b.authEnv
+	}
+	return "the backend authorization"
+}
+
+// SecretEnvName returns the environment variable a built-in Bearer backend's
+// credential falls back to, for use in actionable error messages.
+func SecretEnvName(backend string) string {
+	if b, ok := builtinBackends[backend]; ok && b.secretEnv != "" {
+		return b.secretEnv
+	}
+	return "its credential"
 }
 
 // Feature is a ChatBotKit conversation feature enabled for the run: a name plus
@@ -103,13 +159,15 @@ type Agent struct {
 }
 
 // Defaults returns the built-in configuration used when nothing else is set.
+// zot defaults to the CBK Relay: a run brings its own provider key and reaches
+// models through relay.cbk.ai.
 func Defaults() Config {
 	return Config{
 		Agent: Agent{
 			Model:         "kimi-k2.7-code",
 			MaxIterations: 1000,
 		},
-		DefaultBackend: "cbk",
+		DefaultBackend: "relay",
 	}
 }
 
@@ -143,15 +201,16 @@ func Load(path string) (Config, error) {
 	resolveBackends(&cfg)
 
 	if cfg.DefaultBackend == "" {
-		cfg.DefaultBackend = "cbk"
+		cfg.DefaultBackend = "relay"
 	}
 
 	return cfg, nil
 }
 
 // resolveBackends ensures the built-in backends exist, fills their default
-// endpoint, and resolves every backend's credential (config "$ENV" reference
-// first, then the built-in environment fallback).
+// endpoint, and resolves every credential (config "$ENV" reference first, then
+// the built-in environment fallback) - the Bearer secret, the backend-level
+// model authorization, and each model's own authorization.
 func resolveBackends(cfg *Config) {
 	if cfg.Backends == nil {
 		cfg.Backends = map[string]Backend{}
@@ -168,11 +227,29 @@ func resolveBackends(cfg *Config) {
 		if b.BaseURL == "" && isBuiltin {
 			b.BaseURL = builtin.baseURL
 		}
+
+		// Bearer credential (AuthBearer backends).
 		if s := strings.TrimSpace(b.APISecret); s != "" {
 			b.APISecret = resolveSecret(s)
 		} else if isBuiltin && builtin.secretEnv != "" {
 			b.APISecret = strings.TrimSpace(os.Getenv(builtin.secretEnv))
 		}
+
+		// Backend-level model authorization (AuthModelParam backends).
+		if a := strings.TrimSpace(b.Authorization); a != "" {
+			b.Authorization = resolveSecret(a)
+		} else if isBuiltin && builtin.authEnv != "" {
+			b.Authorization = strings.TrimSpace(os.Getenv(builtin.authEnv))
+		}
+
+		// Per-model authorization.
+		for mName, mc := range b.Models {
+			if mc.Authorization != "" {
+				mc.Authorization = resolveSecret(mc.Authorization)
+				b.Models[mName] = mc
+			}
+		}
+
 		cfg.Backends[name] = b
 	}
 }
@@ -186,6 +263,37 @@ func resolveSecret(v string) string {
 		return strings.TrimSpace(os.Getenv(strings.TrimSpace(name)))
 	}
 	return v
+}
+
+// ScrubBackendSecrets removes every resolved backend credential - Bearer
+// secrets and provider authorizations, backend-level and per-model - from the
+// process environment. Config retains the resolved values used by the SDK
+// client, while shell commands launched by the agent no longer inherit those
+// credentials.
+func ScrubBackendSecrets(cfg Config) {
+	secrets := map[string]bool{}
+	add := func(v string) {
+		if v != "" {
+			secrets[v] = true
+		}
+	}
+	for _, backend := range cfg.Backends {
+		add(backend.APISecret)
+		add(backend.Authorization)
+		for _, mc := range backend.Models {
+			add(mc.Authorization)
+		}
+	}
+	if len(secrets) == 0 {
+		return
+	}
+
+	for _, entry := range os.Environ() {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && secrets[value] {
+			_ = os.Unsetenv(name)
+		}
+	}
 }
 
 // Validate checks the fully-merged configuration.

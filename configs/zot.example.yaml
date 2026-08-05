@@ -5,18 +5,21 @@
 # --config) and adjust as needed.
 #
 # ENVIRONMENT VARIABLES (no file required - ideal for containers/CI):
-# Every field below has a matching env var, ZOT_<PATH>, where PATH is the field's
-# path upper-cased with dots as underscores. Env vars override the file.
+# Every scalar field below has a matching env var, ZOT_<PATH>, where PATH is the
+# field's path upper-cased with dots as underscores. Env vars override the file.
 #   agent.model           -> ZOT_AGENT_MODEL
 #   agent.max_iterations  -> ZOT_AGENT_MAX_ITERATIONS
 #   default_backend       -> ZOT_DEFAULT_BACKEND
 #
-# Backend credentials are read from the environment by default (no ZOT_ prefix):
-# the "cbk" backend uses CHATBOTKIT_API_SECRET, the "relay" backend uses
-# RELAY_API_KEY. Keep secrets in the environment, not in this file.
+# Credentials are read from the environment by default (no ZOT_ prefix). Keep
+# secrets in the environment - the file only references them with $VAR:
+#   relay      -> RELAY_API_KEY  (default provider key, see below)
+#   cbk        -> CBK_API_SECRET
+#   chatbotkit -> CHATBOTKIT_API_SECRET   (cbk and chatbotkit take the same value)
 
 agent:
-  # Model name that drives the agent. Resolved against the selected backend.
+  # Model name that drives the agent. Resolved against the selected backend, so
+  # it must be a model that backend serves (a provider-style id under "relay").
   model: 'kimi-k2.7-code'
 
   # Safety cap on plan/act/observe cycles before the agent is forced to stop.
@@ -26,16 +29,45 @@ agent:
   # default fully-autonomous backstory.
   # backstory: ''
 
-# Backends are the providers a run can target. zot ships with two - "cbk"
-# (ChatBotKit) and "relay" (CBK Relay) - both speaking the same API. Pick one per
-# run with --backend; otherwise default_backend (below) is used.
-default_backend: cbk
+# Backends are the providers a run can target. zot ships with three - "relay"
+# (CBK Relay), "cbk" (ChatBotKit at api.cbk.ai) and "chatbotkit" (ChatBotKit at
+# api.chatbotkit.com). Pick one per run with --backend; otherwise default_backend
+# is used. zot defaults to the relay.
+#
+# The two ChatBotKit backends authenticate with a Bearer credential (api_secret).
+# The relay is different: it authenticates each model with its own provider key,
+# carried INSIDE the model string as "<model>/authorization=<key>". So relay auth
+# is per model (each model may be a different provider), configured below.
+default_backend: relay
 
 backends:
-  # cbk: ChatBotKit. Credential defaults to $CHATBOTKIT_API_SECRET.
+  # relay: CBK Relay. Auth is per model. Set a model's provider key with
+  # `authorization` (or a backend-level default applied to every model). A key is
+  # composed onto the model as gpt-4/authorization=<key> before the request.
+  relay:
+    # base_url: 'https://relay.cbk.ai'
+
+    # Default provider key for every model on the relay. Defaults to
+    # $RELAY_API_KEY. Use this if all your models share one provider key.
+    # authorization: '$RELAY_API_KEY'
+
+    # Per-model provider keys - the case one backend key cannot express. When
+    # --model matches a key here, its settings take priority. `model` aliases the
+    # real id; `authorization` is that model's provider key.
+    models: {}
+    #   gpt-4:
+    #     authorization: $OPENAI_API_KEY
+    #   mistral-large:
+    #     authorization: $MISTRAL_API_KEY
+    #   fast:
+    #     model: gpt-4o-mini
+    #     authorization: $OPENAI_API_KEY
+    #     max_iterations: 200
+
+  # cbk: ChatBotKit at api.cbk.ai. Bearer credential, defaults to $CBK_API_SECRET.
   cbk:
-    # api_secret: '$CHATBOTKIT_API_SECRET'
-    # base_url: 'https://api.chatbotkit.com'
+    # api_secret: '$CBK_API_SECRET'
+    # base_url: 'https://api.cbk.ai'
 
     # Custom model definitions. When --model matches a key here, its settings
     # take priority. `model` aliases the real id; other fields override the run.
@@ -44,10 +76,10 @@ backends:
     #     model: kimi-k2.7-code
     #     max_iterations: 50
 
-  # relay: CBK Relay - bring your own provider key. Defaults to $RELAY_API_KEY.
-  relay:
-    # api_secret: '$RELAY_API_KEY'   # e.g. an OpenAI / OpenRouter key
-    # base_url: 'https://relay.cbk.ai'
+  # chatbotkit: ChatBotKit at api.chatbotkit.com. Same value, its own variable.
+  chatbotkit:
+    # api_secret: '$CHATBOTKIT_API_SECRET'
+    # base_url: 'https://api.chatbotkit.com'
     models: {}
 
 ui:

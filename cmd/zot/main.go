@@ -1,9 +1,9 @@
-// Command zot is an autonomous coding agent you watch, not drive.
+// Command zot is an automated software factory you watch, not drive.
 //
-// It flips the usual coding-TUI model: there is no prompt and no chat box. You
-// hand zot a single task on the command line, and it works the problem on its
-// own - reading files, editing them, and running shell commands - while the
-// terminal streams a live, read-only view of everything it does.
+// An autonomous coding harness powers the factory: hand zot a single task on
+// the command line and it works the problem on its own - reading files, editing
+// them, and running shell commands - while the terminal streams a live,
+// read-only view of everything it does.
 //
 // Usage:
 //
@@ -47,16 +47,13 @@ func main() {
 const acpCommand = "acp"
 
 func run() error {
-	// Load a .env from the working directory if present, so CHATBOTKIT_API_SECRET
-	// (and friends) can live alongside the project being worked on.
-	_ = godotenv.Load()
-
 	if len(os.Args) > 1 && os.Args[1] == acpCommand {
+		loadEnv(".")
 		return runACP(os.Args[2:])
 	}
 
 	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := flag.String("backend", "", "backend to run against (default: the configured default, cbk)")
+	backend := flag.String("backend", "", "backend to run against: relay (default), cbk, or chatbotkit")
 	model := flag.String("model", "", "override the model name")
 	dir := flag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := flag.Int("max-iterations", 0, "override the safety cap on agent iterations")
@@ -73,6 +70,11 @@ func run() error {
 		fmt.Printf("zot %s\n", version.Version)
 		return nil
 	}
+
+	// Load credentials from the directory the agent will work in. This must
+	// happen after --dir is parsed but before configuration resolves env-backed
+	// backend secrets.
+	loadEnv(*dir)
 
 	task, err := resolveTask(*taskFile, flag.Args())
 	if err != nil {
@@ -124,9 +126,9 @@ func run() error {
 		configDir = abs
 	}
 
-	// Sandbox the coding tools to --dir before the agent starts. DefaultTools()
-	// operates relative to the process working directory, so a chdir is the
-	// simplest way to scope the agent to the target project.
+	// Set the default working directory before the agent starts. This is not a
+	// filesystem sandbox: absolute paths and shell commands retain the process's
+	// host permissions.
 	if err := os.Chdir(*dir); err != nil {
 		return fmt.Errorf("cannot enter --dir %q: %w", *dir, err)
 	}
@@ -139,6 +141,10 @@ func run() error {
 	}
 
 	return zot.Run(context.Background(), cfg, task)
+}
+
+func loadEnv(dir string) {
+	_ = godotenv.Load(filepath.Join(dir, ".env"))
 }
 
 // resolveTask determines the single task string from --task-file or the
@@ -166,7 +172,7 @@ func resolveTask(taskFile string, args []string) (string, error) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `zot - an autonomous coding agent you watch, not drive
+	fmt.Fprintln(os.Stderr, `zot - an automated software factory powered by an autonomous coding harness
 
 Usage:
   zot [flags] "your task in plain english"
