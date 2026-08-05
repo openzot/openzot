@@ -3,7 +3,9 @@
 .env
 dist
 zot
-# Local development only: a go.work in the build context would redirect the
-# pinned go-sdk to a path that does not exist inside the image.
+zot-dev
+# A go.work someone created locally must not reach the build: its go line would
+# cap the toolchain below what go.mod requires, and the build would fail with a
+# version error rather than anything that names the cause.
 go.work
 go.work.sum

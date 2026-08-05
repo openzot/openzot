@@ -30,11 +30,37 @@ func ConfigDir(path string) string {
 	return filepath.Dir(path)
 }
 
+// DefaultSessionDir returns where session logs are written:
+//
+//  1. $ZOT_SESSION_DIR (if set and non-empty)
+//  2. $XDG_STATE_HOME/zot/sessions (if XDG_STATE_HOME is set)
+//  3. ~/.local/state/zot/sessions
+//
+// State rather than config, because a session log is something zot produces and
+// may prune, not something the user edits. Keeping run logs out of the config
+// directory also means a synced dotfiles setup does not carry transcripts of
+// every run to every machine.
+func DefaultSessionDir() string {
+	if dir := strings.TrimSpace(os.Getenv("ZOT_SESSION_DIR")); dir != "" {
+		return dir
+	}
+
+	return filepath.Join(xdgStateHome(), "zot", "sessions")
+}
+
 func xdgConfigHome() string {
 	if dir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); dir != "" {
 		return dir
 	}
 	return filepath.Join(homeDir(), ".config")
+}
+
+func xdgStateHome() string {
+	if dir := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); dir != "" {
+		return dir
+	}
+
+	return filepath.Join(homeDir(), ".local", "state")
 }
 
 func homeDir() string {

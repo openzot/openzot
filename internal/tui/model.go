@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/chatbotkit/go-sdk/agent"
+	"github.com/openzot/openzot/agent"
 )
 
 type status int

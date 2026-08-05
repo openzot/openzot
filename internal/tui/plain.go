@@ -8,8 +8,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	"github.com/chatbotkit/go-sdk/agent"
-	"github.com/chatbotkit/go-sdk/sdk"
+	"github.com/openzot/openzot/agent"
 )
 
 // isInteractive reports whether stdout is a terminal capable of the full-screen
@@ -24,7 +23,7 @@ func isInteractive() bool {
 // runPlain streams the agent's activity as plain, unstyled lines. It is used in
 // non-interactive shells and when --plain is set, so zot's output stays usable
 // in pipes, logs, and CI without a TTY or escape codes.
-func runPlain(ctx context.Context, client *sdk.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
 	fmt.Printf("zot: %s\n", meta.Task)
 	fmt.Printf("backend %s · model %s · dir %s\n", meta.Backend, meta.Model, meta.Workdir)
 
@@ -87,52 +86,112 @@ func runPlain(ctx context.Context, client *sdk.Client, meta Meta, opts agent.Exe
 	return exitErr
 }
 
+// plainArg is the one-line argument summary for a tool call.
+//
+// The names have to match agent.DefaultTools: a mismatch falls through to the
+// generic key/value dump, which is how a shell command used to print as
+// "shell command=go test" instead of just the command.
 func plainArg(name string, args map[string]interface{}) string {
 	switch name {
-	case "read", "write", "edit":
+	case "read", "write", "list":
 		return str(args, "path")
-	case "exec":
+	case "shell":
 		return truncate(str(args, "command"), 200)
-	case "plan":
-		return fmt.Sprintf("%d steps", len(slice(args["steps"])))
-	case "progress":
-		return str(args, "current")
+	case "skill":
+		return str(args, "name")
 	default:
 		return compactArgs(args)
 	}
 }
 
+// plainToolEnd summarises a tool result for the unstyled log.
+//
+// zot's tools return strings, so that is handled first; the map form is kept for
+// a caller whose own tool returns something structured.
 func plainToolEnd(name string, result interface{}) string {
+	if text, ok := result.(string); ok {
+		trimmed := strings.TrimRight(text, "\n")
+
+		switch name {
+		case "shell":
+			if trimmed == "" {
+				return ""
+			}
+
+			return plainOutput(trimmed)
+
+		case "read", "list":
+			lines := 0
+
+			if trimmed != "" {
+				lines = strings.Count(trimmed, "\n") + 1
+			}
+
+			return fmt.Sprintf("    %d lines", lines)
+
+		case "write":
+			return ""
+
+		default:
+			if trimmed == "" {
+				return ""
+			}
+
+			return plainOutput(trimmed)
+		}
+	}
+
 	m, ok := result.(map[string]interface{})
 	if !ok {
 		return ""
 	}
+
 	if success, present := m["success"].(bool); present && !success {
 		if e := str(m, "error"); e != "" {
 			return "    error: " + truncate(e, 200)
 		}
 	}
-	switch name {
-	case "read":
-		if n, ok := intish(m["totalLines"]); ok {
-			return fmt.Sprintf("    %d lines", n)
-		}
-	case "exec":
-		out := strings.TrimRight(str(m, "stdout"), "\n")
-		if out == "" {
-			return ""
-		}
-		lines := strings.Split(out, "\n")
-		if len(lines) > maxOutputLines {
-			lines = lines[:maxOutputLines]
-		}
-		var b strings.Builder
-		for _, l := range lines {
-			b.WriteString("    | " + l + "\n")
-		}
-		return strings.TrimRight(b.String(), "\n")
+
+	text := strings.TrimRight(str(m, "stdout"), "\n")
+
+	if text == "" {
+		text = strings.TrimRight(str(m, "stderr"), "\n")
 	}
-	return ""
+
+	if text == "" {
+		return ""
+	}
+
+	return plainOutput(text)
+}
+
+// plainOutput renders captured output, capped so one noisy command cannot bury
+// the rest of the run in a log or a CI transcript.
+func plainOutput(text string) string {
+	lines := strings.Split(text, "\n")
+
+	clipped := false
+
+	if len(lines) > maxOutputLines {
+		lines = lines[:maxOutputLines]
+		clipped = true
+	}
+
+	var b strings.Builder
+
+	for i, l := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+
+		b.WriteString("    | " + truncate(l, 200))
+	}
+
+	if clipped {
+		b.WriteString("\n    | ...")
+	}
+
+	return b.String()
 }
 
 // plainDiff renders an unstyled unified diff (no colour, no box) for log output.

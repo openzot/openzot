@@ -14,7 +14,7 @@ import (
 //
 //	agent.model           -> ZOT_AGENT_MODEL
 //	agent.max_iterations  -> ZOT_AGENT_MAX_ITERATIONS
-//	chatbotkit.base_url   -> ZOT_CHATBOTKIT_BASE_URL
+//	ui.plain              -> ZOT_UI_PLAIN
 //
 // Env vars take precedence over the config file. The mapping is derived from the
 // struct's yaml tags, so new fields get an env var automatically.

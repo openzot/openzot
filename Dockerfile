@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG GO_VERSION=1.25.12
+ARG GO_VERSION=1.26.5
 ARG BUILDPLATFORM=linux/amd64
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
@@ -18,7 +18,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
     go build -trimpath \
-    -ldflags "-s -w -X github.com/chatbotkit/zot/internal/version.Version=${VERSION}" \
+    -ldflags "-s -w -X github.com/openzot/openzot/internal/version.Version=${VERSION}" \
     -o /out/zot ./cmd/zot
 
 FROM alpine:3.22

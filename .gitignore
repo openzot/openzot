@@ -1,8 +1,11 @@
 /zot
+/zot-dev
 
 configs/zot.yaml
 .env
 
-# Local development only: redirects the pinned go-sdk to the monorepo checkout.
+# Go workspace files, if anyone creates one locally. zot has no local module
+# dependencies, so a go.work here is only ever a personal experiment - and one
+# that will cap the toolchain below what go.mod requires if its go line drifts.
 go.work
 go.work.sum

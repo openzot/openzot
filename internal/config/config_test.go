@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -20,8 +22,8 @@ func writeConfig(t *testing.T, body string) string {
 func validConfig(tweak func(*Config)) Config {
 	c := Config{
 		Agent:          Agent{Model: "m", MaxIterations: 1},
-		DefaultBackend: "cbk",
-		Backends:       map[string]Backend{"cbk": {APISecret: "x"}},
+		DefaultBackend: "openai",
+		Backends:       map[string]Backend{"openai": {APIKey: "x"}},
 	}
 	if tweak != nil {
 		tweak(&c)
@@ -37,51 +39,91 @@ func TestDefaults(t *testing.T) {
 	if c.Agent.MaxIterations <= 0 {
 		t.Error("expected a positive default max_iterations")
 	}
-	if c.DefaultBackend != "relay" {
-		t.Errorf("default backend = %q, want relay", c.DefaultBackend)
+	if c.DefaultBackend != "zai" {
+		t.Errorf("default backend = %q, want zai", c.DefaultBackend)
 	}
 }
 
-// The three built-in backends are seeded with their endpoints. The relay has no
-// environment default for its provider credential (that comes from config), and
-// the Bearer backends resolve their secrets from their own variables.
+// The built-in backends are seeded for every provider zot knows, each reading
+// its provider's conventional credential variable.
 func TestLoadSeedsBackends(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
-	t.Setenv("CBK_API_SECRET", "cbk-secret")
-	t.Setenv("CHATBOTKIT_API_SECRET", "chatbotkit-secret")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+	t.Setenv("GROQ_API_KEY", "sk-groq")
 
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.DefaultBackend != "relay" {
-		t.Errorf("default backend = %q, want relay", cfg.DefaultBackend)
+
+	if cfg.DefaultBackend != "zai" {
+		t.Errorf("default backend = %q, want zai", cfg.DefaultBackend)
 	}
 
-	relay := cfg.Backends["relay"]
-	if relay.BaseURL != "https://relay.cbk.ai" {
-		t.Errorf("relay base_url = %q, want https://relay.cbk.ai", relay.BaseURL)
-	}
-	if relay.Authorization != "" {
-		t.Errorf("relay authorization = %q, want empty (no environment default)", relay.Authorization)
-	}
-	// The relay uses no Bearer secret; its credential rides in the model string.
-	if relay.APISecret != "" {
-		t.Errorf("relay APISecret = %q, want empty", relay.APISecret)
-	}
+	for name, want := range map[string]string{
+		"openai":    "sk-openai",
+		"anthropic": "sk-anthropic",
+		"groq":      "sk-groq",
+	} {
+		backend, ok := cfg.Backends[name]
 
-	cases := map[string]struct{ url, secret string }{
-		"cbk":        {"https://api.cbk.ai", "cbk-secret"},
-		"chatbotkit": {"https://api.chatbotkit.com", "chatbotkit-secret"},
-	}
-	for name, want := range cases {
-		b := cfg.Backends[name]
-		if b.BaseURL != want.url {
-			t.Errorf("%s base_url = %q, want %q", name, b.BaseURL, want.url)
+		if !ok {
+			t.Fatalf("backend %q was not seeded", name)
 		}
-		if b.APISecret != want.secret {
-			t.Errorf("%s secret = %q, want %q", name, b.APISecret, want.secret)
+
+		if got := BackendCredential(backend); got != want {
+			t.Errorf("%s credential = %q, want %q", name, got, want)
+		}
+
+		if got := BackendProvider(name, backend); got != name {
+			t.Errorf("%s provider = %q, want %q", name, got, name)
+		}
+	}
+
+	// a local provider needs no credential
+	if got := BackendCredential(cfg.Backends["ollama"]); got != "" {
+		t.Errorf("ollama credential = %q, want none", got)
+	}
+}
+
+// The built-in backends are exactly the providers zot speaks to. Pinning the
+// whole set rather than spot-checking it catches an accidental addition and an
+// accidental removal with the same assertion - and does not need updating when
+// something is dropped, which is what a list of names-that-must-not-appear
+// would have required.
+func TestBuiltinBackendsAreExactlyTheProviders(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	seeded := make([]string, 0, len(cfg.Backends))
+
+	for name := range cfg.Backends {
+		seeded = append(seeded, name)
+	}
+
+	sort.Strings(seeded)
+
+	want := []string{
+		"anthropic", "cerebras", "deepseek", "groq", "mistral", "moonshot",
+		"ollama", "openai", "openrouter", "qwen", "together", "xai", "zai",
+	}
+
+	if !reflect.DeepEqual(seeded, want) {
+		t.Errorf("built-in backends:\n got %v\nwant %v", seeded, want)
+	}
+
+	// every one of them must be reachable: a name with no endpoint is a backend
+	// that fails at the first request rather than at configuration time
+	for _, name := range seeded {
+		if BackendProvider(name, cfg.Backends[name]) == "" {
+			t.Errorf("backend %q names no provider", name)
 		}
 	}
 }
@@ -91,15 +133,15 @@ func TestLoadSeedsBackends(t *testing.T) {
 func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
-	t.Setenv("CBK_API_SECRET", "sk-test")
+	t.Setenv("GROQ_API_KEY", "sk-test")
 	path := writeConfig(t, `
 agent:
   model: from-file
-default_backend: relay
+default_backend: openai
 `)
 	t.Setenv("ZOT_AGENT_MODEL", "gpt-4o")
 	t.Setenv("ZOT_AGENT_MAX_ITERATIONS", "12")
-	t.Setenv("ZOT_DEFAULT_BACKEND", "cbk")
+	t.Setenv("ZOT_DEFAULT_BACKEND", "groq")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -111,11 +153,11 @@ default_backend: relay
 	if cfg.Agent.MaxIterations != 12 {
 		t.Errorf("max_iterations = %d, want 12", cfg.Agent.MaxIterations)
 	}
-	if cfg.DefaultBackend != "cbk" {
-		t.Errorf("default backend = %q, want cbk (env overrides file)", cfg.DefaultBackend)
+	if cfg.DefaultBackend != "groq" {
+		t.Errorf("default backend = %q, want groq (env overrides file)", cfg.DefaultBackend)
 	}
-	if cfg.Backends["cbk"].APISecret != "sk-test" {
-		t.Errorf("cbk secret = %q, want it from CBK_API_SECRET", cfg.Backends["cbk"].APISecret)
+	if got := BackendCredential(cfg.Backends["groq"]); got != "sk-test" {
+		t.Errorf("groq credential = %q, want it from GROQ_API_KEY", got)
 	}
 }
 
@@ -125,49 +167,50 @@ func TestLoadExplicitMissingIsError(t *testing.T) {
 	}
 }
 
-// api_secret in the file may name an env var with $VAR.
+// A credential in the file may name an env var with $VAR, so no secret has to be
+// written to disk.
 func TestSecretEnvReference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("MY_CBK_KEY", "sk-from-env")
+	t.Setenv("MY_PROVIDER_KEY", "sk-from-env")
 	path := writeConfig(t, `
-default_backend: cbk
+default_backend: openai
 backends:
-  cbk:
-    api_secret: '$MY_CBK_KEY'
+  openai:
+    api_key: '$MY_PROVIDER_KEY'
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Backends["cbk"].APISecret; got != "sk-from-env" {
+	if got := cfg.Backends["openai"].APIKey; got != "sk-from-env" {
 		t.Errorf("resolved secret = %q, want sk-from-env", got)
 	}
 }
 
-// Backend-level and per-model authorization in the file may name env vars with
-// $VAR, and each is resolved.
+// A backend key and a per-model key may each be written as a $VAR, and both are
+// resolved.
 func TestAuthorizationEnvReference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("RELAY_DEFAULT_KEY", "sk-relay-default")
+	t.Setenv("GATEWAY_DEFAULT_KEY", "sk-gateway-default")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	path := writeConfig(t, `
-default_backend: relay
+default_backend: mygateway
 backends:
-  relay:
-    authorization: '$RELAY_DEFAULT_KEY'
+  mygateway:
+    api_key: '$GATEWAY_DEFAULT_KEY'
     models:
       gpt-4:
-        authorization: $OPENAI_API_KEY
+        api_key: $OPENAI_API_KEY
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Backends["relay"].Authorization; got != "sk-relay-default" {
-		t.Errorf("backend authorization = %q, want sk-relay-default", got)
+	if got := cfg.Backends["mygateway"].APIKey; got != "sk-gateway-default" {
+		t.Errorf("backend key = %q, want sk-gateway-default", got)
 	}
-	if got := cfg.Backends["relay"].Models["gpt-4"].Authorization; got != "sk-openai" {
-		t.Errorf("model authorization = %q, want sk-openai", got)
+	if got := cfg.Backends["mygateway"].Models["gpt-4"].APIKey; got != "sk-openai" {
+		t.Errorf("model key = %q, want sk-openai", got)
 	}
 }
 
@@ -186,28 +229,8 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestValidateFeatures(t *testing.T) {
-	if err := validConfig(func(c *Config) {
-		c.Features = []Feature{{Name: "web"}, {Name: "chunking"}}
-	}).Validate(); err != nil {
-		t.Errorf("unexpected error for allowed features: %v", err)
-	}
-	if err := validConfig(func(c *Config) {
-		c.Features = []Feature{{Name: "bash"}}
-	}).Validate(); err == nil {
-		t.Error("expected an error for a feature outside the allow-list")
-	}
-	if err := validConfig(func(c *Config) {
-		c.Backends["cbk"] = Backend{APISecret: "x", Models: map[string]ModelConfig{
-			"custom": {Features: []Feature{{Name: "bash"}}},
-		}}
-	}).Validate(); err == nil {
-		t.Error("expected an error for a disallowed per-model feature")
-	}
-}
-
 // Scrubbing removes every resolved credential - Bearer secrets and provider
-// authorizations, backend-level and per-model - from the environment, while
+// keys, backend-level and per-model - from the environment, while
 // leaving unrelated variables intact.
 func TestScrubBackendSecrets(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -215,13 +238,13 @@ func TestScrubBackendSecrets(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("ZOT_TEST_UNRELATED", "keep-me")
 	path := writeConfig(t, `
-default_backend: relay
+default_backend: mygateway
 backends:
-  relay:
-    authorization: $ZAI_API_KEY
+  mygateway:
+    api_key: $ZAI_API_KEY
     models:
       gpt-4:
-        authorization: $OPENAI_API_KEY
+        api_key: $OPENAI_API_KEY
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -237,5 +260,241 @@ backends:
 	}
 	if got := os.Getenv("ZOT_TEST_UNRELATED"); got != "keep-me" {
 		t.Errorf("ZOT_TEST_UNRELATED = %q, want keep-me", got)
+	}
+}
+
+// The config path resolves through an explicit override, then XDG, then the
+// home fallback - so a container that sets neither still lands somewhere real.
+func TestConfigPathResolution(t *testing.T) {
+	t.Run("an explicit ZOT_CONFIG wins", func(t *testing.T) {
+		t.Setenv("ZOT_CONFIG", "/custom/zot.yaml")
+		t.Setenv("XDG_CONFIG_HOME", "/xdg")
+
+		if got := DefaultConfigPath(); got != "/custom/zot.yaml" {
+			t.Errorf("DefaultConfigPath = %q", got)
+		}
+	})
+
+	t.Run("then XDG_CONFIG_HOME", func(t *testing.T) {
+		t.Setenv("ZOT_CONFIG", "")
+		t.Setenv("XDG_CONFIG_HOME", "/xdg")
+
+		if got := DefaultConfigPath(); got != "/xdg/zot/config.yaml" {
+			t.Errorf("DefaultConfigPath = %q", got)
+		}
+	})
+
+	t.Run("then the home directory", func(t *testing.T) {
+		t.Setenv("ZOT_CONFIG", "")
+		t.Setenv("XDG_CONFIG_HOME", "")
+		t.Setenv("HOME", "/home/someone")
+
+		if got := DefaultConfigPath(); got != "/home/someone/.config/zot/config.yaml" {
+			t.Errorf("DefaultConfigPath = %q", got)
+		}
+	})
+
+	t.Run("whitespace counts as unset", func(t *testing.T) {
+		t.Setenv("ZOT_CONFIG", "   ")
+		t.Setenv("XDG_CONFIG_HOME", "/xdg")
+
+		if got := DefaultConfigPath(); got != "/xdg/zot/config.yaml" {
+			t.Errorf("DefaultConfigPath = %q, want the blank override ignored", got)
+		}
+	})
+}
+
+// A container with no HOME still needs somewhere to look, or the binary cannot
+// start at all.
+func TestHomeDirHasAFallback(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	if got := homeDir(); got == "" {
+		t.Error("homeDir must always return something")
+	}
+
+	t.Setenv("HOME", "/home/real")
+
+	if got := homeDir(); got != "/home/real" {
+		t.Errorf("homeDir = %q", got)
+	}
+}
+
+// ConfigDir is where a global AGENT.md and skills live, so it has to track
+// whichever config path is in play.
+func TestConfigDir(t *testing.T) {
+	if got := ConfigDir("/somewhere/zot.yaml"); got != "/somewhere" {
+		t.Errorf("ConfigDir = %q", got)
+	}
+
+	t.Setenv("ZOT_CONFIG", "/fallback/zot.yaml")
+
+	if got := ConfigDir("   "); got != "/fallback" {
+		t.Errorf("ConfigDir with a blank path = %q, want the default's directory", got)
+	}
+}
+
+// Env overrides are typed, and a bad value has to be reported rather than
+// silently zeroed - a max_iterations of 0 would end every run immediately.
+func TestEnvOverrideTypeErrors(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "k")
+
+	t.Setenv("ZOT_AGENT_MAX_ITERATIONS", "not-a-number")
+
+	if _, err := Load(""); err == nil {
+		t.Error("a non-numeric max_iterations must be reported")
+	}
+
+	t.Setenv("ZOT_AGENT_MAX_ITERATIONS", "42")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Agent.MaxIterations != 42 {
+		t.Errorf("max_iterations = %d, want 42", cfg.Agent.MaxIterations)
+	}
+}
+
+func TestEnvOverrideBooleans(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("ZOT_UI_PLAIN", "true")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.UI.Plain {
+		t.Error("ui.plain should be set from ZOT_UI_PLAIN")
+	}
+
+	t.Setenv("ZOT_UI_PLAIN", "maybe")
+
+	if _, err := Load(""); err == nil {
+		t.Error("a non-boolean ui.plain must be reported")
+	}
+}
+
+// A backend either names a provider zot can reach or brings its own endpoint.
+// Neither means there is nowhere to send the request, and that is worth catching
+// at load rather than mid-run.
+func TestValidateRejectsAnUnreachableBackend(t *testing.T) {
+	cfg := Defaults()
+	cfg.DefaultBackend = "mygateway"
+
+	// a name nobody knows, and no endpoint
+	cfg.Backends = map[string]Backend{"mygateway": {}}
+
+	if err := cfg.Validate(); err == nil {
+		t.Error("a backend with no known provider and no base_url must be rejected")
+	}
+
+	// an endpoint of its own is enough
+	cfg.Backends["mygateway"] = Backend{BaseURL: "https://gw.example.com/v1"}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a backend with its own endpoint is valid: %v", err)
+	}
+
+	// or a provider zot knows
+	cfg.Backends["mygateway"] = Backend{Provider: "openai"}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a backend naming a known provider is valid: %v", err)
+	}
+
+	// a backend named after a provider needs nothing at all
+	cfg.DefaultBackend = "groq"
+	cfg.Backends = map[string]Backend{"groq": {}}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("a backend named after a provider is valid: %v", err)
+	}
+}
+
+// A `$VAR` reference is the documented way to keep a key out of the config
+// file. It silently did not expand, which sent the literal text "$MY_KEY" to
+// the provider and came back as a 401 that reads like a bad key rather than a
+// config that never resolved.
+func TestAnEnvReferenceIsExpanded(t *testing.T) {
+	t.Setenv("ZOT_TEST_PROVIDER_KEY", "sk-resolved")
+
+	tests := []struct {
+		name    string
+		backend Backend
+	}{
+		{name: "api_key", backend: Backend{APIKey: "$ZOT_TEST_PROVIDER_KEY"}},
+		{name: "braced", backend: Backend{APIKey: "${ZOT_TEST_PROVIDER_KEY}"}},
+		{name: "padded", backend: Backend{APIKey: "  $ZOT_TEST_PROVIDER_KEY  "}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Config{Backends: map[string]Backend{"mine": test.backend}}
+
+			resolveBackends(&cfg)
+
+			if got := BackendCredential(cfg.Backends["mine"]); got != "sk-resolved" {
+				t.Errorf("credential = %q, want the expanded value", got)
+			}
+		})
+	}
+}
+
+// An unset variable must resolve to nothing, so the run fails with "no API key
+// configured" rather than sending the literal reference to the provider.
+func TestAnUnsetEnvReferenceResolvesToNothing(t *testing.T) {
+	t.Setenv("ZOT_TEST_UNSET_KEY", "")
+
+	cfg := Config{Backends: map[string]Backend{
+		"mine": {Provider: "custom", APIKey: "$ZOT_TEST_UNSET_KEY"},
+	}}
+
+	resolveBackends(&cfg)
+
+	if got := BackendCredential(cfg.Backends["mine"]); got != "" {
+		t.Errorf("credential = %q, want nothing", got)
+	}
+}
+
+// A literal key is left exactly as written - a provider key that happens to
+// contain a dollar sign is not a reference.
+func TestALiteralCredentialIsUntouched(t *testing.T) {
+	cfg := Config{Backends: map[string]Backend{
+		"mine": {APIKey: "sk-literal-with-$-inside"},
+	}}
+
+	resolveBackends(&cfg)
+
+	if got := BackendCredential(cfg.Backends["mine"]); got != "sk-literal-with-$-inside" {
+		t.Errorf("credential = %q, want it untouched", got)
+	}
+}
+
+// Exporting the provider's conventional variable is enough on its own, and must
+// not override a key the config states explicitly.
+func TestTheConventionalVariableIsOnlyAFallback(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-from-env")
+
+	cfg := Config{Backends: map[string]Backend{"openai": {}}}
+
+	resolveBackends(&cfg)
+
+	if got := BackendCredential(cfg.Backends["openai"]); got != "sk-from-env" {
+		t.Errorf("credential = %q, want the conventional variable", got)
+	}
+
+	cfg = Config{Backends: map[string]Backend{"openai": {APIKey: "sk-from-config"}}}
+
+	resolveBackends(&cfg)
+
+	if got := BackendCredential(cfg.Backends["openai"]); got != "sk-from-config" {
+		t.Errorf("credential = %q, want the config to win", got)
 	}
 }

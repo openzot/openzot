@@ -7,16 +7,15 @@
 //
 // Usage:
 //
-//	export CHATBOTKIT_API_SECRET="your-api-key"
+//	export OPENAI_API_KEY="your-api-key"
 //	zot "add a /health endpoint to the Go server and a test for it"
 //
 //	# operate inside a specific directory and cap the work
 //	zot --dir ./scratch --max-iterations 40 "scaffold a snake game in python"
 //
-// The "acp" subcommand serves the same agent over the Agent Client Protocol
-// instead, so an editor or agent harness can drive it:
-//
-//	zot acp
+//	# every run is logged; pick one up where it stopped
+//	zot sessions
+//	zot --resume last "finish the part you ran out of budget for"
 package main
 
 import (
@@ -30,9 +29,11 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/chatbotkit/zot"
-	"github.com/chatbotkit/zot/internal/config"
-	"github.com/chatbotkit/zot/internal/version"
+	"github.com/openzot/openzot"
+	"github.com/openzot/openzot/internal/buildinfo"
+	"github.com/openzot/openzot/internal/config"
+	"github.com/openzot/openzot/internal/session"
+	"github.com/openzot/openzot/internal/version"
 )
 
 func main() {
@@ -42,17 +43,7 @@ func main() {
 	}
 }
 
-// acpCommand is the argv[0]-after-the-binary word that switches zot from
-// "run one task" to "serve the Agent Client Protocol". It is matched before
-// flags are parsed, so a literal task of "acp" needs --task-file.
-const acpCommand = "acp"
-
 func run() error {
-	if len(os.Args) > 1 && os.Args[1] == acpCommand {
-		loadEnv(".")
-		return runACP(os.Args[2:])
-	}
-
 	// `zot config` opens the config file in $EDITOR, seeding it from the embedded
 	// template on first run. `zot config path` prints its location.
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -63,31 +54,76 @@ func run() error {
 		return editConfig()
 	}
 
+	// `zot sessions` lists what previous runs left behind. Its own subcommand
+	// rather than a flag because it takes no task and produces no run.
+	if len(os.Args) > 1 && os.Args[1] == "sessions" {
+		return listSessions(os.Args[2:])
+	}
+
 	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := flag.String("backend", "", "backend to run against: relay (default), cbk, or chatbotkit")
+	backend := flag.String("backend", "", "backend to run against: a provider such as openai (default), anthropic, groq, ollama, or a backend named in the config")
 	model := flag.String("model", "", "override the model name")
 	dir := flag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := flag.Int("max-iterations", 0, "override the safety cap on agent iterations")
 	taskFile := flag.String("task-file", "", "read the task from this file instead of the command line")
 	diffFlag := flag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
 	plainFlag := flag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
-	var featureFlags stringSlice
-	flag.Var(&featureFlags, "feature", "enable a ChatBotKit feature by name (repeatable): "+strings.Join(config.AllowedFeatures, ", "))
+	resume := flag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
+	sessionDir := flag.String("session-dir", "", "where session logs are written (default: "+config.DefaultSessionDir()+")")
+	noSession := flag.Bool("no-session", false, "do not record a session log for this run")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Usage = usage
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("zot %s\n", version.Version)
+		// the build kind is on the version line because it changes what the
+		// binary will read from disk, and "why is it not picking up my .env"
+		// should be answerable without reading the source
+		fmt.Printf("zot %s (%s)\n", version.Version, buildinfo.Kind)
 		return nil
 	}
 
 	// Load credentials from the directory the agent will work in. This must
 	// happen after --dir is parsed but before configuration resolves env-backed
-	// backend secrets.
+	// backend secrets - and only on a developer build.
 	loadEnv(*dir)
 
+	sessions := *sessionDir
+	if sessions == "" {
+		sessions = config.DefaultSessionDir()
+	}
+
+	// Resolved to an absolute path while the original working directory is still
+	// current, so a relative --session-dir means what the user typed rather than
+	// what it happens to mean after the chdir below.
+	if abs, err := filepath.Abs(sessions); err == nil {
+		sessions = abs
+	}
+
+	var resumed *session.Session
+
+	if *resume != "" {
+		path, err := session.Resolve(sessions, *resume)
+		if err != nil {
+			return err
+		}
+
+		resumed, err = session.Load(path)
+		if err != nil {
+			return fmt.Errorf("read session: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
+	}
+
 	task, err := resolveTask(*taskFile, flag.Args())
+
+	// A resume without a new instruction continues the original brief, which is
+	// what someone restarting an interrupted overnight run means.
+	if err != nil && resumed != nil && resumed.Meta.Task != "" {
+		task, err = resumed.Meta.Task, nil
+	}
+
 	if err != nil {
 		return err
 	}
@@ -97,32 +133,17 @@ func run() error {
 		return err
 	}
 
-	// CLI overrides win over file and env. The bool --diff only overrides when it
-	// was actually passed, so a config-enabled diff stays on without it.
-	if *backend != "" {
-		cfg.DefaultBackend = *backend
-	}
-	if *model != "" {
-		cfg.Agent.Model = *model
-	}
-	if *maxIter > 0 {
-		cfg.Agent.MaxIterations = *maxIter
-	}
-	// --feature (repeatable) replaces the configured features when given.
-	if len(featureFlags) > 0 {
-		features := make([]config.Feature, 0, len(featureFlags))
-		for _, name := range featureFlags {
-			features = append(features, config.Feature{Name: name})
-		}
-		cfg.Features = features
-	}
-	flag.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "diff":
-			cfg.UI.Diff = *diffFlag
-		case "plain":
-			cfg.UI.Plain = *plainFlag
-		}
+	passed := map[string]bool{}
+
+	flag.Visit(func(f *flag.Flag) { passed[f.Name] = true })
+
+	applyOverrides(&cfg, overrides{
+		Backend:       *backend,
+		Model:         *model,
+		MaxIterations: *maxIter,
+		Diff:          *diffFlag,
+		Plain:         *plainFlag,
+		Passed:        passed,
 	})
 
 	if err := cfg.Validate(); err != nil {
@@ -151,10 +172,73 @@ func run() error {
 		return err
 	}
 
-	return zot.Run(context.Background(), cfg, task)
+	options := zot.RunOptions{SessionDir: sessions, Resume: resumed}
+
+	if *noSession {
+		options.SessionDir = ""
+	}
+
+	return zot.RunWith(context.Background(), cfg, task, options)
 }
 
+// listSessions prints previous runs, newest first.
+func listSessions(args []string) error {
+	set := flag.NewFlagSet("sessions", flag.ContinueOnError)
+
+	dir := set.String("session-dir", config.DefaultSessionDir(), "directory to list")
+
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+
+	entries, err := session.List(*dir)
+	if err != nil {
+		return err
+	}
+
+	if len(entries) == 0 {
+		fmt.Printf("no sessions in %s\n", *dir)
+
+		return nil
+	}
+
+	for _, entry := range entries {
+		status := "running/interrupted"
+		if entry.Complete {
+			status = entry.Reason
+		}
+
+		fmt.Printf("%-17s  %-20s  %s\n", entry.ID, status, oneLine(entry.Task, 60))
+	}
+
+	return nil
+}
+
+// oneLine flattens a task to a single truncated line, so a multi-line brief does
+// not turn the listing into a wall of text.
+func oneLine(text string, width int) string {
+	text = strings.Join(strings.Fields(text), " ")
+
+	if len(text) > width {
+		return text[:width-1] + "\u2026"
+	}
+
+	return text
+}
+
+// loadEnv reads a `.env` from the working directory, on developer builds only.
+//
+// Reading credentials out of whatever directory zot was pointed at is a
+// developer convenience and a released binary's liability: it means running zot
+// against a repository you cloned to review is enough to load a stray committed
+// `.env` into the process that is about to run shell commands. Released builds
+// take their credentials from the config file and the real environment, both of
+// which the operator chose deliberately.
 func loadEnv(dir string) {
+	if !buildinfo.Dev {
+		return
+	}
+
 	_ = godotenv.Load(filepath.Join(dir, ".env"))
 }
 
@@ -197,6 +281,44 @@ func editConfig() error {
 	return cmd.Run()
 }
 
+// overrides are the command-line values that take precedence over the config
+// file and the environment.
+type overrides struct {
+	Backend       string
+	Model         string
+	MaxIterations int
+	Diff          bool
+	Plain         bool
+
+	// Passed names the flags actually given, so a boolean can tell "false
+	// because it was passed" from "false because it was never set". Without it
+	// an unset --diff would silently turn off a diff the config had enabled.
+	Passed map[string]bool
+}
+
+// applyOverrides layers command-line values over a loaded configuration.
+func applyOverrides(cfg *zot.Config, o overrides) {
+	if o.Backend != "" {
+		cfg.DefaultBackend = o.Backend
+	}
+
+	if o.Model != "" {
+		cfg.Agent.Model = o.Model
+	}
+
+	if o.MaxIterations > 0 {
+		cfg.Agent.MaxIterations = o.MaxIterations
+	}
+
+	if o.Passed["diff"] {
+		cfg.UI.Diff = o.Diff
+	}
+
+	if o.Passed["plain"] {
+		cfg.UI.Plain = o.Plain
+	}
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -233,15 +355,16 @@ func usage() {
 Usage:
   zot [flags] "your task in plain english"
   zot config
-  zot acp [flags]
+  zot sessions
 
 Examples:
   zot "add input validation to the signup handler and a test"
   zot --dir ./scratch "scaffold a tiny http server in go"
+  zot --resume last "now add the tests you skipped"
 
 Commands:
-  config   edit the config file in $EDITOR (creates it on first run)
-  acp      serve the agent over the Agent Client Protocol (see zot acp -h)
+  config     edit the config file in $EDITOR (creates it on first run)
+  sessions   list previous runs, newest first
 
 Flags:`)
 	flag.PrintDefaults()

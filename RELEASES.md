@@ -54,7 +54,7 @@ how the image is meant to be run.
 The version is baked into the binary at build time via `-ldflags`:
 
 ```
--X github.com/chatbotkit/zot/internal/version.Version=<version>
+-X github.com/openzot/openzot/internal/version.Version=<version>
 ```
 
 The [`Makefile`](Makefile) derives the version from `git describe` for local
