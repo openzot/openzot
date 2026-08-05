@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chatbotkit/go-sdk/agent"
+	"github.com/chatbotkit/zot/agent"
 )
 
 // editEvent is a sample edit tool call.

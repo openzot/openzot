@@ -5,43 +5,52 @@ package config
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/chatbotkit/zot/agent"
 )
 
 // Config is the fully-resolved zot configuration.
 type Config struct {
 	Agent Agent `yaml:"agent"`
 	UI    UI    `yaml:"ui"`
-	// Features are ChatBotKit conversation features to enable for the run, each a
-	// name/options pair passed through to the agent.
-	Features []Feature `yaml:"features"`
+	// Skills discovered from the context directories. Not configured directly:
+	// LoadProjectContext fills this from the SKILL.md files it finds, and the
+	// engine describes them in the system prompt.
+	Skills []agent.SkillDefinition `yaml:"-"`
 	// DefaultBackend is the backend used when --backend is not given.
 	DefaultBackend string `yaml:"default_backend"`
 	// Backends are the named providers a run can target. zot ships with three -
-	// "relay" (CBK Relay, the default), "cbk" (ChatBotKit at api.cbk.ai) and
-	// "chatbotkit" (ChatBotKit at api.chatbotkit.com) - and a config file can
-	// override their credentials/endpoint or add custom model entries.
+	// a backend for each provider it knows - and a config file can override
+	// their credentials or endpoint, or add custom model entries.
 	Backends map[string]Backend `yaml:"backends"`
 }
 
-// Backend is a provider zot can run against. How a run authenticates depends on
-// the backend's style: the ChatBotKit backends send a Bearer credential
-// (APISecret); the relay carries the provider credential per model, inside the
-// model string (Authorization), because on the relay each model is a different
-// provider with its own key.
+// Backend is a provider zot can run against. Every provider authenticates with a
+// Bearer credential.
 type Backend struct {
+	// Provider names the model provider this backend talks to: "openai",
+	// "anthropic", "groq", "ollama" and so on. Empty infers it from the
+	// backend's own name, so a backend called "groq" needs no further
+	// configuration.
+	//
+	// zot speaks the OpenAI-compatible chat-completions API to every provider, so
+	// a backend is a URL and a credential rather than a protocol of its own.
+	Provider string `yaml:"provider"`
 	// BaseURL overrides the API endpoint. Empty uses the built-in default.
 	BaseURL string `yaml:"base_url"`
-	// APISecret is the Bearer credential for the ChatBotKit backends. Supports
-	// "$ENV_VAR" references; for the built-ins it defaults from the environment.
+	// APISecret is an older spelling of APIKey, kept so an existing config still
+	// loads. Supports "$ENV_VAR" references.
 	APISecret string `yaml:"api_secret"`
-	// Authorization is the relay's default model credential, applied to every
-	// model on this backend that does not set its own. Supports "$ENV_VAR" (point
-	// it at your own provider key). It has no built-in environment default.
-	// Ignored by the Bearer backends.
+	// Authorization is another older spelling of APIKey, kept for the same
+	// reason. Supports "$ENV_VAR".
 	Authorization string `yaml:"authorization"`
+	// APIKey is the provider credential. Preferred spelling; APISecret and
+	// Authorization are accepted as equivalents.
+	APIKey string `yaml:"api_key"`
 	// Models holds custom, named model configurations for this backend. When a
 	// run's model name matches a key here, that entry's settings take priority.
 	Models map[string]ModelConfig `yaml:"models"`
@@ -50,83 +59,70 @@ type Backend struct {
 // ModelConfig is a custom model definition under a backend. Any field set here
 // overrides the run's defaults when the model is selected.
 type ModelConfig struct {
+	// Provider overrides the backend's provider for this model, so one backend
+	// entry can front several providers.
+	Provider string `yaml:"provider"`
 	// Model is the underlying model id to send. Lets a custom name alias a real
 	// model; leave empty to use the selected name as-is.
 	Model string `yaml:"model"`
 	// MaxIterations overrides the global iteration cap for this model.
 	MaxIterations int `yaml:"max_iterations"`
-	// Authorization is this model's provider credential on the relay, composed
-	// into the model string as "<model>/authorization=<value>". Supports
-	// "$ENV_VAR". Overrides the backend-level Authorization. Ignored by the
-	// Bearer backends.
+	// Authorization is this model's own credential, overriding the backend's.
+	// Supports "$ENV_VAR".
 	Authorization string `yaml:"authorization"`
-	// Features are extra conversation features enabled for this model.
-	Features []Feature `yaml:"features"`
 }
 
-// AuthStyle is how a backend authenticates a run.
-type AuthStyle int
-
-const (
-	// AuthBearer sends the credential as an Authorization: Bearer header.
-	AuthBearer AuthStyle = iota
-	// AuthModelParam carries the credential inside the model string, as
-	// "<model>/authorization=<value>" - the CBK Relay's convention, where each
-	// model is a distinct provider authenticated with its own key.
-	AuthModelParam
-)
-
-// builtinBackends are the providers zot ships with: their default endpoint and
-// how they authenticate. The Bearer backends fall back to a brand-named
-// environment variable for their credential; the relay has no such default -
-// its per-model provider credential comes from config (or is inlined into the
-// model). "cbk" and "chatbotkit" are the same platform on its two hosts and
-// take the same credential value under their own variable.
+// builtinBackends are the providers zot ships with. Each falls back to its
+// provider's conventional environment variable, so exporting that is the whole
+// setup. The endpoint is left empty where the provider package already knows it.
 var builtinBackends = map[string]struct {
 	baseURL   string
-	style     AuthStyle
-	secretEnv string // Bearer credential fallback (AuthBearer)
+	secretEnv string // the provider's conventional credential variable
 }{
-	"relay":      {baseURL: "https://relay.cbk.ai", style: AuthModelParam},
-	"cbk":        {baseURL: "https://api.cbk.ai", style: AuthBearer, secretEnv: "CBK_API_SECRET"},
-	"chatbotkit": {baseURL: "https://api.chatbotkit.com", style: AuthBearer, secretEnv: "CHATBOTKIT_API_SECRET"},
+	// providers zot talks to directly, each reading its conventional key
+	"openai":     {secretEnv: "OPENAI_API_KEY"},
+	"anthropic":  {secretEnv: "ANTHROPIC_API_KEY"},
+	"groq":       {secretEnv: "GROQ_API_KEY"},
+	"mistral":    {secretEnv: "MISTRAL_API_KEY"},
+	"deepseek":   {secretEnv: "DEEPSEEK_API_KEY"},
+	"openrouter": {secretEnv: "OPENROUTER_API_KEY"},
+	"together":   {secretEnv: "TOGETHER_API_KEY"},
+	"cerebras":   {secretEnv: "CEREBRAS_API_KEY"},
+	"xai":        {secretEnv: "XAI_API_KEY"},
+	"moonshot":   {secretEnv: "MOONSHOT_API_KEY"},
+	"zai":        {secretEnv: "ZAI_API_KEY"},
+	"qwen":       {secretEnv: "DASHSCOPE_API_KEY"},
+	"ollama":     {},
 }
 
-// BackendStyle reports how the named backend authenticates. Unknown/custom
-// backends default to Bearer.
-func BackendStyle(name string) AuthStyle {
-	if b, ok := builtinBackends[name]; ok {
-		return b.style
+// BackendProvider resolves which model provider a backend addresses.
+//
+// A backend named after a provider is that provider, so the common case needs no
+// configuration at all. Anything else has to say what it is: zot speaks to model
+// providers directly, and a backend that names no provider has no endpoint to
+// call.
+func BackendProvider(name string, backend Backend) string {
+	if backend.Provider != "" {
+		return backend.Provider
 	}
-	return AuthBearer
+
+	return name
 }
 
-// SecretEnvName returns the environment variable a built-in Bearer backend's
-// credential falls back to, for use in actionable error messages.
-func SecretEnvName(backend string) string {
-	if b, ok := builtinBackends[backend]; ok && b.secretEnv != "" {
-		return b.secretEnv
-	}
-	return "its credential"
-}
-
-// Feature is a ChatBotKit conversation feature enabled for the run: a name plus
-// optional, feature-specific options.
-type Feature struct {
-	Name    string                 `yaml:"name"`
-	Options map[string]interface{} `yaml:"options"`
-}
-
-// AllowedFeatures is the set of feature names zot currently exposes.
-var AllowedFeatures = []string{"web", "chunking"}
-
-func featureAllowed(name string) bool {
-	for _, a := range AllowedFeatures {
-		if a == name {
-			return true
+// BackendCredential returns the credential configured for a backend, whichever
+// field it was written in.
+//
+// `api_key` is the spelling to use. `api_secret` and `authorization` are
+// accepted so a config written for an earlier version still loads - they meant
+// the same thing to the hosted backends that have since been removed.
+func BackendCredential(backend Backend) string {
+	for _, candidate := range []string{backend.APIKey, backend.APISecret, backend.Authorization} {
+		if candidate != "" {
+			return candidate
 		}
 	}
-	return false
+
+	return ""
 }
 
 // UI holds presentation options for the read-only viewer.
@@ -152,15 +148,22 @@ type Agent struct {
 }
 
 // Defaults returns the built-in configuration used when nothing else is set.
-// zot defaults to the CBK Relay: a run brings its own provider key and reaches
-// models through relay.cbk.ai.
+//
+// zot talks to model providers directly, so the default backend is a provider
+// rather than a gateway: export the provider's key and it runs, with no account
+// anywhere else.
+//
+// @note the default model and the default backend have to agree - glm-5.2 is
+// served natively by Z.AI, so that is the backend. A default pair that cannot
+// actually talk to each other is worse than no default, because the failure
+// arrives as a provider error rather than as a configuration one.
 func Defaults() Config {
 	return Config{
 		Agent: Agent{
 			Model:         "glm-5.2",
-			MaxIterations: 1000,
+			MaxIterations: 1_000_000,
 		},
-		DefaultBackend: "relay",
+		DefaultBackend: "zai",
 	}
 }
 
@@ -194,7 +197,7 @@ func Load(path string) (Config, error) {
 	resolveBackends(&cfg)
 
 	if cfg.DefaultBackend == "" {
-		cfg.DefaultBackend = "relay"
+		cfg.DefaultBackend = "zai"
 	}
 
 	return cfg, nil
@@ -221,18 +224,19 @@ func resolveBackends(cfg *Config) {
 			b.BaseURL = builtin.baseURL
 		}
 
-		// Bearer credential (AuthBearer backends).
-		if s := strings.TrimSpace(b.APISecret); s != "" {
-			b.APISecret = resolveSecret(s)
-		} else if isBuiltin && builtin.secretEnv != "" {
-			b.APISecret = strings.TrimSpace(os.Getenv(builtin.secretEnv))
-		}
+		// The credential, in whichever spelling it was written. Every one is
+		// resolved: `api_key` is the documented spelling, so a `$VAR` reference
+		// left unexpanded there would send the literal string "$MY_KEY" to the
+		// provider and come back as a 401 that reads like a bad key.
+		b.APIKey = resolveSecret(b.APIKey)
+		b.APISecret = resolveSecret(b.APISecret)
+		b.Authorization = resolveSecret(b.Authorization)
 
-		// Backend-level model authorization (AuthModelParam backends). No
-		// environment default - the relay's provider credential comes from config
-		// (or is inlined into the model).
-		if a := strings.TrimSpace(b.Authorization); a != "" {
-			b.Authorization = resolveSecret(a)
+		// A built-in backend with nothing configured falls back to its
+		// provider's conventional variable, which is what makes `export
+		// OPENAI_API_KEY=…` enough on its own.
+		if BackendCredential(b) == "" && isBuiltin && builtin.secretEnv != "" {
+			b.APIKey = strings.TrimSpace(os.Getenv(builtin.secretEnv))
 		}
 
 		// Per-model authorization.
@@ -249,8 +253,17 @@ func resolveBackends(cfg *Config) {
 
 // resolveSecret expands a "$ENV_VAR" / "${ENV_VAR}" reference; a literal value
 // is returned unchanged.
+//
+// An unset variable resolves to empty rather than to its own name, so a missing
+// credential is reported as a missing credential instead of being sent to the
+// provider as the literal text "$MY_KEY".
 func resolveSecret(v string) string {
 	v = strings.TrimSpace(v)
+
+	if v == "" {
+		return ""
+	}
+
 	if strings.HasPrefix(v, "$") {
 		name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(v, "$"), "{"), "}")
 		return strings.TrimSpace(os.Getenv(strings.TrimSpace(name)))
@@ -300,26 +313,20 @@ func (c Config) Validate() error {
 	if _, ok := c.Backends[c.DefaultBackend]; !ok {
 		return fmt.Errorf("default backend %q is not configured", c.DefaultBackend)
 	}
-	if err := validateFeatures(c.Features); err != nil {
-		return err
-	}
-	for name, b := range c.Backends {
-		for model, mc := range b.Models {
-			if err := validateFeatures(mc.Features); err != nil {
-				return fmt.Errorf("backends.%s.models.%s: %w", name, model, err)
-			}
+	for name, backend := range c.Backends {
+		// A backend either names a provider zot knows how to reach, or supplies
+		// its own endpoint. Neither means there is nowhere to send the request,
+		// and finding that out mid-run is worse than at load.
+		if backend.BaseURL != "" {
+			continue
 		}
-	}
-	return nil
-}
 
-func validateFeatures(features []Feature) error {
-	for _, f := range features {
-		if strings.TrimSpace(f.Name) == "" {
-			return fmt.Errorf("features: each feature needs a name")
-		}
-		if !featureAllowed(f.Name) {
-			return fmt.Errorf("features: unknown feature %q (allowed: %s)", f.Name, strings.Join(AllowedFeatures, ", "))
+		provider := BackendProvider(name, backend)
+
+		if !slices.Contains(agent.Providers(), provider) {
+			return fmt.Errorf(
+				"backends.%s: %q is not a known provider and no base_url is set (known: %s)",
+				name, provider, strings.Join(agent.Providers(), ", "))
 		}
 	}
 	return nil

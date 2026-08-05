@@ -23,7 +23,7 @@ docker pull ghcr.io/openzot/openzot:latest
 | Entrypoint | `zot` - arguments after the image name are zot's own |
 | Base | `alpine:3.22` plus `bash`, `ca-certificates`, `curl`, `git`, `openssh-client`, `tzdata` |
 
-The runtime packages are there because the agent's `exec` tool runs real shell
+The runtime packages are there because the agent's `shell` tool runs real
 commands: a task that clones, builds, or commits needs them. Anything else your
 task needs (a language toolchain, a package manager) has to come from an image
 built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
@@ -43,18 +43,17 @@ built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
 
 ## Running a task
 
-The image defaults to the `relay` backend, so these examples select ChatBotKit
-explicitly with `--backend chatbotkit` (which uses the `CHATBOTKIT_API_SECRET`
-they already pass). Drop the flag to use the relay - see
-[Backends](../README.md#backends) for its per-model provider keys.
+zot talks straight to a model provider, so a run needs nothing but that
+provider's key. These examples use OpenAI; swap the variable and `--backend` for
+any other - see [Backends](../README.md#backends) for the full list.
 
 ```bash
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --backend chatbotkit "add input validation to the signup handler and a test"
+  ghcr.io/openzot/openzot:latest "add input validation to the signup handler and a test"
 ```
 
 Two flags need explaining, and both are about **bind mounts**, not about zot:
@@ -74,9 +73,9 @@ initialises it from the image and the default user owns it:
 
 ```bash
 docker run --rm -it \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume zot-workspace:/workspace \
-  ghcr.io/openzot/openzot:latest --backend chatbotkit "scaffold a tiny snake game in python"
+  ghcr.io/openzot/openzot:latest "scaffold a tiny snake game in python"
 ```
 
 That is the safest shape available: the run cannot see your filesystem at all.
@@ -90,22 +89,27 @@ or a config file you push anywhere:
 
 ```bash
 # pass through a variable already exported in your shell
-docker run --env CHATBOTKIT_API_SECRET …
+docker run --env OPENAI_API_KEY …
 
 # or from a file the daemon reads at run time
 docker run --env-file ./zot.env …
 ```
 
-zot also loads a `.env` from its working directory, including the directory
-selected with `--dir`, so a `.env` sitting in the mounted checkout is picked up
-with no extra flag. That is convenient locally and a mistake in CI - prefer
-`--env` there, where the value comes from the runner's secret store. After zot
-loads its configuration, configured backend credentials are removed from the
-environment inherited by agent shell commands.
+Released binaries - the published image included - deliberately do **not** read
+a `.env` from the working directory. A container run mounts a checkout it did
+not write, and reading credentials out of it would mean a stray committed `.env`
+in the code under review could feed the process that is about to run shell
+commands. Pass credentials with `--env` or `--env-file`, where the value comes
+from your secret store. (A developer build, `make dev`, does read `.env`; see
+[Developer builds](../README.md#developer-builds).)
 
-Use a scoped token from [chatbotkit.com/apps/code](https://chatbotkit.com/apps/code)
-rather than a general-purpose account token. A container run unattended is
-exactly the case the scoping is for.
+After zot loads its configuration, configured backend credentials are removed
+from the environment inherited by agent shell commands, so the task itself
+cannot read the key that is paying for it.
+
+Use a key scoped to the narrowest thing that works - a project-scoped provider
+key rather than an account-wide one. A container run unattended is exactly the
+case the scoping is for.
 
 ### Config, `AGENT.md` and skills
 
@@ -117,10 +121,10 @@ Global context lives in the config directory, so mount it read-only:
 ```bash
 docker run --rm -it \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume "$PWD":/workspace \
   --volume "$HOME/.config/zot":/home/zot/.config/zot:ro \
-  ghcr.io/openzot/openzot:latest --backend chatbotkit "…"
+  ghcr.io/openzot/openzot:latest "…"
 ```
 
 `ZOT_CONFIG` already points at `/home/zot/.config/zot/config.yaml`; a missing
@@ -136,36 +140,16 @@ streams plain unstyled output instead, which is what you want from a pipeline:
 ```bash
 docker run --rm \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --backend chatbotkit --max-iterations 40 --task-file TASK.md | tee run.log
+  ghcr.io/openzot/openzot:latest --max-iterations 40 --task-file TASK.md | tee run.log
 ```
 
-`--max-iterations` is worth setting explicitly for unattended runs; the default
-cap of 1000 is a safety net, not a budget.
+`--max-iterations` is worth setting explicitly for unattended runs. The default
+is deliberately enormous, so it is the tool-call budget and the cycle, empty and
+continuation guards - not the iteration count - that actually end a run that has
+gone wrong. If you want a hard ceiling on how long a run may go, set this.
 
-## ACP mode
-
-`zot acp` speaks JSON-RPC on stdin/stdout, so the container has to be started
-with stdin attached and **without** `-t`:
-
-```bash
-docker run --rm -i \
-  --env CHATBOTKIT_API_SECRET \
-  --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest acp --backend chatbotkit
-```
-
-An ACP client normally spawns the agent itself, so the command it is configured
-with becomes this whole `docker run` line. One thing to get right: in ACP mode
-the working directory comes from the client, per session - it sends a `cwd` that
-must exist **inside the container**. Mount the client's project directories at
-the same paths they have on the host, or the sessions will open somewhere the
-container cannot see.
-
-Everything in the README's [safety note](../README.md#️-safety) about ACP mode
-still applies. The container bounds the filesystem; it does not bound who can
-send prompts through the client.
 
 ## Hardening
 
@@ -179,9 +163,9 @@ docker run --rm \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 512 --memory 2g --cpus 2 \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --backend chatbotkit --task-file TASK.md
+  ghcr.io/openzot/openzot:latest --task-file TASK.md
 ```
 
 `--read-only` works because everything zot writes goes to the workspace volume;
@@ -190,12 +174,12 @@ down. Note that a read-only root also stops the agent from installing packages
 mid-run, which is usually what you want and occasionally the thing that breaks a
 task.
 
-**Egress cannot be closed.** The agentic loop runs on the backend, so the
-container needs outbound HTTPS to whichever backend it targets - `relay.cbk.ai`
-(`relay`, the default), `api.cbk.ai` (`cbk`) or `api.chatbotkit.com`
-(`chatbotkit`) - plus whatever the task itself fetches.
-`--network none` gives you a container that cannot do anything. If you need
-containment, restrict egress to those hosts rather than removing it.
+**Egress cannot be closed.** The agentic loop runs in the container, but the
+model does not, so it needs outbound HTTPS to whichever provider it is
+configured against - `api.openai.com`, `api.anthropic.com`, and so on - plus
+whatever the task itself fetches. `--network none` gives you a container that
+cannot do anything. If you need containment, restrict egress to that one host
+rather than removing it.
 
 **The mount is the blast radius.** Mount the narrowest thing that lets the task
 succeed - one repository, not a parent directory of every repository. Prefer
@@ -226,9 +210,13 @@ docker run --rm openzot/zot:local --version
 
 `VERSION` is what gets stamped into the binary and reported by `--version`;
 without it the build produces `dev` and the update check is skipped. Note that
-`go.work` is excluded from the build context by `.dockerignore` - a local SDK
-redirect must not leak into an image build, which always uses the pinned
-`go-sdk` release from `go.mod`.
+`go.work` is excluded from the build context by `.dockerignore` - a workspace
+file someone created locally must not leak into an image build and cap the
+toolchain below what `go.mod` requires.
+
+Images are always built without `-tags dev`, so a published image never reads a
+`.env` from the directory you mounted. See
+[Credentials](#credentials).
 
 Published images are built by
 [`release.yaml`](../.github/workflows/release.yaml) on every `v*` tag; CI builds
@@ -237,7 +225,7 @@ and smoke-tests the same Dockerfile on every code push. See
 
 ## See also
 
-- [README](../README.md) - flags, config, backends, ACP mode
+- [README](../README.md) - flags, config and backends
 - [Pantalk deployment](https://github.com/pantalk/pantalk/blob/main/docs/deployment.md) -
   putting a containerised agent into chat
 - [MCPShim deployment](https://github.com/mcpshim/mcpshim/blob/main/docs/deployment.md) -

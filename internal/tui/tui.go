@@ -11,8 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/chatbotkit/go-sdk/agent"
-	"github.com/chatbotkit/go-sdk/sdk"
+	"github.com/chatbotkit/zot/agent"
 )
 
 // Meta is the header display information shown above the activity log.
@@ -36,7 +35,7 @@ type Meta struct {
 // Bubble Tea program lifecycle and blocks until the user quits or the program
 // errors. The agent runs in the background and communicates with the UI solely
 // through tea messages.
-func Run(ctx context.Context, client *sdk.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
 	// Without a usable terminal (or when forced), stream plain text instead of
 	// trying to start an alt-screen program that would fail or garble.
 	if meta.Plain || !isInteractive() {

@@ -9,31 +9,39 @@ import (
 // build doesn't bury the rest of the activity.
 const maxOutputLines = 8
 
-// renderToolStart turns a tool invocation into one or more styled log lines. The
-// built-in coding tools (read/write/edit/exec) and the agent's system tools
-// (plan/progress) each get a tailored, scannable representation.
+// renderToolStart turns a tool invocation into one or more styled log lines.
+//
+// The built-in tools each get a tailored, scannable representation; anything a
+// caller has added falls through to a generic one. The names here are the names
+// in agent.DefaultTools - a mismatch is not a compile error, it just quietly
+// renders the agent's most-used tool as an anonymous key/value dump.
 func renderToolStart(name string, args map[string]interface{}) string {
 	switch name {
 	case "read":
 		return toolReadStyle.Render("  read   ") + dimPath(args, "path") + lineRange(args)
 	case "write":
-		return toolWriteStyle.Render("  write  ") + dimPath(args, "path")
-	case "edit":
-		return toolEditStyle.Render("  edit   ") + dimPath(args, "path")
-	case "exec":
-		return toolExecStyle.Render("  exec   ") + taskStyle.Render(truncate(str(args, "command"), 200))
-	case "plan":
-		return renderPlan(args)
-	case "progress":
-		return renderProgress(args)
+		return toolWriteStyle.Render("  write  ") + dimPath(args, "path") + lineRange(args)
+	case "list":
+		return toolReadStyle.Render("  list   ") + dimPath(args, "path")
+	case "shell":
+		return toolExecStyle.Render("  shell  ") + taskStyle.Render(truncate(str(args, "command"), 200))
+	case "skill":
+		return toolOtherStyle.Render("  skill  ") + taskStyle.Render(str(args, "name"))
 	default:
 		return toolOtherStyle.Render("  "+pad(name, 6)+" ") + outputStyle.Render(compactArgs(args))
 	}
 }
 
 // renderToolEnd produces an optional follow-up line summarising a tool result.
-// It returns "" when there is nothing worth showing (e.g. a successful write).
+// It returns "" when there is nothing worth showing.
+//
+// zot's tools return plain strings, so that is the case handled first; the map
+// form is kept for a caller whose own tool returns something structured.
 func renderToolEnd(name string, result interface{}) string {
+	if text, ok := result.(string); ok {
+		return renderTextResult(name, text)
+	}
+
 	m, ok := result.(map[string]interface{})
 	if !ok {
 		return ""
@@ -49,82 +57,92 @@ func renderToolEnd(name string, result interface{}) string {
 		}
 	}
 
+	if tail := commandOutput(m); tail != "" {
+		return okStyle.Render("    ✓ done") + "\n" + tail
+	}
+
+	return okStyle.Render("    ✓ done")
+}
+
+// renderTextResult summarises a string result.
+//
+// A shell command's output is the thing the operator most wants to see, so it is
+// echoed (capped); a file read is summarised by size instead, because dumping a
+// whole file into the log buries everything around it.
+func renderTextResult(name string, text string) string {
+	trimmed := strings.TrimRight(text, "\n")
+
 	switch name {
-	case "read":
-		if n, ok := intish(m["totalLines"]); ok {
-			return outputStyle.Render(fmt.Sprintf("    ✓ %d lines", n))
+	case "shell":
+		if trimmed == "" {
+			return okStyle.Render("    ✓ done")
 		}
-	case "exec":
-		line := okStyle.Render("    ✓ done")
-		if tail := commandOutput(m); tail != "" {
-			line += "\n" + tail
+
+		return okStyle.Render("    ✓ done") + "\n" + renderOutputLines(trimmed)
+
+	case "read", "list":
+		lines := 0
+
+		if trimmed != "" {
+			lines = strings.Count(trimmed, "\n") + 1
 		}
-		return line
+
+		return outputStyle.Render(fmt.Sprintf("    ✓ %d lines", lines))
+
 	case "write":
 		return okStyle.Render("    ✓ saved")
-	case "edit":
-		return okStyle.Render("    ✓ applied")
+
+	default:
+		if trimmed == "" {
+			return ""
+		}
+
+		return renderOutputLines(trimmed)
 	}
-	return ""
 }
 
-func renderPlan(args map[string]interface{}) string {
-	var b strings.Builder
-	b.WriteString(toolPlanStyle.Render("  plan"))
-	if r := str(args, "rationale"); r != "" {
-		b.WriteString(thoughtStyle.Render("  " + r))
-	}
-	for i, step := range slice(args["steps"]) {
-		b.WriteString("\n")
-		b.WriteString(bulletStyle.Render(fmt.Sprintf("    %d. ", i+1)) + taskStyle.Render(fmt.Sprint(step)))
-	}
-	return b.String()
-}
-
-func renderProgress(args map[string]interface{}) string {
-	var b strings.Builder
-	current := str(args, "current")
-	if current == "" {
-		current = "working…"
-	}
-	b.WriteString(toolProgStyle.Render("  ▸ ") + taskStyle.Render(current))
-	for _, done := range slice(args["completed"]) {
-		b.WriteString("\n" + okStyle.Render("    ✓ ") + outputStyle.Render(fmt.Sprint(done)))
-	}
-	for _, blk := range slice(args["blockers"]) {
-		b.WriteString("\n" + errStyle.Render("    ! ") + outputStyle.Render(fmt.Sprint(blk)))
-	}
-	return b.String()
-}
-
-// commandOutput renders the stdout/stderr of an exec result, trimmed and capped.
-func commandOutput(m map[string]interface{}) string {
-	text := strings.TrimRight(str(m, "stdout"), "\n")
-	if text == "" {
-		text = strings.TrimRight(str(m, "stderr"), "\n")
-	}
-	if text == "" {
-		return ""
-	}
-
+// renderOutputLines renders captured output, capped so one noisy command cannot
+// scroll the rest of the run off the screen.
+func renderOutputLines(text string) string {
 	lines := strings.Split(text, "\n")
+
 	clipped := false
+
 	if len(lines) > maxOutputLines {
 		lines = lines[:maxOutputLines]
 		clipped = true
 	}
 
 	var b strings.Builder
+
 	for i, l := range lines {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(outputStyle.Render("    │ " + l))
+
+		b.WriteString(outputStyle.Render("    │ " + truncate(l, 200)))
 	}
+
 	if clipped {
 		b.WriteString("\n" + outputStyle.Render("    │ …"))
 	}
+
 	return b.String()
+}
+
+// commandOutput renders the stdout/stderr of a structured result.
+func commandOutput(m map[string]interface{}) string {
+	text := strings.TrimRight(str(m, "stdout"), "\n")
+
+	if text == "" {
+		text = strings.TrimRight(str(m, "stderr"), "\n")
+	}
+
+	if text == "" {
+		return ""
+	}
+
+	return renderOutputLines(text)
 }
 
 // --- small helpers over the loosely-typed arg/result maps -------------------
@@ -159,13 +177,6 @@ func str(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
-}
-
-func slice(v interface{}) []interface{} {
-	if s, ok := v.([]interface{}); ok {
-		return s
-	}
-	return nil
 }
 
 // intish coerces JSON numbers (float64) and ints into an int.

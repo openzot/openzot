@@ -13,6 +13,11 @@ import (
 )
 
 // Values set at build time via -ldflags.
+// apiBase is the GitHub API root the check calls. A variable rather than a
+// constant purely so tests can point it at a local server; nothing at runtime
+// changes it.
+var apiBase = defaultAPIBase
+
 var (
 	// Version is the semver tag (e.g. "v0.1.0"). Defaults to "dev" when built
 	// without ldflags (i.e. via `go run`).
@@ -22,6 +27,10 @@ var (
 const (
 	// releaseRepo is the GitHub owner/repo used to check for new releases.
 	releaseRepo = "openzot/openzot"
+
+	// defaultAPIBase is the GitHub API root. Overridable through apiBase so the
+	// check can be exercised without reaching the network.
+	defaultAPIBase = "https://api.github.com"
 
 	// checkTimeout limits how long the HTTP call to GitHub may take.
 	checkTimeout = 4 * time.Second
@@ -43,7 +52,7 @@ type ghRelease struct {
 func LatestRelease() (tag string, url string, err error) {
 	client := &http.Client{Timeout: checkTimeout}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", releaseRepo), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, releaseRepo), nil)
 	if err != nil {
 		return "", "", err
 	}

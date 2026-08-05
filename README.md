@@ -25,14 +25,14 @@ Most coding tools optimize the conversation between a developer and an agent.
 zot optimizes the production run. A software brief goes in, the repository moves
 toward the requested outcome, and a verified working tree comes out.
 
-The factory is powered by an autonomous coding harness. It runs the whole loop
-(plan → act → observe → verify → exit) from one brief, without waiting for
-follow-up prompts at every step. Model calls, tool orchestration, planning, and
-iteration run on a capable cloud harness, not in the binary. zot defaults to the
-built-in `relay` backend, which reaches models through the CBK Relay with your
-own provider key (OpenAI, Mistral, …); the `cbk` / `chatbotkit` backends use a
-[ChatBotKit](https://chatbotkit.com) token instead. That keeps the local runtime
-tiny: load config, wire the SDK's tools, and render events.
+The factory is powered by an autonomous coding harness that runs entirely in the
+binary. It drives the whole loop (plan → act → observe → verify → exit) from one
+brief, without waiting for follow-up prompts at every step - and without a hosted
+engine. zot talks straight to a model provider over the OpenAI-compatible API, so
+all you need is a provider key: OpenAI, Anthropic, Groq, Mistral, DeepSeek,
+OpenRouter, a local Ollama, or anything else that speaks the same API. No
+account is required beyond the provider's own, and nothing is sent anywhere
+except the provider you configure.
 
 ## The factory model
 
@@ -46,14 +46,27 @@ tiny: load config, wire the SDK's tools, and render events.
 
 ## How it works
 
-The automated coding harness comes from the
-[**ChatBotKit Go SDK**](https://github.com/chatbotkit/go-sdk):
+The harness is zot's own, in the [`agent`](agent) package:
 
 - `agent.ExecuteWithTools` runs the model in a loop - _plan → act → observe →
-  progress → exit_ - until it decides the task is done or it hits the iteration
-  cap.
-- `agent.DefaultTools()` gives it the coding toolbox: `read`, `write`, `edit`,
-  and `exec` (shell).
+  progress → exit_ - until it records an outcome or hits a budget.
+- `agent.DefaultTools()` gives it the coding toolbox: `read`, `write`, `list`
+  and `shell`.
+
+What sits under that is the part worth knowing about:
+
+- **Thread assembly** fits the conversation to the model's context window,
+  newest-first, keeping tool calls paired with their results.
+- **Compaction** condenses older history into a summary when the window fills,
+  rather than dropping it.
+- **Loop detection** notices when the agent has stopped making progress - four
+  overlapping heuristics, because the obvious one (repeated messages) silently
+  misses reasoning models, which interleave a thought between every tool call.
+- **Settle mode** ends a run when the agent *records* an outcome, not when its
+  prose happens to sound final. An answer containing "task completed" is not an
+  ending.
+- **Session logs** record every run to disk as it happens, so a run nobody
+  watched is still answerable afterwards - and so it can be picked up again.
 
 `zot` itself is a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 front-end for that production run. It launches the harness in a goroutine and
@@ -63,48 +76,67 @@ deliberately has no text input.
 
 ## Prerequisites
 
-- A credential for the selected backend: your own provider key for the default
-  `relay` (set per model in config), or a ChatBotKit token for `cbk` /
-  `chatbotkit`
-- Go 1.25+ - only if you build from source
+- A key for whichever model provider you want to use
+- Go 1.26+ - only if you build from source
 
-## Backend credentials
+## Provider credentials
 
-zot defaults to the **`relay`** backend, which carries *your own provider key*
-per model - see [Backends](#backends) for how relay auth is composed into the
-model string. There is no single relay API key: set your provider key per model
-(or as a backend-level default) in config, referencing a variable you export:
+zot defaults to the **`openai`** backend and reads `OPENAI_API_KEY`:
 
 ```bash
-export ZAI_API_KEY="sk-…"   # your provider key, referenced from config
+export OPENAI_API_KEY="sk-…"
+zot "add input validation to the signup handler and a test"
 ```
 
-The **`cbk`** and **`chatbotkit`** backends instead need a ChatBotKit API token.
-**Mint a new one for the tool** - don't reuse a token from elsewhere. We
-**recommend** creating a scoped token at
-[chatbotkit.com/apps/code](https://chatbotkit.com/apps/code). This issues a token
-limited to coding-harness operations only, so it **cannot** reach the rest of
-your account.
-
-Provide the token either way:
-
-**1. Environment variable (preferred)** - export `CBK_API_SECRET` (for `cbk`) or
-`CHATBOTKIT_API_SECRET` (for `chatbotkit`), or put it in a `.env` file in the
-working directory:
+Every built-in backend reads its own conventional variable - `ANTHROPIC_API_KEY`,
+`GROQ_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`,
+`TOGETHER_API_KEY`, `CEREBRAS_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`,
+`ZAI_API_KEY`, `DASHSCOPE_API_KEY` - so switching provider is a flag:
 
 ```bash
-export CBK_API_SECRET="cbk_…"
+export ANTHROPIC_API_KEY="sk-ant-…"
+zot --backend anthropic "…"
 ```
 
-**2. Config file** - set `api_secret` under the backend in your config file
-(`~/.config/zot/config.yaml`, or the path given to `--config`):
+A local model needs no key at all:
+
+```bash
+zot --backend ollama --model llama-4 "…"
+```
+
+Anything else that speaks the OpenAI chat-completions API works too - see
+[Any other provider](#any-other-provider).
+
+Any key can equally live in the config file
+(`~/.config/zot/config.yaml`, or the path given to `--config`), including as a
+`$ENV_VAR` reference so no secret is written to disk:
 
 ```yaml
 # ~/.config/zot/config.yaml
 backends:
-  cbk:
-    api_secret: 'cbk_…'
+  openai:
+    api_key: '$OPENAI_API_KEY'
 ```
+
+## Developer builds
+
+`make build` produces a release binary. `make dev` produces a developer one, and
+the difference is a security boundary rather than a convenience:
+
+| | release (`make build`) | developer (`make dev`) |
+| --- | --- | --- |
+| reads `.env` from `--dir` | no | yes |
+
+zot runs unattended with a provider key and a shell tool, so a released binary
+must not take credentials from whatever directory it was pointed at - running it
+against a repository you cloned to review would otherwise be enough to load a
+stray committed `.env` into the process that is about to run commands. Released
+builds read credentials from the config file and the real environment, both of
+which you chose deliberately.
+
+The switch is a build tag (`-tags dev`) and defaults to off, so a build that
+forgets it loses a convenience rather than a boundary. `zot --version` prints
+which kind you have.
 
 ## Install
 
@@ -125,17 +157,20 @@ zot --version
 
 ### Build from source
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ```bash
 git clone https://github.com/openzot/openzot
 cd openzot
+make                     # lists the targets
 make build               # or: go build -o zot ./cmd/zot
 ./zot --version
 ```
 
-`make build` stamps the version into the binary; `make test`, `make vet`, and
-`make cross GOOS=… GOARCH=…` are also available.
+`make` on its own prints the targets rather than assuming one, because `build`
+and `dev` produce binaries that differ in what they will read from disk. `make
+build` stamps the version in; `make test`, `make race`, `make cover`, `make vet`
+and `make cross GOOS=… GOARCH=…` are also available.
 
 ### Docker
 
@@ -149,7 +184,7 @@ docker pull ghcr.io/openzot/openzot:latest
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume "$PWD":/workspace \
   ghcr.io/openzot/openzot:latest "add a /health endpoint and a test for it"
 ```
@@ -160,13 +195,12 @@ tools like `git` can store their own config. Both are only needed for host bind
 mounts; with a named volume the defaults are fine.
 
 The entrypoint **is** `zot`, so everything after the image name is zot's own
-arguments (`--version`, `--diff`, `acp`, …). With `-it` you get the full-screen
 viewer; without a TTY it streams plain text, which is what you want in CI:
 
 ```bash
 docker run --rm \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
-  --env CHATBOTKIT_API_SECRET \
+  --env OPENAI_API_KEY \
   --volume "$PWD":/workspace \
   ghcr.io/openzot/openzot:latest --max-iterations 40 --task-file TASK.md | tee run.log
 ```
@@ -174,249 +208,85 @@ docker run --rm \
 A container is also the cleanest answer to [Safety](#️-safety): file writes and
 shell commands are confined to the volume you mounted, so a run cannot reach the
 rest of your machine. See [docs/docker.md](docs/docker.md) for credentials,
-config and `AGENT.md` mounts, ACP mode, and hardening flags.
-
-## Usage
-
-```bash
-export CHATBOTKIT_API_SECRET="your-api-key"   # or use .env
-
-# run it on a task
-./zot "add input validation to the signup handler and a test"
-
-# use a scratch directory as the working directory and cap the work
-./zot --dir ./scratch --max-iterations 40 "scaffold a tiny snake game in python"
-
-# read the task from a file instead of the command line
-./zot --task-file TASK.md
-
-# serve the agent to an ACP client instead of running a task
-./zot acp
-```
-
-### Flags
-
-| Flag               | Default                     | Description                                                |
-| ------------------ | --------------------------- | ---------------------------------------------------------- |
-| `--model`          | `glm-5.2`                   | Model name (resolved against the selected backend)         |
-| `--backend`        | `relay`                     | Backend to run against: `relay`, `cbk`, or `chatbotkit`    |
-| `--dir`            | `.`                         | Working directory the agent reads, writes and runs in      |
-| `--max-iterations` | `1000`                      | Safety cap before the agent is forced to stop              |
-| `--task-file`      | _(none)_                    | Read the task from a file instead of the command line      |
-| `--diff`           | `false`                     | Show a syntax-highlighted diff panel under each edit/write |
-| `--plain`          | `false`                     | Stream unstyled output (auto-enabled when not a TTY)       |
-| `--feature`        | _(none)_                    | Enable a feature by name (repeatable): `web`, `chunking`   |
-| `--config`         | `~/.config/zot/config.yaml` | Path to a config file (optional)                           |
-| `--version`        |                             | Print the version and exit                                 |
-
-### Diffs
-
-With `--diff` (or `ui.diff: true`, or `ZOT_UI_DIFF=true`), every `edit`/`write`
-is followed by a framed, syntax-highlighted before/after panel rendered inline in
-the activity log - scroll back to review any change the agent made:
-
-```
-  edit   internal/server/server.go
- ╭───────────────────────────────────────────────────────────╮
- │ internal/server/server.go  +2 -1                          │
- │   func (s *Server) routes() {                             │
- │ -   mux.HandleFunc("/", s.handleIndex)                    │
- │ +   mux.HandleFunc("/", s.handleIndex)                    │
- │ +   mux.HandleFunc("/health", s.handleHealth)             │
- │   }                                                       │
- ╰───────────────────────────────────────────────────────────╯
-```
-
-Highlighting is powered by [chroma](https://github.com/alecthomas/chroma); the
-panel shows ±3 lines of context and caps very large rewrites.
-
-### Non-interactive (plain) mode
-
-The full-screen viewer needs a terminal. When stdout is **not** a TTY - piped,
-redirected, run from CI, or driven by another program - zot automatically falls
-back to **plain mode**: it streams the same activity as unstyled text lines
-(`--diff` still works, rendered as a plain unified diff) instead of starting an
-alt-screen UI that would garble or fail. Force it in a terminal with `--plain`
-(or `ui.plain: true` / `ZOT_UI_PLAIN=true`):
-
-```bash
-zot --plain "tidy go.mod" | tee run.log
-```
-
-### Features
-
-Enable ChatBotKit conversation features for the run - each a name/options pair.
-Currently exposed: **`web`** (live web `search`/`fetch`) and **`chunking`**. Set
-them with repeated `--feature` flags:
-
-```bash
-zot --feature web --feature chunking "research the latest go release and summarise it"
-```
-
-…or in the config file, where you can also pass per-feature options:
-
-```yaml
-features:
-  - name: web
-    options:
-      search: true
-      fetch: true
-  - name: chunking
-```
-
-`--feature` flags replace the configured list when given. (The list isn't
-settable via a single env var - use the config file for options.)
-
-## ACP mode (`zot acp`)
-
-`zot acp` serves the same agent over the
-[**Agent Client Protocol**](https://agentclientprotocol.com/), so an ACP client -
-an editor, or an agent harness - can drive zot instead of you:
-
-```bash
-zot acp
-```
-
-The protocol is JSON-RPC on stdin/stdout, so this is meant to be **spawned by a
-client**, not run by hand. Everything else about zot is unchanged: the same
-agent loop, the same `read`/`write`/`edit`/`exec` tools, the same config and
-backends. What changes is the shape of a run:
-
-|                   | normal run                   | `zot acp`                                    |
-| ----------------- | ---------------------------- | -------------------------------------------- |
-| Work comes from   | the task on the command line | `session/prompt`, turn by turn               |
-| Working directory | `--dir`                      | the `cwd` the client opens each session with |
-| Output            | the read-only viewer         | `session/update` notifications               |
-| Lifetime          | one task, then exit          | stays up until the client disconnects        |
-
-Each session keeps its own conversation history, so follow-up prompts continue
-where the last turn left off, and `AGENT.md` / skills are loaded **per session**
-from the directory the client supplies - a client working across several
-repositories gets the right context in each.
-
-The mode takes `--config`, `--backend`, `--model`, `--max-iterations` and
-`--feature`. It takes no task and no `--dir`, and the viewer flags don't apply.
-Diagnostics go to stderr; stdout belongs to the protocol.
-
-### Connecting to Buzz
-
-[Buzz](https://github.com/block/buzz) is a self-hostable workspace where humans
-and agents share channels. Its `buzz-acp` harness spawns any ACP agent, so
-pointing it at zot is two environment variables:
-
-```bash
-export BUZZ_ACP_AGENT_COMMAND=zot
-export BUZZ_ACP_AGENT_ARGS=acp
-export CHATBOTKIT_API_SECRET="your-api-key"
-
-buzz-acp
-```
-
-Buzz's own operating instructions arrive with each prompt, and zot's `exec` tool
-runs the `buzz` CLI to post replies, open pull requests, and so on. Note that
-zot has **no MCP client**: any MCP servers the harness offers are logged and
-ignored, which costs nothing by default (`BUZZ_ACP_MCP_COMMAND` is empty).
-
-> ⚠️ An ACP-mode zot is an unattended `exec` on the machine that runs it,
-> reachable by whoever the client lets through. Buzz defaults to
-> `--respond-to owner-only`; keep it that way unless you mean otherwise, and see
-> [Safety](#️-safety).
-
-### Limits
-
-- **One turn at a time.** The SDK's file and shell tools resolve paths against
-  the process working directory, so a turn owns it. Clients that drive one
-  prompt at a time - `buzz-acp` does - never notice; a client wanting parallel
-  sessions should spawn a process per workspace.
-- **No permission prompts.** zot is autonomous by design: it does not call
-  `session/request_permission`, so the client sees tool calls as they happen
-  rather than being asked to approve them.
-- **No `session/load`.** History lives in the process; restarting an agent
-  starts its sessions fresh.
+config and `AGENT.md` mounts, and hardening flags.
 
 ## Backends
 
-A run targets a **backend** - the provider zot talks to. zot defaults to
-**`relay`**; the ChatBotKit backends are an alternative for account holders. Pick
-one with `--backend` or `default_backend` in config.
+zot ships with a backend for each common provider. Pick one with `--backend`, or
+set `default_backend` in config.
 
-| Backend      | Endpoint                     | Auth style | Credential                   |
-| ------------ | ---------------------------- | ---------- | ---------------------------- |
-| `relay`      | `https://relay.cbk.ai`       | per-model  | your provider key, per model |
-| `cbk`        | `https://api.cbk.ai`         | Bearer     | `CBK_API_SECRET`             |
-| `chatbotkit` | `https://api.chatbotkit.com` | Bearer     | `CHATBOTKIT_API_SECRET`      |
+| Backend      | Endpoint                             | Credential from       |
+| ------------ | ------------------------------------ | --------------------- |
+| `openai`     | `https://api.openai.com/v1`          | `OPENAI_API_KEY`      |
+| `anthropic`  | `https://api.anthropic.com/v1`       | `ANTHROPIC_API_KEY`   |
+| `groq`       | `https://api.groq.com/openai/v1`     | `GROQ_API_KEY`        |
+| `mistral`    | `https://api.mistral.ai/v1`          | `MISTRAL_API_KEY`     |
+| `deepseek`   | `https://api.deepseek.com/v1`        | `DEEPSEEK_API_KEY`    |
+| `openrouter` | `https://openrouter.ai/api/v1`       | `OPENROUTER_API_KEY`  |
+| `together`   | `https://api.together.xyz/v1`        | `TOGETHER_API_KEY`    |
+| `cerebras`   | `https://api.cerebras.ai/v1`         | `CEREBRAS_API_KEY`    |
+| `xai`        | `https://api.x.ai/v1`                | `XAI_API_KEY`         |
+| `moonshot`   | `https://api.moonshot.cn/v1`         | `MOONSHOT_API_KEY`    |
+| `zai`        | `https://api.z.ai/api/paas/v4`       | `ZAI_API_KEY`         |
+| `qwen`       | DashScope compatible mode            | `DASHSCOPE_API_KEY`   |
+| `ollama`     | `http://localhost:11434/v1`          | none                  |
 
-The model is resolved against the chosen backend, so it must be one that backend
-serves.
+### Any other provider
 
-### `relay` — the default (bring your own key)
-
-The CBK Relay is a free proxy, and **there is no relay API key.** It
-authenticates each model with _your own provider key_, carried inside the model
-string as `<model>/authorization=<key>` - because on the relay each model is a
-different provider (Z.AI, Moonshot, DeepSeek, …) with its own key. So you set the
-key **per model** in config (paste it literally, or reference an env var):
-
-```yaml
-default_backend: relay
-backends:
-  relay:
-    # authorization: $ZAI_API_KEY   # optional: one default key for all relay models
-    models:
-      glm-5.2:
-        authorization: $ZAI_API_KEY      # or paste the key literally
-      kimi-k3:
-        authorization: $MOONSHOT_API_KEY
-      deepseek-v4-flash:
-        authorization: $DEEPSEEK_API_KEY
-```
-
-```bash
-export ZAI_API_KEY="sk-..."
-zot --model glm-5.2 "…"                           # sends glm-5.2/authorization=sk-... to the relay
-zot --model 'glm-5.2/authorization=sk-...' "…"    # or inline it; zot leaves it as-is
-```
-
-zot composes the `authorization=` param onto the model automatically from the
-per-model (or backend-level) config; a key you inline into `--model` is left as-is.
-
-### `cbk` / `chatbotkit` — ChatBotKit account backends
-
-If you have a ChatBotKit account, target it directly with a Bearer token instead
-of bringing per-model keys. `cbk` and `chatbotkit` are the same platform on its
-two hosts and take the same credential value under their own variable:
-
-```bash
-export CBK_API_SECRET="..."          # or CHATBOTKIT_API_SECRET for --backend chatbotkit
-zot --backend cbk --model glm-5.2 "…"
-```
-
-Provide the token via that env var, or as `api_secret` under the backend in
-config.
-
-Each backend can also define **custom models** in the config; when `--model`
-matches a key, that entry's settings take priority (alias the real id, cap
-iterations, add features, and - on the relay - carry that model's provider key):
+Anything that speaks the OpenAI chat-completions API works. Name a backend,
+give it a base URL and a key:
 
 ```yaml
-default_backend: relay
+default_backend: mygateway
+
 backends:
-  relay:
-    models:
-      fast:
-        model: glm-5-turbo
-        authorization: $ZAI_API_KEY
-        max_iterations: 50
-  cbk:
-    # api_secret: '$CBK_API_SECRET'   # default
-    models:
-      cheap:
-        model: kimi-k3
-        max_iterations: 50
+  mygateway:
+    provider: custom
+    base_url: https://gateway.internal.example.com/v1
+    api_key: '$GATEWAY_KEY'
 ```
 
-```bash
-zot --model fast "…"   # uses the relay's "fast" model config
+The endpoint must be `https` unless it is loopback, and a custom endpoint needs
+its own key - a credential is scoped to the host it was issued for, and zot will
+not forward one to a URL you just typed.
+
+### Migrating from a hosted backend
+
+Earlier versions ran through hosted backends - the CBK Relay, and the ChatBotKit
+API. zot reaches providers directly now, so those are gone.
+
+Point the backend at the provider you were already paying for:
+
+```yaml
+default_backend: openai
+
+backends:
+  openai:
+    api_key: '$OPENAI_API_KEY'
+```
+
+A credential written as `api_secret` or `authorization` is still read, so an
+older config keeps working once it names a provider. A key inlined into a model
+name (`--model 'gpt-4/authorization=sk-…'`) is decoded onto the client rather
+than forwarded.
+
+### The Responses API
+
+On OpenAI, reasoning models use the
+[Responses API](https://platform.openai.com/docs/api-reference/responses)
+automatically. It carries reasoning state between tool rounds as an opaque item
+the model resumes from; chat-completions has nowhere to put it, so a reasoning
+model driven that way re-derives its thinking on every round.
+
+Only OpenAI implements it today, so everywhere else stays on chat-completions.
+Override per backend if a gateway supports it:
+
+```yaml
+backends:
+  mygateway:
+    provider: custom
+    base_url: https://gateway.example.com/v1
+    use_responses: true       # or disable_responses: true
 ```
 
 ## Configuration
@@ -430,11 +300,26 @@ zot config path   # print the config file location
 ```
 
 Scalar fields have a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
-`ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Bearer backend
-credentials come from their own env vars (`CBK_API_SECRET` for `cbk`,
-`CHATBOTKIT_API_SECRET` for `chatbotkit`), so they don't need the `ZOT_` prefix;
-the `relay` backend's per-model provider key is set in config (referencing a
-variable you export). See [configs/zot.example.yaml](configs/zot.example.yaml).
+`ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Provider
+credentials come from their own conventional variables (`OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, …) and so need no `ZOT_` prefix; they can equally be set in
+config, referencing a variable you export. See
+[configs/zot.example.yaml](configs/zot.example.yaml).
+
+### Flags
+
+`zot --help` lists them all. The ones worth knowing:
+
+| Flag | Effect |
+| ---- | ------ |
+| `--backend` / `--model` | which provider and model to run against |
+| `--dir` | the directory the agent reads, writes and runs commands in |
+| `--max-iterations` | cap the agentic rounds; the default is deliberately large |
+| `--task-file` | read the brief from a file instead of the command line |
+| `--resume` / `--session-dir` / `--no-session` | see [Sessions](#sessions) |
+| `--diff` | show a syntax-highlighted diff under each write |
+| `--plain` | stream unstyled output; auto-enabled when stdout is not a terminal |
+| `--config` | use a specific config file |
 
 ### Controls
 
@@ -447,6 +332,39 @@ Because the agent is autonomous, the only keys are for viewing:
 | `g` / `G`     | jump to top/bottom |
 | `q`           | quit               |
 
+## Sessions
+
+Every run is written to `~/.local/state/zot/sessions/` as it happens - one JSON
+object per line, holding the brief, the model, every message, every tool call
+and how it ended.
+
+That matters because an autonomous run is unattended by definition: nobody
+watched it, and by the time you look the terminal is gone. The log is what turns
+"it failed overnight" into something you can answer.
+
+```bash
+# what has run, newest first
+zot sessions
+
+# read one
+cat ~/.local/state/zot/sessions/20260805-155859.jsonl | jq .
+
+# pick up where it stopped - the agent keeps everything it already knew
+zot --resume last "now add the tests you skipped"
+
+# or continue the original brief, unchanged
+zot --resume last
+```
+
+`--resume` takes a session id, a path, or `last`. A resumed run writes its own
+log and records which session it continued, so a chain of continued runs stays
+reconstructable.
+
+The log is appended and flushed line by line, so it is readable while the run is
+still going and a killed run still leaves everything up to the kill. Use
+`--no-session` to record nothing, or `--session-dir` (or `ZOT_SESSION_DIR`) to
+put the logs somewhere else.
+
 ## Project context (`AGENT.md` & skills)
 
 On startup zot folds in context from two places - the **config directory**
@@ -456,8 +374,8 @@ On startup zot folds in context from two places - the **config directory**
   appended to the agent's backstory (config first, then project). Use it for
   conventions the agent should always follow.
 - **skills** - each `<name>/SKILL.md` (with `name` / `description` YAML front
-  matter) is loaded via the SDK and passed to the agent as a `skills` feature;
-  the agent reads a skill's full file on demand when it's relevant. Both
+  matter) is described to the agent in its backstory, and the agent reads a
+  skill's full file on demand when it's relevant. Both
   **`.skills/`** (typical at a project root) and **`skills/`** are searched.
 
 ```
@@ -483,7 +401,6 @@ and then removed from the process environment before the agent starts, so its
 shell commands do not inherit those API keys. Other secrets already present in
 the environment or readable from disk remain accessible to those commands.
 
-In [ACP mode](#acp-mode-zot-acp) the same applies to every directory a client
 opens a session in, and the prompts come from whoever that client lets through -
 so the blast radius is the client's access-control policy, not just yours.
 
@@ -496,12 +413,20 @@ place. [docs/docker.md](docs/docker.md) covers them.
 
 | Path                | Responsibility                                                           |
 | ------------------- | ------------------------------------------------------------------------ |
-| `cmd/zot/`          | the binary: flag parsing, `.env`, working dir, then `zot.Run`/`ServeACP` |
-| `zot.go`            | embeddable core: builds the SDK client + agent options and runs it       |
+| `cmd/zot/`          | the binary: flag parsing, sessions, working dir, then `zot.Run` |
+| `zot.go`            | embeddable core: builds the provider client + agent options and runs it  |
+| `agent/`            | the public harness: `ExecuteWithTools`, tools, skills, events            |
+| `internal/loop/`    | the agentic loop: budgets, guards, settle mode, message hygiene          |
+| `internal/thread/`  | context-window assembly and the four loop-detection heuristics           |
+| `internal/compaction/` | condensing older history into a summary when the window fills         |
+| `internal/provider/` | the `Transport` seam: chat-completions and the Responses API            |
+| `internal/catalogue/` | what each model's context window and capabilities are                  |
+| `internal/tokenizer/` | BPE token counting with embedded vocabularies                          |
+| `internal/session/` | JSONL run logs: write, read, list, resume                                |
 | `internal/config/`  | layered config (defaults < file < env), XDG paths, env overrides         |
+| `internal/build/`   | release vs developer build, and what that changes                        |
 | `internal/version/` | build-time version stamping and GitHub update checks                     |
 | `internal/tui/`     | the Bubble Tea read-only viewer (model, render, styles, agent bridge)    |
-| `internal/acp/`     | the Agent Client Protocol server: sessions, turns, event bridge          |
 | `configs/`          | example configuration                                                    |
 
 Releasing is driven by the `VERSION` file and the GitHub workflows - see
