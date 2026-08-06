@@ -6,8 +6,10 @@ agent can only change what you mounted, and the usual `docker run` levers
 (dropped capabilities, a read-only root filesystem, resource limits) apply
 without zot having to implement a sandbox of its own.
 
-This document covers the published image. For the agent itself - flags, config,
-backends - see the [README](../README.md).
+This document covers the published image. For the agent itself see the
+[README](../README.md); for flags and config see
+[configuration.md](configuration.md), and for providers
+[backends.md](backends.md).
 
 ## The image
 
@@ -54,7 +56,7 @@ docker run --rm -it --env OPENAI_API_KEY --volume "$PWD":/workspace \
   ghcr.io/openzot/openzot:latest --backend openai --model gpt-5.4-mini "…"
 ```
 
-See [Backends](../README.md#backends) for the full list.
+See [backends.md](backends.md) for the full list.
 
 ```bash
 docker run --rm -it \
@@ -110,7 +112,7 @@ not write, and reading credentials out of it would mean a stray committed `.env`
 in the code under review could feed the process that is about to run shell
 commands. Pass credentials with `--env` or `--env-file`, where the value comes
 from your secret store. (A developer build, `make dev`, does read `.env`; see
-[Developer builds](../README.md#developer-builds).)
+[release vs developer builds](development.md#release-vs-developer-builds).)
 
 After zot loads its configuration, configured backend credentials are removed
 from the environment inherited by agent shell commands, so the task itself
@@ -234,7 +236,9 @@ and smoke-tests the same Dockerfile on every code push. See
 
 ## See also
 
-- [README](../README.md) - flags, config and backends
+- [README](../README.md) - what zot is
+- [configuration.md](configuration.md) - flags, config, sessions
+- [backends.md](backends.md) - providers and credentials
 - [Pantalk deployment](https://github.com/pantalk/pantalk/blob/main/docs/deployment.md) -
   putting a containerised agent into chat
 - [MCPShim deployment](https://github.com/mcpshim/mcpshim/blob/main/docs/deployment.md) -
