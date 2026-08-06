@@ -61,11 +61,12 @@ func run() error {
 	}
 
 	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := flag.String("backend", "", "backend to run against: a provider such as openai (default), anthropic, groq, ollama, or a backend named in the config")
-	model := flag.String("model", "", "override the model name")
+	backend := flag.String("backend", "", "backend to run against: a provider such as zai (default), openai, anthropic, groq, ollama, or a backend named in the config")
+	model := flag.String("model", "", "override the model name (default: glm-5.2, which only the zai backend serves)")
 	dir := flag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := flag.Int("max-iterations", 0, "override the safety cap on agent iterations")
-	taskFile := flag.String("task-file", "", "read the task from this file instead of the command line")
+	taskFlag := flag.String("task", "", "the durable objective, placed in the system prompt so it survives a long run (overrides a positional task)")
+	taskFile := flag.String("task-file", "", "read the durable objective from a file")
 	diffFlag := flag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
 	plainFlag := flag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
 	resume := flag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
@@ -79,7 +80,13 @@ func run() error {
 		// the build kind is on the version line because it changes what the
 		// binary will read from disk, and "why is it not picking up my .env"
 		// should be answerable without reading the source
-		fmt.Printf("zot %s (%s)\n", version.Version, buildinfo.Kind)
+		kind := buildinfo.Kind
+		if config.Portable() {
+			// a portable build carries its own config and overrides the runtime
+			// file/env, so "why is it ignoring my config" is answerable here too
+			kind += ", portable config"
+		}
+		fmt.Printf("zot %s (%s)\n", version.Version, kind)
 		return nil
 	}
 
@@ -116,12 +123,16 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
 	}
 
-	task, err := resolveTask(*taskFile, flag.Args())
+	task, prompt, err := resolveTask(*taskFlag, *taskFile, flag.Args())
 
-	// A resume without a new instruction continues the original brief, which is
-	// what someone restarting an interrupted overnight run means.
-	if err != nil && resumed != nil && resumed.Meta.Task != "" {
-		task, err = resumed.Meta.Task, nil
+	// A resumed run inherits its objective from the session it continues; any new
+	// command-line text is a follow-up prompt, not a replacement objective - a
+	// resume is "keep going, and also do this", not "start over". An explicit
+	// --task / --task-file still overrides, for deliberately changing course.
+	if resumed != nil && *taskFlag == "" && *taskFile == "" {
+		task = resumed.Meta.Task
+		prompt = strings.TrimSpace(strings.Join(flag.Args(), " "))
+		err = nil
 	}
 
 	if err != nil {
@@ -177,6 +188,8 @@ func run() error {
 	if *noSession {
 		options.SessionDir = ""
 	}
+
+	options.Prompt = prompt
 
 	return zot.RunWith(context.Background(), cfg, task, options)
 }
@@ -242,8 +255,13 @@ func loadEnv(dir string) {
 	_ = godotenv.Load(filepath.Join(dir, ".env"))
 }
 
-// resolveTask determines the single task string from --task-file or the
-// positional arguments. There is intentionally no interactive prompt: zot is a
+// resolveTask splits the input into the durable task (the objective, which goes
+// into the system prompt) and an optional opening prompt (a user message).
+//
+// --task / --task-file give the objective explicitly; a bare positional is
+// treated as the objective too, so `zot "do X"` keeps working and stays durable.
+// When an objective is given explicitly, positional text becomes the opening
+// prompt beside it. There is intentionally no interactive input: zot is a
 // viewer, not a chat client.
 // editConfig ensures the config file exists - seeding it from the embedded
 // template on first run - and opens it in the user's editor. This is the setup
@@ -328,25 +346,43 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func resolveTask(taskFile string, args []string) (string, error) {
-	if taskFile != "" {
-		data, err := os.ReadFile(taskFile)
-		if err != nil {
-			return "", fmt.Errorf("cannot read --task-file: %w", err)
+func resolveTask(taskFlag, taskFile string, args []string) (task, prompt string, err error) {
+	// The durable objective comes from --task or --task-file; it lands in the
+	// system prompt and stays there for the whole run.
+	switch {
+	case taskFlag != "":
+		task = strings.TrimSpace(taskFlag)
+	case taskFile != "":
+		data, readErr := os.ReadFile(taskFile)
+		if readErr != nil {
+			return "", "", fmt.Errorf("cannot read --task-file: %w", readErr)
 		}
-		task := strings.TrimSpace(string(data))
+		task = strings.TrimSpace(string(data))
 		if task == "" {
-			return "", fmt.Errorf("--task-file %q is empty", taskFile)
+			return "", "", fmt.Errorf("--task-file %q is empty", taskFile)
 		}
-		return task, nil
 	}
 
-	task := strings.TrimSpace(strings.Join(args, " "))
-	if task == "" {
+	positional := strings.TrimSpace(strings.Join(args, " "))
+
+	switch {
+	case task == "" && positional == "":
 		usage()
-		return "", fmt.Errorf("no task given")
+		return "", "", fmt.Errorf("no task given")
+
+	case task == "":
+		// No explicit objective, so the positional text is the objective - this
+		// is the common `zot "do X"`, which stays durable rather than becoming a
+		// throwaway prompt.
+		task = positional
+
+	default:
+		// An explicit objective was given, so the positional text is an opening
+		// prompt alongside it rather than a second objective.
+		prompt = positional
 	}
-	return task, nil
+
+	return task, prompt, nil
 }
 
 func usage() {
@@ -359,8 +395,13 @@ Usage:
 
 Examples:
   zot "add input validation to the signup handler and a test"
+  zot --task-file TASK.md "start with the parser"
   zot --dir ./scratch "scaffold a tiny http server in go"
   zot --resume last "now add the tests you skipped"
+
+The task is the durable objective: it goes into the system prompt and stays in
+context for the whole run. A bare "..." is the task; with --task/--task-file the
+"..." becomes an opening prompt alongside it.
 
 Commands:
   config     edit the config file in $EDITOR (creates it on first run)

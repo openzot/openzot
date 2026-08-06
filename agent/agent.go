@@ -29,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/openzot/openzot/internal/loop"
 	"github.com/openzot/openzot/internal/provider"
@@ -116,11 +117,12 @@ const (
 	// TypeActivity is one half of a tool-call pair; the call itself is in Meta.
 	TypeActivity = loop.TypeActivity
 
-	// TypeBackstory is system context.
-	TypeBackstory = loop.TypeBackstory
+	// TypeInstructions is system context.
+	TypeInstructions = loop.TypeInstructions
 
-	// TypeContext is injected context, including a compaction summary.
-	TypeContext = loop.TypeContext
+	// TypeCheckpoint is a compaction summary, preserved verbatim and never
+	// re-summarised.
+	TypeCheckpoint = loop.TypeCheckpoint
 )
 
 // Recorder receives a run's messages and events as they happen.
@@ -207,10 +209,21 @@ type ToolDefinition struct {
 // Tools is a set of tools keyed by name.
 type Tools map[string]ToolDefinition
 
+// The context-window strategies for ExecuteWithToolsOptions.ContextStrategy.
+// Empty is treated as StrategyCompact.
+const (
+	// StrategyCompact summarises older history into a checkpoint as the window
+	// fills. The default.
+	StrategyCompact = "compact"
+
+	// StrategyTruncate drops the oldest messages to fit the window.
+	StrategyTruncate = "truncate"
+)
+
 // ExecuteWithToolsOptions configures a run.
 type ExecuteWithToolsOptions struct {
-	// Backstory is the system prompt.
-	Backstory string
+	// Instructions is the system prompt.
+	Instructions string
 
 	// Text seeds the conversation with user messages.
 	Text []string
@@ -237,8 +250,27 @@ type ExecuteWithToolsOptions struct {
 	// MaxIterations bounds agentic rounds. Zero uses the default.
 	MaxIterations int
 
-	// MaxCalls bounds total tool calls. Zero uses the default.
+	// MaxCalls bounds total tool calls. Zero is unbounded - only the iteration
+	// count is a hard default backstop.
 	MaxCalls int
+
+	// MaxContinuations bounds recovery attempts within a run - a truncated
+	// response, an empty turn, or a retriable provider error. Zero uses the
+	// default.
+	MaxContinuations int
+
+	// MaxCycles bounds how many times the loop nudges the model out of a detected
+	// repetition before giving up. Zero uses the default. A safety guard: the
+	// default encodes a real failure mode.
+	MaxCycles int
+
+	// MaxEmpties bounds consecutive turns that produce neither text nor a tool
+	// call before the run bails. Zero uses the default.
+	MaxEmpties int
+
+	// MaxDuration bounds the wall-clock time of a run, checked at each iteration
+	// boundary. Zero is unbounded.
+	MaxDuration time.Duration
 
 	// MaxSettles bounds how many times the model is nudged to record an outcome
 	// before the run is surfaced as unsettled. Zero uses the default.
@@ -250,13 +282,31 @@ type ExecuteWithToolsOptions struct {
 	// "completed", which is exactly the failure mode settlement removes.
 	MaxSettles int
 
-	// MaxTokens bounds a single response. Zero lets the provider decide.
+	// LimitCheckpoints are the percentages of a bounded limit at which the model
+	// is told it is approaching that limit. Nil uses the default; an empty slice
+	// disables the notices.
+	LimitCheckpoints []int
+
+	// MaxTokens bounds a single response. Nil is unbounded - the request carries
+	// no cap, so the model produces its full output.
 	//
 	// @note there is deliberately no Temperature. Reasoning models ignore or
 	// reject it, providers disagree on its range, and a coding agent wants the
 	// model's default behaviour rather than a sampling knob nobody tunes
 	// deliberately.
 	MaxTokens *int
+
+	// ContextStrategy selects what happens as the conversation approaches the
+	// model's context window: StrategyCompact summarises older history into a
+	// checkpoint with a model call, StrategyTruncate drops the oldest messages to
+	// fit. Empty means StrategyCompact - the default - so the library and the CLI
+	// agree without the caller having to opt in. CompactMinTokens,
+	// CompactMinMessages and CompactTriggerRatio tune when compaction fires; zero
+	// uses the built-in default for each.
+	ContextStrategy     string
+	CompactMinTokens    int
+	CompactMinMessages  int
+	CompactTriggerRatio float64
 }
 
 // ExecuteWithTools runs an autonomous conversation.
@@ -284,15 +334,24 @@ func ExecuteWithTools(
 		}
 
 		engine, err := loop.New(loop.Options{
-			Client:        client.inner,
-			Backstory:     options.Backstory,
-			Messages:      toLoopMessages(options),
-			Tools:         toLoopTools(withSkillTool(options.Tools, options.Skills)),
-			Skills:        toLoopSkills(options.Skills),
-			MaxIterations: options.MaxIterations,
-			MaxCalls:      options.MaxCalls,
-			MaxSettles:    settleBudget(options),
-			MaxTokens:     options.MaxTokens,
+			Client:              client.inner,
+			Instructions:        options.Instructions,
+			Messages:            toLoopMessages(options),
+			Tools:               toLoopTools(withSkillTool(options.Tools, options.Skills)),
+			Skills:              toLoopSkills(options.Skills),
+			MaxIterations:       options.MaxIterations,
+			MaxCalls:            options.MaxCalls,
+			MaxContinuations:    options.MaxContinuations,
+			MaxCycles:           options.MaxCycles,
+			MaxEmpties:          options.MaxEmpties,
+			MaxDuration:         options.MaxDuration,
+			MaxSettles:          settleBudget(options),
+			MaxTokens:           options.MaxTokens,
+			LimitCheckpoints:    options.LimitCheckpoints,
+			Compact:             options.ContextStrategy != StrategyTruncate,
+			CompactMinTokens:    options.CompactMinTokens,
+			CompactMinMessages:  options.CompactMinMessages,
+			CompactTriggerRatio: options.CompactTriggerRatio,
 		})
 		if err != nil {
 			errs <- err

@@ -9,6 +9,14 @@
 # field's path upper-cased with dots as underscores. Env vars override the file.
 #   agent.model           -> ZOT_AGENT_MODEL
 #   agent.max_iterations  -> ZOT_AGENT_MAX_ITERATIONS
+#   agent.max_settles     -> ZOT_AGENT_MAX_SETTLES
+#   agent.max_calls       -> ZOT_AGENT_MAX_CALLS
+#   agent.max_time        -> ZOT_AGENT_MAX_TIME
+#   agent.max_tokens      -> ZOT_AGENT_MAX_TOKENS
+#   agent.max_continuations -> ZOT_AGENT_MAX_CONTINUATIONS
+#   agent.max_cycles      -> ZOT_AGENT_MAX_CYCLES
+#   agent.max_empties     -> ZOT_AGENT_MAX_EMPTIES
+#   agent.context_strategy -> ZOT_AGENT_CONTEXT_STRATEGY
 #   ui.plain              -> ZOT_UI_PLAIN
 #   default_backend       -> ZOT_DEFAULT_BACKEND
 #
@@ -21,7 +29,7 @@
 #   together   -> TOGETHER_API_KEY        cerebras   -> CEREBRAS_API_KEY
 #   xai        -> XAI_API_KEY             moonshot   -> MOONSHOT_API_KEY
 #   zai        -> ZAI_API_KEY             qwen       -> DASHSCOPE_API_KEY
-#   ollama     -> none (local)
+#   vercel     -> AI_GATEWAY_API_KEY     ollama     -> none (local)
 
 agent:
   # Model name that drives the agent, as the selected provider names it. zot
@@ -33,12 +41,79 @@ agent:
   # rather than a configuration one, which is much harder to read.
   model: 'glm-5.2'
 
-  # Safety cap on plan/act/observe cycles before the agent is forced to stop.
+  # The one finite backstop on run length: the maximum number of plan/act/observe
+  # cycles before the agent is forced to stop. Tool calls and time are unbounded
+  # by default (see below); this is not.
   max_iterations: 1000000
 
-  # Optional override of the built-in system instruction. Leave blank to use the
-  # default fully-autonomous backstory.
-  # backstory: ''
+  # A run ends only when the agent records an outcome, by calling the _success or
+  # _failure tool - never because its prose sounds finished. max_settles is how
+  # many times the agent is nudged to do so before the run is surfaced as
+  # unsettled: how hard zot pushes the model to finish properly. Default 20.
+  # max_settles: 20
+
+  # Cap on the total number of tool calls across a run, independent of
+  # iterations (one iteration can request several). Unbounded unless you set it -
+  # max_iterations is the only finite default backstop.
+  # max_calls: 5000
+
+  # Cap on the wall-clock time of a run, as a duration ("30m", "2h", "90s").
+  # Checked at each step, so a run stops soon after the deadline. Unbounded
+  # unless you set it.
+  # max_time: '30m'
+
+  # Cap on the output tokens of a single model response. Unbounded unless you set
+  # it - zot sends no limit, so the model produces its full output. Set it to
+  # bound response length or per-turn cost.
+  # max_tokens: 8192
+
+  # The safety guards below rarely need touching - each default encodes a real
+  # failure mode, so raise or lower them with care. Unlike calls and time, these
+  # cannot be turned off; zero just means "use the default".
+  #
+  # Recovery attempts within a run - a truncated response, an empty turn, or a
+  # retriable provider error. Default 20.
+  # max_continuations: 20
+  #
+  # How many times the loop nudges the model out of a detected repetition before
+  # giving up on it. Default 2.
+  # max_cycles: 2
+  #
+  # Consecutive turns producing neither text nor a tool call before the run
+  # bails. Default 3.
+  # max_empties: 3
+
+  # As a run approaches a bounded limit (iterations, calls, time), the model is
+  # told at each of these percentages - once each - so it can pace itself and
+  # finish before the hard stop rather than being cut off mid-task. Default
+  # [50, 80, 90]. Set to [] to turn the notices off. (Config file only - a list
+  # has no single environment variable.)
+  # limit_checkpoints: [50, 80, 90]
+
+  # What happens as the conversation approaches the model's context window:
+  #   compact  - summarise the older history into a checkpoint (one extra model
+  #              call, so the run keeps a condensed memory of its early turns)
+  #   truncate - drop the oldest messages to fit (no extra call, but early
+  #              context is lost rather than summarised)
+  # Default: compact.
+  # context_strategy: compact
+
+  # Tuning for the compact strategy (ignored under truncate). Each zero uses the
+  # default. Compaction fires once the provider's reported input usage crosses
+  # compact_trigger_ratio of the window AND clears both floors - summarising a
+  # short thread costs more than carrying it whole.
+  # compact_trigger_ratio: 0.9   # fraction of the window at which to compact
+  # compact_min_tokens: 50000    # don't compact below this input-token size
+  # compact_min_messages: 20     # ...or below this many summarisable messages
+  #
+  # Note: the 50000 default is larger than some models' whole context window, so
+  # on a small-window model compaction never fires and the run effectively falls
+  # back to truncation. Lower compact_min_tokens (e.g. to a fraction of the
+  # window) to compact on such a model.
+
+  # Optional override of the built-in system prompt. Leave blank to use the
+  # default fully-autonomous instructions.
+  # instructions: ''
 
 # Presentation. Both are also flags: --diff and --plain.
 ui:
@@ -80,6 +155,24 @@ backends:
   # A local model needs no key.
   ollama:
     # base_url: 'http://localhost:11434/v1'
+
+  # Model gateways - one endpoint fronting many providers, addressed by a
+  # provider-qualified model name like 'openai/gpt-4o' or 'anthropic/claude-5-sonnet'
+  # passed to --model. These two have a fixed endpoint, so the key is all they need.
+  openrouter:
+    # api_key: '$OPENROUTER_API_KEY'
+
+  vercel:
+    # api_key: '$AI_GATEWAY_API_KEY'
+
+  # The Cloudflare AI Gateway is also a gateway, but its URL carries your account
+  # and gateway ids, so there is no fixed endpoint - name the provider and give
+  # the compat URL. The key is the downstream provider's.
+  # cloudflare:
+  #   provider: cloudflare
+  #   base_url: 'https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat'
+  #   api_key: '$OPENAI_API_KEY'
+  #   # headers: { cf-aig-authorization: 'Bearer <gateway-token>' }  # if the gateway is authenticated
 
   # Anything else that speaks the OpenAI chat-completions API. A custom endpoint
   # must be https (unless loopback) and needs its own key: zot will not forward a

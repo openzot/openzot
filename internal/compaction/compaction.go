@@ -33,20 +33,21 @@ const (
 // MessageType identifies what a message is.
 //
 // Named rather than a bare string because compaction branches on it in two
-// places that matter: a backstory is never summarised and is always re-ordered
-// to the front, and only conversational types reach the summary prompt. A typo
-// would quietly summarise away a system prompt.
+// places that matter: the system prompt is never summarised and is always
+// re-ordered to the front, and only conversational types reach the summary
+// prompt. A typo would quietly summarise away a system prompt.
 type MessageType string
 
 // The message types compaction distinguishes. Others pass through untouched.
 const (
-	TypeUser        MessageType = "user"
-	TypeBot         MessageType = "bot"
-	TypeContext     MessageType = "context"
-	TypeInstruction MessageType = "instruction"
-	TypeReasoning   MessageType = "reasoning"
-	TypeBackstory   MessageType = "backstory"
-	TypeActivity    MessageType = "activity"
+	TypeUser      MessageType = "user"
+	TypeBot       MessageType = "bot"
+	TypeContext   MessageType = "context"
+	TypeReasoning MessageType = "reasoning"
+	// TypeInstructions is the run's system prompt: never summarised, always
+	// hoisted to the front.
+	TypeInstructions MessageType = "instructions"
+	TypeActivity     MessageType = "activity"
 )
 
 // Message is the minimal shape compaction operates on.
@@ -118,7 +119,7 @@ type Check struct {
 	// ShouldCompact is false.
 	MessagesToSummarize []Message
 
-	// MessagesToKeep is the recent tail preserved verbatim, with any backstory
+	// MessagesToKeep is the recent tail preserved verbatim, with any system-prompt
 	// messages hoisted to the front.
 	MessagesToKeep []Message
 
@@ -169,7 +170,7 @@ func CountMessagesTokens(model string, messages []Message) int {
 //
 // It declines in three cases: under the trigger threshold, under MinMessages,
 // or when the split leaves nothing summarisable - which happens when the head is
-// entirely backstory. Producing a summary of nothing is worse than not
+// entirely the system prompt. Producing a summary of nothing is worse than not
 // compacting.
 func CheckCompaction(messages []Message, options Options) Check {
 	estimated := CountMessagesTokens(options.Model, messages)
@@ -197,7 +198,7 @@ func CheckCompaction(messages []Message, options Options) Check {
 // SplitMessagesForCompaction divides a conversation into the head to summarise
 // and the tail to keep.
 //
-// Backstory messages are never summarised - they carry the system context the
+// System-prompt messages are never summarised - they carry the system context the
 // model must not lose - so any found in the head are moved to the front of the
 // keep bucket instead, ready for Apply to place them ahead of the summary.
 func SplitMessagesForCompaction(messages []Message, options Options) Split {
@@ -219,11 +220,11 @@ func SplitMessagesForCompaction(messages []Message, options Options) Split {
 
 	head, tail := messages[:splitIndex], messages[splitIndex:]
 
-	var backstory, summarizable []Message
+	var instructions, summarizable []Message
 
 	for _, message := range head {
-		if message.Type == TypeBackstory {
-			backstory = append(backstory, message)
+		if message.Type == TypeInstructions {
+			instructions = append(instructions, message)
 		} else {
 			summarizable = append(summarizable, message)
 		}
@@ -233,22 +234,21 @@ func SplitMessagesForCompaction(messages []Message, options Options) Split {
 		return Split{MessagesToKeep: messages}
 	}
 
-	keep := make([]Message, 0, len(backstory)+len(tail))
-	keep = append(keep, backstory...)
+	keep := make([]Message, 0, len(instructions)+len(tail))
+	keep = append(keep, instructions...)
 	keep = append(keep, tail...)
 
 	return Split{MessagesToSummarize: summarizable, MessagesToKeep: keep}
 }
 
 // summarisableTypes are the message types that carry substantive conversation.
-// Backstory and activity are excluded: they add noise to a summary without
+// The system prompt and activity are excluded: they add noise to a summary without
 // adding conversational value.
 var summarisableTypes = map[MessageType]struct{}{
-	TypeUser:        {},
-	TypeBot:         {},
-	TypeContext:     {},
-	TypeInstruction: {},
-	TypeReasoning:   {},
+	TypeUser:      {},
+	TypeBot:       {},
+	TypeContext:   {},
+	TypeReasoning: {},
 }
 
 // BuildSummaryPrompt renders the prompt asking a model to condense the history.
@@ -299,9 +299,9 @@ Do not respond to the conversation; only output the summary in the format above.
 
 // ApplySummary merges a generated summary back into the conversation.
 //
-// The resulting order is backstory, then summary, then the recent tail. The
+// The resulting order is the system prompt, then summary, then the recent tail. The
 // system prompt has to come first or the model reads the summary without knowing
-// who it is, and a summary placed before the backstory is a surprisingly common
+// who it is, and a summary placed before the system prompt is a surprisingly common
 // way to lose an agent's persona mid-run.
 //
 // The summary carries the ids it replaced in meta.summarizedIds, so a caller can
@@ -315,11 +315,11 @@ func ApplySummary(messagesToKeep []Message, summaryText string, messagesToSummar
 		}
 	}
 
-	var backstory, rest []Message
+	var instructions, rest []Message
 
 	for _, message := range messagesToKeep {
-		if message.Type == TypeBackstory {
-			backstory = append(backstory, message)
+		if message.Type == TypeInstructions {
+			instructions = append(instructions, message)
 		} else {
 			rest = append(rest, message)
 		}
@@ -339,8 +339,8 @@ func ApplySummary(messagesToKeep []Message, summaryText string, messagesToSummar
 		},
 	}
 
-	merged := make([]Message, 0, len(backstory)+1+len(rest))
-	merged = append(merged, backstory...)
+	merged := make([]Message, 0, len(instructions)+1+len(rest))
+	merged = append(merged, instructions...)
 	merged = append(merged, summary)
 	merged = append(merged, rest...)
 

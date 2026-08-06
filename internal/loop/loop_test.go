@@ -102,11 +102,20 @@ func TestNewAppliesDefaults(t *testing.T) {
 	}
 
 	if engine.maxIterations != DefaultMaxIterations ||
-		engine.maxCalls != DefaultMaxCalls ||
 		engine.maxContinuations != DefaultMaxContinuations ||
 		engine.maxCycles != DefaultMaxCycles ||
 		engine.maxEmpties != DefaultMaxEmpties {
 		t.Errorf("defaults not applied: %+v", engine)
+	}
+
+	// calls and time are unbounded unless set - only the iteration count is a
+	// hard default backstop
+	if engine.maxCalls != 0 {
+		t.Errorf("maxCalls = %d, want 0 (unbounded) by default", engine.maxCalls)
+	}
+
+	if engine.maxDuration != 0 {
+		t.Errorf("maxDuration = %v, want unbounded by default", engine.maxDuration)
 	}
 
 	// settle mode is opt-in
@@ -421,18 +430,18 @@ func TestEventsAreEmitted(t *testing.T) {
 	}
 }
 
-func TestBackstoryRendersSkillsAndSettleInstruction(t *testing.T) {
+func TestInstructionsRendersSkillsAndSettleInstruction(t *testing.T) {
 	engine, err := New(Options{
-		Client:     stub(t, []string{stop()}),
-		Backstory:  "you are an agent",
-		Skills:     []Skill{{Name: "deploy", Description: "ship it", Path: "/skills/deploy/SKILL.md"}},
-		MaxSettles: 5,
+		Client:       stub(t, []string{stop()}),
+		Instructions: "you are an agent",
+		Skills:       []Skill{{Name: "deploy", Description: "ship it", Path: "/skills/deploy/SKILL.md"}},
+		MaxSettles:   5,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	backstory := engine.backstory()
+	instructions := engine.instructions()
 
 	for _, want := range []string{
 		"you are an agent",
@@ -442,19 +451,19 @@ func TestBackstoryRendersSkillsAndSettleInstruction(t *testing.T) {
 		SuccessTool,
 		FailureTool,
 	} {
-		if !strings.Contains(backstory, want) {
-			t.Errorf("backstory is missing %q:\n%s", want, backstory)
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions is missing %q:\n%s", want, instructions)
 		}
 	}
 }
 
-func TestBackstoryOmitsSettleInstructionWhenOff(t *testing.T) {
-	engine, err := New(Options{Client: stub(t, []string{stop()}), Backstory: "plain"})
+func TestInstructionsOmitsSettleInstructionWhenOff(t *testing.T) {
+	engine, err := New(Options{Client: stub(t, []string{stop()}), Instructions: "plain"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 
-	if strings.Contains(engine.backstory(), SuccessTool) {
+	if strings.Contains(engine.instructions(), SuccessTool) {
 		t.Error("the settle instruction must not appear when settle mode is off")
 	}
 }

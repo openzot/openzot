@@ -72,7 +72,71 @@ func DefaultTools() Tools {
 			},
 			Handler: shellHandler,
 		},
+
+		"plan": {
+			Description: "Lay out an ordered plan for the task. Call this at the start, and again whenever you change approach. The plan is recorded so your strategy is visible and you can hold yourself to it.",
+			Parameters: FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"steps": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "The steps, in the order you will do them",
+					},
+					"rationale": map[string]any{"type": "string", "description": "Why this approach"},
+				},
+				"required": []string{"steps"},
+			},
+			Handler: planHandler,
+		},
+
+		"progress": {
+			Description: "Record progress on the task: what is done, what you are doing now, and anything blocking you. Call this as you complete steps so your state stays visible across a long run.",
+			Parameters: FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"completed": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Steps finished so far"},
+					"current":   map[string]any{"type": "string", "description": "What you are working on now"},
+					"blockers":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Anything preventing progress"},
+					"nextSteps": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "What comes next"},
+				},
+			},
+			Handler: progressHandler,
+		},
 	}
+}
+
+// planHandler records the model's plan.
+//
+// Plan and progress are reflective tools: they change nothing on disk. Their
+// value is that the model has to state its approach and its status in a
+// structured form, which both organises its own reasoning and makes the run
+// followable in the viewer and the session log. The step content lives in the
+// call's arguments; the result only has to acknowledge it.
+func planHandler(_ context.Context, args map[string]any) (any, error) {
+	steps, _ := args["steps"].([]any)
+
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("a plan needs at least one step")
+	}
+
+	message := fmt.Sprintf("plan recorded: %d step(s)", len(steps))
+
+	if rationale, _ := args["rationale"].(string); rationale != "" {
+		message += " - " + rationale
+	}
+
+	return message, nil
+}
+
+// progressHandler records a progress checkpoint. Like plan, the content is in
+// the arguments and the result is an acknowledgement.
+func progressHandler(_ context.Context, args map[string]any) (any, error) {
+	if current, _ := args["current"].(string); current != "" {
+		return "progress recorded: " + current, nil
+	}
+
+	return "progress recorded", nil
 }
 
 // maxToolOutput bounds what a tool may return.

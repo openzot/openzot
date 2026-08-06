@@ -5,28 +5,29 @@ import (
 	"testing"
 )
 
-func TestCallBudgetLowThresholdIsProportionalButCapped(t *testing.T) {
-	tests := []struct {
-		maxCalls int
-		want     int
-	}{
-		// proportional on a small budget
-		{10, 2},
-		{25, 5},
-		{50, 10},
-
-		// capped on a large one: a fifth of 1000 calls would warn so early the
-		// notice would be noise
-		{1000, CallBudgetLowCap},
-
-		// never zero, or the warning could never fire
-		{1, 1},
-		{3, 1},
+func TestNormalizeCheckpoints(t *testing.T) {
+	// nil means "use the defaults"; an empty (non-nil) slice means "disabled"
+	if got := normalizeCheckpoints(nil); len(got) == 0 {
+		t.Error("nil checkpoints must fall back to the defaults")
 	}
 
-	for _, test := range tests {
-		if got := callBudgetLowThreshold(test.maxCalls); got != test.want {
-			t.Errorf("callBudgetLowThreshold(%d) = %d, want %d", test.maxCalls, got, test.want)
+	if got := normalizeCheckpoints([]int{}); len(got) != 0 {
+		t.Errorf("an explicit empty list must disable checkpoints, got %v", got)
+	}
+
+	// sorted, deduped, and clamped to 1..99 (0 is no progress, 100 is the stop)
+	got := normalizeCheckpoints([]int{90, 50, 50, 0, 100, 150, 80})
+
+	want := []int{50, 80, 90}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeCheckpoints = %v, want %v", got, want)
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("normalizeCheckpoints = %v, want %v", got, want)
+
+			break
 		}
 	}
 }
@@ -39,7 +40,7 @@ func TestNoticesCarryThePrefix(t *testing.T) {
 		"cycle":      cycleNotice("you keep calling the same tool"),
 		"empty":      emptyNotice(),
 		"settle":     settleNotice(),
-		"budget":     callBudgetLowNotice(3),
+		"checkpoint": limitCheckpointNotice(iterationLimit, 80, "8 of 10"),
 		"truncation": truncationNotice(),
 	}
 
@@ -79,10 +80,81 @@ func TestSettleNoticeNamesBothTerminalTools(t *testing.T) {
 	}
 }
 
-func TestCallBudgetLowNoticeStatesTheRemainder(t *testing.T) {
-	if got := callBudgetLowNotice(4); !strings.Contains(got, "4 tool call") {
-		t.Errorf("the notice must state how many calls are left: %q", got)
+func TestLimitCheckpointNoticeStatesTheProgress(t *testing.T) {
+	got := limitCheckpointNotice(toolCallLimit, 80, "40 of 50")
+
+	// the model needs the percentage and the concrete usage, in units it can act
+	// on, to pace itself
+	for _, want := range []string{"80%", "tool-call", "40 of 50 tool calls"} {
+		if !containsFold(got, want) {
+			t.Errorf("the checkpoint notice must mention %q: %q", want, got)
+		}
 	}
+}
+
+// The guidance must scale with how close the limit is. "Finish now" at the
+// halfway mark would make the model quit with half its budget unused, which is
+// worse than saying nothing; "keep an eye on it" near the end is too weak.
+func TestCheckpointGuidanceScalesWithUrgency(t *testing.T) {
+	early := limitCheckpointNotice(toolCallLimit, 50, "25 of 50")
+	near := limitCheckpointNotice(toolCallLimit, 90, "45 of 50")
+
+	// at the halfway mark: awareness, not a demand to stop
+	if containsFold(early, "close to the limit") || containsFold(early, "stop and complete") {
+		t.Errorf("a 50%% notice must not tell the model to finish now: %q", early)
+	}
+
+	if !containsFold(early, "budget left") && !containsFold(early, "pace yourself") {
+		t.Errorf("a 50%% notice should be a gentle heads-up: %q", early)
+	}
+
+	// near the end: an actual instruction to finish
+	if !containsFold(near, "close to the limit") || !containsFold(near, "now") {
+		t.Errorf("a 90%% notice must push the model to finish: %q", near)
+	}
+
+	// the two must genuinely differ
+	if early == near {
+		t.Error("the halfway and near-limit notices must not be identical")
+	}
+}
+
+// The three limits must read distinctly - a heads-up about tool calls must not
+// be mistakable for one about time - and each must carry advice suited to it,
+// so the model knows which constraint it is up against and what to do.
+func TestEachLimitReadsDistinctly(t *testing.T) {
+	iter := limitCheckpointNotice(iterationLimit, 80, "8 of 10")
+	call := limitCheckpointNotice(toolCallLimit, 80, "40 of 50")
+	time := limitCheckpointNotice(timeLimit, 80, "1m30s of 2m0s")
+
+	// each names its own limit
+	if !containsFold(iter, "step budget") || !containsFold(call, "tool-call budget") || !containsFold(time, "time budget") {
+		t.Error("each notice must name its own limit")
+	}
+
+	// and none reads like another - the three are genuinely different messages
+	if iter == call || call == time || iter == time {
+		t.Error("the three limit notices must not be identical")
+	}
+
+	// the units are the ones the model counts in
+	if !containsFold(iter, "steps") || !containsFold(call, "tool calls") {
+		t.Errorf("usage must carry units:\n%s\n%s", iter, call)
+	}
+
+	// and the advice names what wastes this particular budget (at the 80%
+	// prioritising band), which time - spent by the clock, not an action - omits
+	if !containsFold(call, "redundant") {
+		t.Errorf("the tool-call notice should name redundant calls as the waste to avoid: %q", call)
+	}
+
+	if containsFold(time, "redundant") || containsFold(time, "investigation") {
+		t.Errorf("the time notice has no controllable waste to name: %q", time)
+	}
+}
+
+func containsFold(haystack, needle string) bool {
+	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
 }
 
 func TestTerminalToolsAreWellFormed(t *testing.T) {

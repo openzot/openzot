@@ -11,7 +11,7 @@ CMDS = zot
 GOOS   ?= $(shell go env GOHOSTOS)
 GOARCH ?= $(shell go env GOHOSTARCH)
 
-.PHONY: help build dev clean test race cover vet lint fmt cross
+.PHONY: help build dev clean test race cover cover-check vet lint fmt cross
 
 # Listing the targets rather than assuming one: zot has two build variants that
 # differ in what the binary may read from disk, and picking the wrong one
@@ -24,6 +24,7 @@ help:
 	@echo "  make test       Run the test suite"
 	@echo "  make race       Run the test suite under the race detector"
 	@echo "  make cover      Report per-package test coverage"
+	@echo "  make cover-check  Fail if total coverage is below 90% (CI gate)"
 	@echo "  make vet        Run go vet over both build variants"
 	@echo "  make fmt        Format the tree"
 	@echo "  make lint       Alias for vet"
@@ -66,6 +67,11 @@ race:
 
 cover:
 	@go test -cover ./... -count=1 | grep coverage | sed 's|github.com/openzot/openzot||'
+
+# The coverage gate, shared with CI so local and CI enforce the same number.
+# Override the bar with COVERAGE_THRESHOLD=95 make cover-check.
+cover-check:
+	@./scripts/coverage.sh
 
 # Both variants, because a build tag can break a compile the default never
 # reaches - and the developer build is the one no pipeline exercises.

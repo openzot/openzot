@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -88,6 +89,12 @@ var builtinBackends = map[string]struct {
 	"zai":        {secretEnv: "ZAI_API_KEY"},
 	"qwen":       {secretEnv: "DASHSCOPE_API_KEY"},
 	"ollama":     {},
+
+	// The Vercel AI Gateway: a fixed OpenAI-compatible endpoint, so it works
+	// with just the key. Cloudflare's is deliberately absent - its endpoint is
+	// account-specific, so a run configures it as a backend with a base_url
+	// rather than reaching for it by name with no setup.
+	"vercel": {secretEnv: "AI_GATEWAY_API_KEY"},
 }
 
 // BackendProvider resolves which model provider a backend addresses.
@@ -126,9 +133,78 @@ type Agent struct {
 	// MaxIterations caps how many plan/act/observe cycles the agent may run
 	// before it is forced to stop.
 	MaxIterations int `yaml:"max_iterations"`
-	// Backstory optionally overrides the built-in system instruction. Leave
-	// empty to use zot.DefaultBackstory.
-	Backstory string `yaml:"backstory"`
+	// MaxSettles bounds how many times the agent is nudged to record an outcome
+	// (call _success or _failure) before the run is surfaced as unsettled. This
+	// is "how hard we push the model to finish properly". Zero uses the built-in
+	// default.
+	MaxSettles int `yaml:"max_settles"`
+	// MaxCalls caps the total number of tool calls across a run, independently of
+	// iterations (one iteration can request several). Zero is unbounded - only
+	// max_iterations is a finite default.
+	MaxCalls int `yaml:"max_calls"`
+	// MaxTime caps the wall-clock time of a run, as a duration string ("30m",
+	// "2h", "90s"). Empty is unbounded.
+	MaxTime string `yaml:"max_time"`
+	// MaxTokens caps the output tokens of a single model response. Zero is
+	// unbounded - like max_calls and max_time, zot sends no cap, so the model
+	// produces its full output. A positive value caps a single response.
+	MaxTokens int `yaml:"max_tokens"`
+	// MaxContinuations caps recovery attempts within a run - a truncated
+	// response, an empty turn, or a retriable provider error. Zero uses the
+	// built-in default.
+	MaxContinuations int `yaml:"max_continuations"`
+	// MaxCycles is how many times the loop nudges the model out of a detected
+	// repetition before giving up. Zero uses the built-in default. A safety
+	// guard - the default encodes a real failure, so raise it with care.
+	MaxCycles int `yaml:"max_cycles"`
+	// MaxEmpties caps consecutive empty turns before the run bails. Zero uses the
+	// built-in default.
+	MaxEmpties int `yaml:"max_empties"`
+	// LimitCheckpoints are the percentages of a bounded limit (iterations, calls,
+	// time) at which the model is told it is approaching that limit, so it can
+	// pace itself. Unset uses the built-in default (50, 80, 90); an explicit
+	// empty list turns the notices off.
+	LimitCheckpoints []int `yaml:"limit_checkpoints"`
+	// ContextStrategy decides what happens when the conversation approaches the
+	// model's context window: "compact" summarises the older history into a
+	// checkpoint (an extra model call, higher fidelity), "truncate" simply drops
+	// the oldest messages to fit. Empty uses the default, "compact".
+	ContextStrategy string `yaml:"context_strategy"`
+	// CompactMinTokens is the floor of estimated input tokens below which the
+	// compact strategy does not bother summarising - a short conversation is
+	// cheaper to carry whole than to summarise. Zero uses the built-in default.
+	CompactMinTokens int `yaml:"compact_min_tokens"`
+	// CompactMinMessages is the floor on how many messages must be eligible for
+	// summarising before the compact strategy runs. Zero uses the default.
+	CompactMinMessages int `yaml:"compact_min_messages"`
+	// CompactTriggerRatio is the fraction of the context window at which the
+	// compact strategy fires (0.9 = compact once the estimate reaches 90% of the
+	// window). Zero uses the default. Must be within (0, 1].
+	CompactTriggerRatio float64 `yaml:"compact_trigger_ratio"`
+	// Instructions optionally overrides the built-in system prompt. Leave
+	// empty to use zot.DefaultInstructions.
+	Instructions string `yaml:"instructions"`
+}
+
+// MaxDuration parses Agent.MaxTime into a duration. An empty value is zero
+// (unbounded); a malformed value is an error so a typo in the config is caught
+// at load rather than silently ignored.
+func (a Agent) MaxDuration() (time.Duration, error) {
+	value := strings.TrimSpace(a.MaxTime)
+	if value == "" {
+		return 0, nil
+	}
+
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a duration (use forms like \"30m\", \"2h\", \"90s\")", a.MaxTime)
+	}
+
+	if d < 0 {
+		return 0, fmt.Errorf("%q is negative", a.MaxTime)
+	}
+
+	return d, nil
 }
 
 // Defaults returns the built-in configuration used when nothing else is set.
@@ -144,8 +220,9 @@ type Agent struct {
 func Defaults() Config {
 	return Config{
 		Agent: Agent{
-			Model:         "glm-5.2",
-			MaxIterations: 1_000_000,
+			Model:           "glm-5.2",
+			MaxIterations:   1_000_000,
+			ContextStrategy: agent.StrategyCompact,
 		},
 		DefaultBackend: "zai",
 	}
@@ -178,6 +255,16 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 
+	// A portable build carries a configuration compiled into the binary. It is
+	// applied last - after the file and the environment - so the values an
+	// operator baked in are authoritative: the whole point of a portable build
+	// is that the runtime environment cannot redirect it. Fields the overlay
+	// leaves unset fall through to the file, env and defaults, so a key can still
+	// come from the environment if it was deliberately not baked in.
+	if err := applyPortableOverlay(&cfg, portableConfig()); err != nil {
+		return cfg, err
+	}
+
 	resolveBackends(&cfg)
 
 	if cfg.DefaultBackend == "" {
@@ -185,6 +272,29 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// applyPortableOverlay merges a compiled-in configuration layer onto cfg,
+// overriding only the fields the document actually sets - an omitted field
+// leaves whatever the file, env or defaults resolved. Empty data is a no-op, so
+// a standard build (which carries none) passes straight through.
+func applyPortableOverlay(cfg *Config, data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return fmt.Errorf("parse compiled-in config: %w", err)
+	}
+
+	return nil
+}
+
+// Portable reports whether this binary carries a compiled-in configuration - a
+// portable build (see portableConfig). Surfaced on `zot --version` so "why is it
+// ignoring my config file" is answerable without reading the source.
+func Portable() bool {
+	return len(portableConfig()) > 0
 }
 
 // resolveBackends ensures the built-in backends exist, fills their default
@@ -290,6 +400,26 @@ func (c Config) Validate() error {
 	}
 	if c.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("agent.max_iterations must be a positive number")
+	}
+	if _, err := c.Agent.MaxDuration(); err != nil {
+		return fmt.Errorf("agent.max_time: %w", err)
+	}
+	for _, p := range c.Agent.LimitCheckpoints {
+		if p < 1 || p > 99 {
+			return fmt.Errorf("agent.limit_checkpoints: %d is out of range (each must be 1-99)", p)
+		}
+	}
+	switch c.Agent.ContextStrategy {
+	case "", agent.StrategyCompact, agent.StrategyTruncate:
+	default:
+		return fmt.Errorf("agent.context_strategy: %q is not valid (use %q or %q)",
+			c.Agent.ContextStrategy, agent.StrategyCompact, agent.StrategyTruncate)
+	}
+	if r := c.Agent.CompactTriggerRatio; r != 0 && (r <= 0 || r > 1) {
+		return fmt.Errorf("agent.compact_trigger_ratio: %g is out of range (must be within (0, 1])", r)
+	}
+	if c.Agent.CompactMinTokens < 0 || c.Agent.CompactMinMessages < 0 {
+		return fmt.Errorf("agent.compact_min_tokens / compact_min_messages must not be negative")
 	}
 	if _, ok := c.Backends[c.DefaultBackend]; !ok {
 		return fmt.Errorf("default backend %q is not configured", c.DefaultBackend)

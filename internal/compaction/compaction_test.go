@@ -21,7 +21,7 @@ func TestEveryMessageTypeIsPriced(t *testing.T) {
 	}{
 		{name: "user", message: Message{Type: TypeUser, Text: "run the tests"}},
 		{name: "bot", message: Message{Type: TypeBot, Text: "they pass"}},
-		{name: "backstory", message: Message{Type: TypeBackstory, Text: "you are a coding agent"}},
+		{name: "instructions", message: Message{Type: TypeInstructions, Text: "you are a coding agent"}},
 		{name: "context", message: Message{Type: TypeContext, Text: "a summary of earlier work"}},
 		{name: "reasoning", message: Message{Type: TypeReasoning, Text: "let me look at the failing case"}},
 	}

@@ -44,14 +44,23 @@ built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
 ## Running a task
 
 zot talks straight to a model provider, so a run needs nothing but that
-provider's key. These examples use OpenAI; swap the variable and `--backend` for
-any other - see [Backends](../README.md#backends) for the full list.
+provider's key. These examples use the default pair - the `zai` backend running
+`glm-5.2` - so they need no flags at all. For any other provider, pass the
+variable it reads along with `--backend` **and** `--model`, since the default
+model only means something on its own backend:
+
+```bash
+docker run --rm -it --env OPENAI_API_KEY --volume "$PWD":/workspace \
+  ghcr.io/openzot/openzot:latest --backend openai --model gpt-5.4-mini "…"
+```
+
+See [Backends](../README.md#backends) for the full list.
 
 ```bash
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
-  --env OPENAI_API_KEY \
+  --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
   ghcr.io/openzot/openzot:latest "add input validation to the signup handler and a test"
 ```
@@ -73,7 +82,7 @@ initialises it from the image and the default user owns it:
 
 ```bash
 docker run --rm -it \
-  --env OPENAI_API_KEY \
+  --env ZAI_API_KEY \
   --volume zot-workspace:/workspace \
   ghcr.io/openzot/openzot:latest "scaffold a tiny snake game in python"
 ```
@@ -89,7 +98,7 @@ or a config file you push anywhere:
 
 ```bash
 # pass through a variable already exported in your shell
-docker run --env OPENAI_API_KEY …
+docker run --env ZAI_API_KEY …
 
 # or from a file the daemon reads at run time
 docker run --env-file ./zot.env …
@@ -121,7 +130,7 @@ Global context lives in the config directory, so mount it read-only:
 ```bash
 docker run --rm -it \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
-  --env OPENAI_API_KEY \
+  --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
   --volume "$HOME/.config/zot":/home/zot/.config/zot:ro \
   ghcr.io/openzot/openzot:latest "…"
@@ -140,7 +149,7 @@ streams plain unstyled output instead, which is what you want from a pipeline:
 ```bash
 docker run --rm \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
-  --env OPENAI_API_KEY \
+  --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
   ghcr.io/openzot/openzot:latest --max-iterations 40 --task-file TASK.md | tee run.log
 ```
@@ -163,7 +172,7 @@ docker run --rm \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --pids-limit 512 --memory 2g --cpus 2 \
-  --env OPENAI_API_KEY \
+  --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
   ghcr.io/openzot/openzot:latest --task-file TASK.md
 ```

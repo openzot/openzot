@@ -93,8 +93,8 @@ func TestToChatMessagesDropsDanglingRequest(t *testing.T) {
 
 func TestToChatMessagesRoleMapping(t *testing.T) {
 	messages := []Message{
-		{Type: TypeBackstory, Text: "you are an agent"},
-		{Type: TypeContext, Text: "summary of earlier turns"},
+		{Type: TypeInstructions, Text: "you are an agent"},
+		{Type: TypeCheckpoint, Text: "summary of earlier turns"},
 		{Type: TypeReasoning, Text: "thinking out loud"},
 		{Type: TypeBot, Text: "the answer"},
 		{Type: TypeUser, Text: "a question"},

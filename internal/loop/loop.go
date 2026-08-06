@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/openzot/openzot/internal/catalogue"
 	"github.com/openzot/openzot/internal/compaction"
@@ -46,8 +48,8 @@ type Options struct {
 	// Client is the provider connection.
 	Client *provider.Client
 
-	// Backstory is the system prompt.
-	Backstory string
+	// Instructions is the system prompt.
+	Instructions string
 
 	// Messages seeds the conversation.
 	Messages []Message
@@ -58,13 +60,20 @@ type Options struct {
 	// Skills are rendered into the system prompt.
 	Skills []Skill
 
-	// MaxIterations, MaxCalls, MaxContinuations, MaxCycles, MaxEmpties bound the
-	// run. Zero uses the corresponding default.
+	// MaxIterations, MaxContinuations, MaxCycles, MaxEmpties bound the run. Zero
+	// uses the corresponding default.
 	MaxIterations    int
-	MaxCalls         int
 	MaxContinuations int
 	MaxCycles        int
 	MaxEmpties       int
+
+	// MaxCalls bounds total tool calls. Zero (or negative) is unbounded - only
+	// the iteration count is a hard default backstop.
+	MaxCalls int
+
+	// MaxDuration bounds the wall-clock time of a run, checked at each iteration
+	// boundary. Zero is unbounded.
+	MaxDuration time.Duration
 
 	// MaxSettles enables settle mode when positive: the run finishes only when
 	// the model calls a terminal tool. This is what replaces deciding a task is
@@ -73,6 +82,23 @@ type Options struct {
 
 	// MaxTokens bounds a single response.
 	MaxTokens *int
+
+	// LimitCheckpoints are the percentages of a bounded limit at which the model
+	// is told it is approaching that limit. Nil uses DefaultLimitCheckpoints; a
+	// non-nil empty slice disables the notices.
+	LimitCheckpoints []int
+
+	// Compact selects the context-overflow strategy. True (the default) summarises
+	// the older history into a checkpoint with a model call as the window fills;
+	// false truncates - the thread builder drops the oldest messages to fit, and
+	// only an outright provider rejection triggers a no-model structural summary.
+	Compact bool
+
+	// CompactMinTokens, CompactMinMessages and CompactTriggerRatio tune when the
+	// compact strategy fires. Zero uses the corresponding default.
+	CompactMinTokens    int
+	CompactMinMessages  int
+	CompactTriggerRatio float64
 }
 
 // MessageType identifies what a message is.
@@ -80,7 +106,7 @@ type Options struct {
 // A named type rather than a bare string: these values decide how a message is
 // rendered to the provider, whether the runaway backstop scans it, and whether
 // compaction may summarise it away. A typo in a string literal would silently
-// route a message down the wrong path - a backstory summarised as ordinary
+// route a message down the wrong path - a system prompt summarised as ordinary
 // history, say - and nothing would report it.
 type MessageType string
 
@@ -100,12 +126,15 @@ const (
 	// TypeActivity is one half of a tool-call pair.
 	TypeActivity MessageType = "activity"
 
-	// TypeBackstory is system context. Never summarised, and always ordered
-	// ahead of everything else.
-	TypeBackstory MessageType = "backstory"
+	// TypeInstructions is system context - the instructions that shape the run.
+	// Never summarised, and always ordered ahead of everything else.
+	TypeInstructions MessageType = "instructions"
 
-	// TypeContext is injected context, including a compaction summary.
-	TypeContext MessageType = "context"
+	// TypeCheckpoint is a compaction summary of earlier history. It is never
+	// summarised again - preserved verbatim and pinned ahead of the conversation,
+	// so a long run accumulates a chain of segment summaries rather than
+	// re-condensing its own summaries into a lossy summary-of-a-summary.
+	TypeCheckpoint MessageType = "checkpoint"
 )
 
 // Message is one entry in the conversation.
@@ -142,10 +171,17 @@ type Engine struct {
 
 	maxIterations    int
 	maxCalls         int
+	maxDuration      time.Duration
 	maxContinuations int
 	maxCycles        int
 	maxEmpties       int
 	maxSettles       int
+	checkpoints      []int
+
+	compactStrategy     bool
+	compactMinTokens    int
+	compactMinMessages  int
+	compactTriggerRatio float64
 
 	model       string
 	inputBudget int
@@ -198,16 +234,88 @@ func New(options Options) (*Engine, error) {
 	}
 
 	return &Engine{
-		options:          options,
-		model:            model,
-		maxIterations:    pick(options.MaxIterations, DefaultMaxIterations),
-		maxCalls:         pick(options.MaxCalls, DefaultMaxCalls),
-		maxContinuations: pick(options.MaxContinuations, DefaultMaxContinuations),
-		maxCycles:        pick(options.MaxCycles, DefaultMaxCycles),
-		maxEmpties:       pick(options.MaxEmpties, DefaultMaxEmpties),
-		maxSettles:       options.MaxSettles,
-		inputBudget:      budget,
+		options:       options,
+		model:         model,
+		maxIterations: pick(options.MaxIterations, DefaultMaxIterations),
+		// @note calls and time are unbounded unless the caller sets them: only
+		// the iteration count is a hard default backstop. A non-positive value
+		// means "no cap", which is why they are stored raw rather than picked.
+		maxCalls:            nonNegative(options.MaxCalls),
+		maxDuration:         options.MaxDuration,
+		maxContinuations:    pick(options.MaxContinuations, DefaultMaxContinuations),
+		maxCycles:           pick(options.MaxCycles, DefaultMaxCycles),
+		maxEmpties:          pick(options.MaxEmpties, DefaultMaxEmpties),
+		maxSettles:          options.MaxSettles,
+		checkpoints:         normalizeCheckpoints(options.LimitCheckpoints),
+		compactStrategy:     options.Compact,
+		compactMinTokens:    pick(options.CompactMinTokens, DefaultCompactMinTokens),
+		compactMinMessages:  pick(options.CompactMinMessages, DefaultCompactMinMessages),
+		compactTriggerRatio: pickRatio(options.CompactTriggerRatio, DefaultCompactTriggerRatio),
+		inputBudget:         budget,
 	}, nil
+}
+
+// nonNegative clamps a budget to zero, so a negative value means the same as
+// unset - unbounded - rather than an ever-true stop condition.
+func nonNegative(v int) int {
+	if v < 0 {
+		return 0
+	}
+
+	return v
+}
+
+// pickRatio returns value when it is a usable fraction (0, 1], and the fallback
+// otherwise - so an unset (zero) or out-of-range ratio lands on the default.
+func pickRatio(value, fallback float64) float64 {
+	if value > 0 && value <= 1 {
+		return value
+	}
+
+	return fallback
+}
+
+// noteApproachingLimits appends an approaching-limit notice for each configured
+// checkpoint a bounded limit has newly crossed. Only bounded limits are checked:
+// an unbounded call or time budget has nothing to approach, and a checkpoint
+// fires at most once because its per-limit mark only advances.
+func (e *Engine) noteApproachingLimits(messages []Message, budget *Budget, elapsed time.Duration) []Message {
+	if len(e.checkpoints) == 0 {
+		return messages
+	}
+
+	cross := func(mark *int, used, max int, kind limitKind, usage string) {
+		if max <= 0 {
+			return
+		}
+
+		pct := used * 100 / max
+
+		for *mark < len(e.checkpoints) && pct >= e.checkpoints[*mark] {
+			hit := e.checkpoints[*mark]
+			*mark++
+
+			messages = append(messages, Message{
+				Type: TypeUser,
+				Text: limitCheckpointNotice(kind, hit, usage),
+			})
+		}
+	}
+
+	cross(&budget.iterCheckpoint, budget.Iterations, e.maxIterations, iterationLimit,
+		fmt.Sprintf("%d of %d", budget.Iterations, e.maxIterations))
+
+	if e.maxCalls > 0 {
+		cross(&budget.callCheckpoint, budget.Calls, e.maxCalls, toolCallLimit,
+			fmt.Sprintf("%d of %d", budget.Calls, e.maxCalls))
+	}
+
+	if e.maxDuration > 0 {
+		cross(&budget.timeCheckpoint, int(elapsed.Seconds()), int(e.maxDuration.Seconds()), timeLimit,
+			fmt.Sprintf("%s of %s", elapsed.Round(time.Second), e.maxDuration))
+	}
+
+	return messages
 }
 
 // settleMode reports whether the run ends only on a terminal tool call.
@@ -231,9 +339,25 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 	tools := e.toolDefinitions()
 
+	started := time.Now()
+
+	// The prompt-token count the provider reported for the previous turn, used by
+	// the compact strategy to decide whether the window is filling. Zero until the
+	// first turn reports, at which point the estimate stands in.
+	lastInputTokens := 0
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return e.finish(messages, budget, StopAborted, "run cancelled", err)
+		}
+
+		// A time cap is checked at the iteration boundary, like every other
+		// budget. A single long tool call can overrun by one operation - the
+		// shell tool's own timeout bounds that - but the run will not start
+		// another iteration past the deadline.
+		if e.maxDuration > 0 && time.Since(started) >= e.maxDuration {
+			return e.finish(messages, budget, StopTime,
+				fmt.Sprintf("stopped after %s", e.maxDuration), nil)
 		}
 
 		if budget.Iterations >= e.maxIterations {
@@ -245,12 +369,28 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 		emit(Event{Kind: EventIteration, Iteration: budget.Iterations})
 
+		// Tell the model when it crosses a checkpoint of a bounded limit, so it
+		// can pace itself and finish before the hard stop rather than being cut
+		// off mid-task. The notice reflects consumption so far - iterations now,
+		// tool calls and time from the rounds already done.
+		messages = e.noteApproachingLimits(messages, &budget, time.Since(started))
+
+		// The compact strategy summarises older history into a checkpoint as the
+		// window fills, before the request is built - so the run keeps its early
+		// context as a summary rather than having the thread builder drop it. A
+		// no-op under the truncate strategy, or until the window is actually near.
+		messages = e.maybeCompact(ctx, messages, lastInputTokens, emit)
+
 		request, err := e.buildRequest(messages, tools)
 		if err != nil {
 			return e.finish(messages, budget, StopError, "could not assemble the request", err)
 		}
 
 		turn, err := e.runTurn(ctx, request, emit)
+
+		if turn.InputTokens > 0 {
+			lastInputTokens = turn.InputTokens
+		}
 
 		if err != nil {
 			// a context-limit rejection is recoverable: compact and retry
@@ -274,6 +414,11 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 				if ok {
 					messages = compacted
+
+					// the history just shrank; forget the pre-compaction usage so
+					// the next proactive check re-evaluates on the smaller thread
+					// rather than re-compacting on a stale, larger reading
+					lastInputTokens = 0
 
 					continue
 				}
@@ -351,7 +496,11 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 			continue
 		}
 
-		// nothing at all: no text, no tool call
+		// A genuinely empty turn - no text, no reasoning, no tool call - is a stuck
+		// model, bounded tightly by the empty budget in either mode: a run producing
+		// nothing must not burn the whole (much larger) settle budget on silence. In
+		// settle mode the nudge still points at the terminal tools, though - a plain
+		// "say you are finished" would not record the outcome settle mode requires.
 
 		if turn.Text == "" && turn.Reasoning == "" {
 			if budget.Empties >= e.maxEmpties {
@@ -361,12 +510,18 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 			budget.Empties++
 
-			messages = append(messages, Message{Type: TypeUser, Text: emptyNotice()})
+			nudge := emptyNotice()
+			if e.settleMode() {
+				nudge = settleNotice()
+			}
+
+			messages = append(messages, Message{Type: TypeUser, Text: nudge})
 
 			continue
 		}
 
-		// the model stopped talking
+		// The model produced content but did not act. In settle mode that is not an
+		// ending: nudge it toward _success / _failure, up to max_settles.
 
 		if e.settleMode() {
 			if budget.Settles >= e.maxSettles {
@@ -391,6 +546,11 @@ type turnResult struct {
 	Reasoning    string
 	ToolCalls    []provider.ToolCall
 	FinishReason string
+
+	// InputTokens is the prompt-token count the provider reported for this turn,
+	// or zero when it reported none. The compact strategy prefers it over the
+	// local estimate when deciding whether the window is filling.
+	InputTokens int
 }
 
 // runTurn performs a single model call, streaming its output through emit and
@@ -443,6 +603,10 @@ func (e *Engine) runTurn(ctx context.Context, request provider.Request, emit fun
 
 		if event.FinishReason != "" {
 			result.FinishReason = event.FinishReason
+		}
+
+		if event.Usage != nil && event.Usage.PromptTokens > 0 {
+			result.InputTokens = event.Usage.PromptTokens
 		}
 	}
 
@@ -497,7 +661,7 @@ func (e *Engine) dispatch(
 	emit func(Event),
 ) ([]Message, *Result) {
 	for _, call := range calls {
-		if budget.Calls >= e.maxCalls {
+		if e.maxCalls > 0 && budget.Calls >= e.maxCalls {
 			result := e.finish(messages, *budget, StopCalls,
 				fmt.Sprintf("stopped after %d tool calls", budget.Calls), nil)
 
@@ -548,17 +712,6 @@ func (e *Engine) dispatch(
 		emit(Event{Kind: EventToolCallEnd, Tool: name, Result: output})
 
 		messages = append(messages, activityMessage(ActivityResponse, call, output, ""))
-
-		// warn while there is still budget left to act on the warning
-		if !budget.budgetWarned {
-			remaining := e.maxCalls - budget.Calls
-
-			if remaining <= callBudgetLowThreshold(e.maxCalls) {
-				budget.budgetWarned = true
-
-				messages = append(messages, Message{Type: TypeUser, Text: callBudgetLowNotice(remaining)})
-			}
-		}
 	}
 
 	return messages, nil
@@ -593,6 +746,12 @@ func (e *Engine) checkCycle(messages []Message, budget *Budget) ([]Message, *Res
 	detected := thread.DescribeThreadCycle(toThreadMessages(messages), thread.CycleOptions{})
 
 	if detected == "" {
+		// a round that is not cyclic breaks the run of repetitions: the budget
+		// counts *consecutive* cycles, so two unrelated repetitions far apart in a
+		// long run must not add up to a stop. This mirrors the source, which zeroes
+		// its cycle counter the moment a round comes back clean.
+		budget.Cycles = 0
+
 		return nil, nil
 	}
 
@@ -626,12 +785,9 @@ func cycleDetail(heuristic string) string {
 
 // compact condenses the conversation when it no longer fits.
 func (e *Engine) compact(messages []Message) ([]Message, bool) {
-	check := compaction.CheckCompaction(toCompactionMessages(messages), compaction.Options{
-		Model:     e.model,
-		MaxTokens: e.inputBudget,
-	})
+	pinned, head, tail := splitForCheckpoint(messages)
 
-	if !check.ShouldCompact {
+	if len(head) == 0 {
 		return nil, false
 	}
 
@@ -639,11 +795,150 @@ func (e *Engine) compact(messages []Message) ([]Message, bool) {
 	// summarise is what got us here, and a request that was just rejected for
 	// being too large cannot be retried as-is. A structural summary is worse
 	// than an LLM one but always available.
-	summary := structuralSummary(check.MessagesToSummarize)
+	summary := structuralSummary(toCompactionMessages(head))
 
-	merged := compaction.ApplySummary(check.MessagesToKeep, summary, check.MessagesToSummarize)
+	return applyCheckpoint(pinned, tail, summary), true
+}
 
-	return fromCompactionMessages(merged), true
+// maybeCompact runs the compact strategy: as the context window fills, it
+// condenses the older history into a checkpoint with a model call, so a long run
+// carries a condensed memory of its early turns rather than having the thread
+// builder silently drop them to fit.
+//
+// The summary is a TypeCheckpoint - pinned ahead of the conversation and never
+// summarised again - so repeated compactions accumulate a chain of segment
+// summaries rather than re-condensing earlier summaries into a lossy
+// summary-of-a-summary.
+//
+// This deliberately differs from the engine zot was derived from, which keeps
+// only the single most recent checkpoint and drops earlier ones - losing all
+// detail before its window. Keeping the whole chain preserves that history; it
+// grows the stored conversation slowly, but the thread builder still trims the
+// wire request to the window (oldest first, so the oldest summaries age out),
+// so a run cannot overflow on accumulated checkpoints.
+//
+// It is a no-op under the truncate strategy, and until usage both crosses the
+// trigger ratio of the window and clears the min-tokens and min-messages floors -
+// a short thread is cheaper to carry whole than to summarise. inputTokens is the
+// provider's reported prompt count for the previous turn; the local estimate
+// stands in when it is zero (the first turn, or a provider that reports none).
+func (e *Engine) maybeCompact(ctx context.Context, messages []Message, inputTokens int, emit func(Event)) []Message {
+	if !e.compactStrategy {
+		return messages
+	}
+
+	// The provider's reported prompt-token count drives the trigger. Real usage is
+	// the right signal: the estimate misses the system prompt, the tool schemas
+	// and the wire overhead the provider actually charges, so triggering on it
+	// would compact too late - after a request the estimate thought fit was
+	// rejected. The estimate stands in only until the first turn reports.
+	used := inputTokens
+	if used == 0 {
+		used = compaction.CountMessagesTokens(e.model, toCompactionMessages(messages))
+	}
+
+	pinned, head, tail := splitForCheckpoint(messages)
+
+	// Fire once usage crosses the trigger ratio of the window, and only above the
+	// floors: a short thread is cheaper to carry whole than to summarise. head is
+	// the messages that would be condensed - existing checkpoints and the system
+	// prompt are pinned and never counted here.
+	threshold := int(float64(e.inputBudget) * e.compactTriggerRatio)
+
+	if used < threshold || used < e.compactMinTokens || len(head) < e.compactMinMessages {
+		return messages
+	}
+
+	// Summarise with a model call. Fall back to the no-model structural summary if
+	// that call fails, so a summariser outage degrades the summary's quality
+	// rather than stalling the run.
+	summary, err := e.summarize(ctx, toCompactionMessages(head))
+	if err != nil {
+		summary = structuralSummary(toCompactionMessages(head))
+	}
+
+	emit(Event{Kind: EventCompact, Text: fmt.Sprintf(
+		"compacted %d earlier messages into a checkpoint (~%d input tokens)",
+		len(head), used)})
+
+	return applyCheckpoint(pinned, tail, summary)
+}
+
+// splitForCheckpoint divides a conversation for compaction into three parts:
+//
+//   - pinned: the system prompt and every existing checkpoint, in order. These
+//     are preserved verbatim and never summarised - re-summarising a checkpoint
+//     is exactly the summary-of-a-summary this design avoids.
+//   - head: the older conversational messages, to be condensed into a new
+//     checkpoint.
+//   - tail: the most recent conversational messages, kept verbatim so the model
+//     still has its immediate context to act on.
+//
+// The recent-tail size follows the compaction package's ratio, so the split
+// point matches the reactive path and the ported engine.
+func splitForCheckpoint(messages []Message) (pinned, head, tail []Message) {
+	var body []Message
+
+	for _, message := range messages {
+		switch message.Type {
+		case TypeInstructions, TypeCheckpoint:
+			pinned = append(pinned, message)
+		default:
+			body = append(body, message)
+		}
+	}
+
+	keep := int(math.Ceil(float64(len(body)) * compaction.KeepRecentRatio))
+	if keep < 2 {
+		keep = 2
+	}
+
+	cut := len(body) - keep
+	if cut < 0 {
+		cut = 0
+	}
+
+	return pinned, body[:cut], body[cut:]
+}
+
+// applyCheckpoint rebuilds the conversation as [pinned..., new checkpoint,
+// tail...]: the system prompt and prior checkpoints first, then the freshly
+// produced checkpoint summarising the head, then the recent tail verbatim. The
+// order is chronological - prior checkpoints cover older segments, the new one
+// covers the segment just before the tail.
+func applyCheckpoint(pinned, tail []Message, summary string) []Message {
+	result := make([]Message, 0, len(pinned)+1+len(tail))
+	result = append(result, pinned...)
+	result = append(result, Message{Type: TypeCheckpoint, Text: summary})
+	result = append(result, tail...)
+
+	return result
+}
+
+// summarize asks the model to condense a slice of history into a compact
+// checkpoint. Affordable here because the compact strategy runs before the
+// window is hit - unlike the reactive path, which cannot call the model because
+// the request that was just rejected is itself the one that is too large.
+func (e *Engine) summarize(ctx context.Context, messages []compaction.Message) (string, error) {
+	request := provider.Request{
+		Messages: []provider.ChatMessage{
+			// BuildSummaryPrompt is a complete, self-contained instruction plus the
+			// rendered history, so it goes on the wire as a single user message.
+			{Role: provider.RoleUser, Content: compaction.BuildSummaryPrompt(messages)},
+		},
+	}
+
+	reply, _, _, err := e.options.Client.Complete(ctx, request)
+	if err != nil {
+		return "", err
+	}
+
+	summary := strings.TrimSpace(reply.Content)
+	if summary == "" {
+		return "", errors.New("loop: the model returned an empty compaction summary")
+	}
+
+	return summary, nil
 }
 
 // structuralSummary condenses history without a model call.
@@ -671,11 +966,11 @@ func structuralSummary(messages []compaction.Message) string {
 
 // buildRequest assembles the provider request, trimming the conversation to fit.
 func (e *Engine) buildRequest(messages []Message, tools []provider.Tool) (provider.Request, error) {
-	backstory := e.backstory()
+	instructions := e.instructions()
 
 	// reserve room for the system prompt and the tool schemas, both of which are
 	// sent on every request and neither of which the thread builder sees
-	reserved := tokenizer.Count(e.model, backstory) + e.toolSchemaTokens(tools)
+	reserved := tokenizer.Count(e.model, instructions) + e.toolSchemaTokens(tools)
 
 	budget := e.inputBudget - reserved
 
@@ -692,8 +987,21 @@ func (e *Engine) buildRequest(messages []Message, tools []provider.Tool) (provid
 		MinMessages: 2,
 
 		Estimate: func(message thread.Message) (thread.Usage, error) {
+			// A tool call carries almost all its cost outside the text - the name,
+			// arguments and result live in the meta - so a request half (no text at
+			// all) would be priced as empty and a write of a whole file would look
+			// free to the trimmer, letting a thread that "fits" get rejected. Count
+			// text plus the serialised meta, exactly as the source estimator does.
+			text := message.Text()
+
+			if meta, ok := message.Meta(); ok {
+				if encoded, err := json.Marshal(meta); err == nil {
+					text += string(encoded)
+				}
+			}
+
 			return thread.Usage{
-				Tokens: float64(tokenizer.CountMessage(e.model, message.Text())),
+				Tokens: float64(tokenizer.CountMessage(e.model, text)),
 			}, nil
 		},
 	})
@@ -701,7 +1009,7 @@ func (e *Engine) buildRequest(messages []Message, tools []provider.Tool) (provid
 		return provider.Request{}, err
 	}
 
-	chat := []provider.ChatMessage{{Role: provider.RoleSystem, Content: backstory}}
+	chat := []provider.ChatMessage{{Role: provider.RoleSystem, Content: instructions}}
 
 	chat = append(chat, toChatMessages(fromThreadMessages(built.Messages))...)
 
@@ -712,11 +1020,11 @@ func (e *Engine) buildRequest(messages []Message, tools []provider.Tool) (provid
 	}, nil
 }
 
-// backstory renders the system prompt, including the skills block.
-func (e *Engine) backstory() string {
+// instructions renders the system prompt, including the skills block.
+func (e *Engine) instructions() string {
 	var builder strings.Builder
 
-	builder.WriteString(e.options.Backstory)
+	builder.WriteString(e.options.Instructions)
 
 	if len(e.options.Skills) > 0 {
 		builder.WriteString("\n\n<available_skills>\n")

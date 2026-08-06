@@ -59,6 +59,11 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -race
 
+      # Fail the build if total coverage falls below 90%. Same script as
+      # `make cover-check`, so a contributor sees the gate locally before CI.
+      - name: Coverage gate
+        run: ./scripts/coverage.sh
+
       - name: Build
         run: CGO_ENABLED=0 go build -trimpath ./cmd/zot
 

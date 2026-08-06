@@ -210,6 +210,12 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 	case agent.ToolCallErrorEvent:
 		m.appendEntry(errStyle.Render("    ✗ " + e.Name + ": " + e.Error))
 
+	case agent.CompactionEvent:
+		// compaction rewrites the conversation and spends a model call; show it so a
+		// long run's context management is visible rather than silent
+		m.flushPending()
+		m.appendEntry(dividerStyle.Render("⤿ " + e.Detail))
+
 	case agent.AgentExitEvent:
 		m.exitCode = e.Code
 		m.exitMsg = e.Message

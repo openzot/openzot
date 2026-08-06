@@ -60,7 +60,7 @@ func kinds(messages []Message) []string {
 
 func TestOrganizeKeepsAWellFormedConversation(t *testing.T) {
 	messages := []Message{
-		{Type: TypeBackstory, Text: "you are a coding agent"},
+		{Type: TypeInstructions, Text: "you are a coding agent"},
 		{Type: TypeUser, Text: "run the tests"},
 		request("call_1", "shell", `{"command":"go test"}`),
 		response("call_1", "shell", `{"command":"go test"}`, "ok"),
@@ -243,15 +243,15 @@ func TestOrganizeKeepsATriggerOnlyWhenItIsLast(t *testing.T) {
 }
 
 // The system prompt is bookkeeping rather than conversation, so a trigger
-// followed only by backstory is still last.
-func TestOrganizeTriggerIgnoresTrailingBackstory(t *testing.T) {
+// followed only by instructions is still last.
+func TestOrganizeTriggerIgnoresTrailingInstructions(t *testing.T) {
 	got := Organize([]Message{
 		{Type: TypeUser, Text: "go"},
 		trigger("wake"),
-		{Type: TypeBackstory, Text: "you are a coding agent"},
+		{Type: TypeInstructions, Text: "you are a coding agent"},
 	})
 
-	want := []string{"user/go", "activity/trigger/", "backstory/you are a coding agent"}
+	want := []string{"user/go", "activity/trigger/", "instructions/you are a coding agent"}
 
 	if !reflect.DeepEqual(kinds(got), want) {
 		t.Errorf("got %v, want %v", kinds(got), want)
@@ -305,11 +305,11 @@ func TestOrganizeDropsEmptyMessages(t *testing.T) {
 
 // An empty system prompt is a configuration choice rather than an accident, and
 // dropping it would change which message comes first.
-func TestOrganizeKeepsAnEmptyBackstory(t *testing.T) {
-	got := Organize([]Message{{Type: TypeBackstory, Text: ""}, {Type: TypeUser, Text: "go"}})
+func TestOrganizeKeepsAnEmptyInstructions(t *testing.T) {
+	got := Organize([]Message{{Type: TypeInstructions, Text: ""}, {Type: TypeUser, Text: "go"}})
 
-	if len(got) != 2 || got[0].Type != TypeBackstory {
-		t.Errorf("the backstory must survive: %v", kinds(got))
+	if len(got) != 2 || got[0].Type != TypeInstructions {
+		t.Errorf("the instructions must survive: %v", kinds(got))
 	}
 }
 
@@ -377,7 +377,7 @@ func TestOrganizeDoesNotMutateItsInput(t *testing.T) {
 // mangled still renders into something a provider accepts.
 func TestOrganizeRepairsAHistoryOnTheWire(t *testing.T) {
 	chat := toChatMessages([]Message{
-		{Type: TypeBackstory, Text: "you are a coding agent"},
+		{Type: TypeInstructions, Text: "you are a coding agent"},
 		// this result's call fell outside the compaction window
 		response("gone", "read", "{}", "old contents"),
 		{Type: TypeUser, Text: "run the tests"},

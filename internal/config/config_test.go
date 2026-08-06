@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/openzot/openzot/agent"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -112,7 +114,8 @@ func TestBuiltinBackendsAreExactlyTheProviders(t *testing.T) {
 
 	want := []string{
 		"anthropic", "cerebras", "deepseek", "groq", "mistral", "moonshot",
-		"ollama", "openai", "openrouter", "qwen", "together", "xai", "zai",
+		"ollama", "openai", "openrouter", "qwen", "together", "vercel", "xai",
+		"zai",
 	}
 
 	if !reflect.DeepEqual(seeded, want) {
@@ -496,5 +499,264 @@ func TestTheConventionalVariableIsOnlyAFallback(t *testing.T) {
 
 	if got := BackendCredential(cfg.Backends["openai"]); got != "sk-from-config" {
 		t.Errorf("credential = %q, want the config to win", got)
+	}
+}
+
+// max_time is validated at load, so a typo is caught immediately rather than
+// silently ignored into an unbounded run.
+func TestMaxTimeIsValidated(t *testing.T) {
+	base := func() Config {
+		return Config{
+			Agent:          Agent{Model: "m", MaxIterations: 10},
+			DefaultBackend: "openai",
+			Backends:       map[string]Backend{"openai": {APIKey: "k"}},
+		}
+	}
+
+	good := base()
+	good.Agent.MaxTime = "45m"
+	if err := good.Validate(); err != nil {
+		t.Errorf("a valid duration must pass: %v", err)
+	}
+
+	empty := base() // unbounded is valid
+	if err := empty.Validate(); err != nil {
+		t.Errorf("an empty max_time must pass (unbounded): %v", err)
+	}
+
+	bad := base()
+	bad.Agent.MaxTime = "half an hour"
+	if err := bad.Validate(); err == nil {
+		t.Error("a malformed max_time must fail validation")
+	}
+
+	negative := base()
+	negative.Agent.MaxTime = "-5m"
+	if err := negative.Validate(); err == nil {
+		t.Error("a negative max_time must fail validation")
+	}
+}
+
+// Every run budget is settable from the environment, not just max_iterations -
+// the config comment promises a ZOT_AGENT_MAX_* for each, so this pins that the
+// reflection-based override actually reaches all of them (including the two-word
+// max_continuations, whose env name is the easy one to get wrong).
+func TestEveryBudgetHasAnEnvOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+
+	t.Setenv("ZOT_AGENT_MAX_SETTLES", "3")
+	t.Setenv("ZOT_AGENT_MAX_CALLS", "4")
+	t.Setenv("ZOT_AGENT_MAX_TIME", "45m")
+	t.Setenv("ZOT_AGENT_MAX_TOKENS", "5")
+	t.Setenv("ZOT_AGENT_MAX_CONTINUATIONS", "6")
+	t.Setenv("ZOT_AGENT_MAX_CYCLES", "7")
+	t.Setenv("ZOT_AGENT_MAX_EMPTIES", "8")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	a := cfg.Agent
+
+	for name, got := range map[string]int{
+		"max_settles":       a.MaxSettles,
+		"max_calls":         a.MaxCalls,
+		"max_tokens":        a.MaxTokens,
+		"max_continuations": a.MaxContinuations,
+		"max_cycles":        a.MaxCycles,
+		"max_empties":       a.MaxEmpties,
+	} {
+		if got == 0 {
+			t.Errorf("%s was not set from its ZOT_AGENT_* variable", name)
+		}
+	}
+
+	if a.MaxTime != "45m" {
+		t.Errorf("max_time = %q, want 45m from the environment", a.MaxTime)
+	}
+
+	// and the string parses through to a real duration
+	if d, err := a.MaxDuration(); err != nil || d.String() != "45m0s" {
+		t.Errorf("MaxDuration = %v (err %v), want 45m", d, err)
+	}
+}
+
+// limit_checkpoints is validated so a typo (a percentage over 99, or a negative)
+// is caught at load rather than silently dropped into a run with no notices.
+func TestLimitCheckpointsAreValidated(t *testing.T) {
+	base := func(cp []int) Config {
+		return Config{
+			Agent:          Agent{Model: "m", MaxIterations: 10, LimitCheckpoints: cp},
+			DefaultBackend: "openai",
+			Backends:       map[string]Backend{"openai": {APIKey: "k"}},
+		}
+	}
+
+	if err := base([]int{50, 80, 90}).Validate(); err != nil {
+		t.Errorf("a valid checkpoint list must pass: %v", err)
+	}
+
+	if err := base(nil).Validate(); err != nil {
+		t.Errorf("unset checkpoints must pass (uses the default): %v", err)
+	}
+
+	if err := base([]int{}).Validate(); err != nil {
+		t.Errorf("an empty list must pass (disables notices): %v", err)
+	}
+
+	for _, bad := range [][]int{{0}, {100}, {150}, {-5}, {50, 200}} {
+		if err := base(bad).Validate(); err == nil {
+			t.Errorf("checkpoints %v must fail validation", bad)
+		}
+	}
+}
+
+// A standard build carries no compiled-in config, so nothing overrides the
+// runtime file and Portable reads false. The portable build path is exercised
+// by building with -tags portable, which this suite does not; applyPortableOverlay
+// below covers the layering that path relies on.
+func TestPortableIsOffInAStandardBuild(t *testing.T) {
+	if Portable() {
+		t.Error("a build without -tags portable must not report a compiled-in config")
+	}
+	if data := portableConfig(); data != nil {
+		t.Errorf("portableConfig must be empty in a standard build, got %q", data)
+	}
+}
+
+// The overlay is what makes a portable build authoritative: it is applied after
+// the file and env, so a field it sets wins. A field it omits must be left
+// exactly as the earlier layers resolved it - that is what lets an operator bake
+// the model while still taking the key from the environment.
+func TestPortableOverlayOverridesOnlyWhatItSets(t *testing.T) {
+	// stand in for "the file and env already resolved this"
+	cfg := Config{
+		Agent:          Agent{Model: "from-env", MaxIterations: 42},
+		DefaultBackend: "openai",
+		Backends: map[string]Backend{
+			"openai": {APIKey: "sk-from-env"},
+		},
+	}
+
+	overlay := []byte(`
+agent:
+  model: baked-model
+default_backend: zai
+backends:
+  zai:
+    api_key: sk-baked
+`)
+
+	if err := applyPortableOverlay(&cfg, overlay); err != nil {
+		t.Fatalf("applyPortableOverlay: %v", err)
+	}
+
+	// fields the overlay set are authoritative
+	if cfg.Agent.Model != "baked-model" {
+		t.Errorf("model = %q, want the baked value to win", cfg.Agent.Model)
+	}
+	if cfg.DefaultBackend != "zai" {
+		t.Errorf("default_backend = %q, want the baked value to win", cfg.DefaultBackend)
+	}
+	if got := cfg.Backends["zai"].APIKey; got != "sk-baked" {
+		t.Errorf("baked backend key = %q, want sk-baked", got)
+	}
+
+	// fields it did NOT set fall through untouched
+	if cfg.Agent.MaxIterations != 42 {
+		t.Errorf("max_iterations = %d, want the earlier layer (42) to survive an overlay that omits it", cfg.Agent.MaxIterations)
+	}
+	if got := cfg.Backends["openai"].APIKey; got != "sk-from-env" {
+		t.Errorf("a backend the overlay did not mention was lost: openai key = %q", got)
+	}
+}
+
+// An empty overlay - the standard build - must be a no-op, not a wipe.
+func TestPortableOverlayEmptyIsANoOp(t *testing.T) {
+	cfg := Config{Agent: Agent{Model: "keep", MaxIterations: 7}}
+
+	if err := applyPortableOverlay(&cfg, nil); err != nil {
+		t.Fatalf("applyPortableOverlay(nil): %v", err)
+	}
+	if cfg.Agent.Model != "keep" || cfg.Agent.MaxIterations != 7 {
+		t.Errorf("an empty overlay changed the config: %+v", cfg.Agent)
+	}
+}
+
+// Malformed baked YAML must fail loudly at load, not silently ship a binary that
+// ignores its own compiled-in config.
+func TestPortableOverlayRejectsBadYAML(t *testing.T) {
+	cfg := Config{}
+	if err := applyPortableOverlay(&cfg, []byte("agent: [not-a-mapping")); err == nil {
+		t.Error("malformed compiled-in config must be an error")
+	}
+}
+
+// The default strategy is compact, so a long autonomous run summarises rather
+// than silently dropping its early context.
+func TestDefaultContextStrategyIsCompact(t *testing.T) {
+	if got := Defaults().Agent.ContextStrategy; got != agent.StrategyCompact {
+		t.Errorf("default context_strategy = %q, want %q", got, agent.StrategyCompact)
+	}
+}
+
+func TestContextStrategyIsValidated(t *testing.T) {
+	base := func(strategy string) Config {
+		return validConfig(func(c *Config) { c.Agent.ContextStrategy = strategy })
+	}
+
+	// the two real strategies and "unset" all pass
+	for _, ok := range []string{"", agent.StrategyCompact, agent.StrategyTruncate} {
+		if err := base(ok).Validate(); err != nil {
+			t.Errorf("context_strategy %q must validate: %v", ok, err)
+		}
+	}
+
+	if err := base("summarise").Validate(); err == nil {
+		t.Error("an unknown context_strategy must fail validation")
+	}
+}
+
+func TestCompactTuningIsValidated(t *testing.T) {
+	// a ratio outside (0, 1] is a mistake worth catching at load
+	for _, bad := range []float64{-0.1, 1.5} {
+		cfg := validConfig(func(c *Config) { c.Agent.CompactTriggerRatio = bad })
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("compact_trigger_ratio %g must fail validation", bad)
+		}
+	}
+
+	// zero means "use the default" and must pass
+	if err := validConfig(func(c *Config) { c.Agent.CompactTriggerRatio = 0 }).Validate(); err != nil {
+		t.Errorf("an unset ratio must validate: %v", err)
+	}
+
+	// a valid ratio passes
+	if err := validConfig(func(c *Config) { c.Agent.CompactTriggerRatio = 0.8 }).Validate(); err != nil {
+		t.Errorf("a valid ratio must validate: %v", err)
+	}
+
+	if err := validConfig(func(c *Config) { c.Agent.CompactMinTokens = -1 }).Validate(); err == nil {
+		t.Error("a negative compact_min_tokens must fail validation")
+	}
+}
+
+// The strategy is a scalar field, so it picks up the ZOT_AGENT_* env override
+// like every other knob.
+func TestContextStrategyEnvOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("ZAI_API_KEY", "sk-zai")
+	t.Setenv("ZOT_AGENT_CONTEXT_STRATEGY", "truncate")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Agent.ContextStrategy != "truncate" {
+		t.Errorf("ZOT_AGENT_CONTEXT_STRATEGY not applied: %q", cfg.Agent.ContextStrategy)
 	}
 }

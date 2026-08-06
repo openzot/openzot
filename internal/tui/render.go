@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // maxOutputLines caps how much command output we echo into the log so a chatty
@@ -27,6 +29,10 @@ func renderToolStart(name string, args map[string]interface{}) string {
 		return toolExecStyle.Render("  shell  ") + taskStyle.Render(truncate(str(args, "command"), 200))
 	case "skill":
 		return toolOtherStyle.Render("  skill  ") + taskStyle.Render(str(args, "name"))
+	case "plan":
+		return renderPlan(args)
+	case "progress":
+		return renderProgress(args)
 	default:
 		return toolOtherStyle.Render("  "+pad(name, 6)+" ") + outputStyle.Render(compactArgs(args))
 	}
@@ -146,6 +152,76 @@ func commandOutput(m map[string]interface{}) string {
 }
 
 // --- small helpers over the loosely-typed arg/result maps -------------------
+
+// renderPlan lays the plan out as a numbered list, because the plan is the one
+// piece of the run worth reading in full - it is the map the agent is following,
+// and seeing it is how the operator knows whether the approach is sound.
+func renderPlan(args map[string]interface{}) string {
+	head := toolOtherStyle.Render("  plan   ")
+	if rationale := str(args, "rationale"); rationale != "" {
+		head += thoughtStyle.Render(truncate(rationale, 200))
+	}
+
+	steps := strList(args, "steps")
+	if len(steps) == 0 {
+		return head
+	}
+
+	var b strings.Builder
+	b.WriteString(head)
+	for i, step := range steps {
+		b.WriteString("\n")
+		b.WriteString(outputStyle.Render(fmt.Sprintf("    %d. ", i+1)))
+		b.WriteString(taskStyle.Render(truncate(step, 200)))
+	}
+	return b.String()
+}
+
+// renderProgress shows the current step, then what is done, blocked and next -
+// a live status the operator can glance at on a long run.
+func renderProgress(args map[string]interface{}) string {
+	head := toolOtherStyle.Render("  update ")
+	if current := str(args, "current"); current != "" {
+		head += taskStyle.Render(truncate(current, 200))
+	} else {
+		head += outputStyle.Render("progress")
+	}
+
+	var b strings.Builder
+	b.WriteString(head)
+	for _, section := range []struct {
+		label string
+		key   string
+		style lipgloss.Style
+	}{
+		{"done", "completed", okStyle},
+		{"blocked", "blockers", errStyle},
+		{"next", "nextSteps", outputStyle},
+	} {
+		for _, item := range strList(args, section.key) {
+			b.WriteString("\n")
+			b.WriteString(outputStyle.Render("    " + pad(section.label, 8)))
+			b.WriteString(section.style.Render(truncate(item, 180)))
+		}
+	}
+	return b.String()
+}
+
+// strList reads a JSON string array from a tool's arguments, tolerating the
+// non-string entries a model occasionally emits.
+func strList(args map[string]interface{}, key string) []string {
+	raw, ok := args[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 func dimPath(args map[string]interface{}, key string) string {
 	return taskStyle.Render(str(args, key))
