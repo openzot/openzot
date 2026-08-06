@@ -8,7 +8,7 @@ self-contained artifact that runs with no config file and nothing to set at the
 destination.
 
 For the runtime configuration model - the file, the environment, the flags - see
-the [README](../README.md#configuration). This document is only about the
+[configuration.md](configuration.md). This document is only about the
 compiled-in layer.
 
 ## When you would want this
