@@ -67,7 +67,7 @@ func headless(t *testing.T) (*tea.Program, *collector, func() model) {
 	seen := &collector{}
 
 	program := tea.NewProgram(
-		&recordingModel{collector: seen, inner: newModel("do the thing", "test-model", "custom", "/tmp/work", false)},
+		&recordingModel{collector: seen, inner: newModel("zot", "do the thing", "test-model", "custom", "/tmp/work", false)},
 		tea.WithInput(nil),
 		tea.WithOutput(io.Discard),
 		tea.WithoutSignalHandler(),

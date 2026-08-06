@@ -31,6 +31,7 @@ type tickMsg struct{}
 // watches, they do not type. Everything it shows is derived from the agent's
 // event stream plus a couple of counters.
 type model struct {
+	appName  string
 	task     string
 	model    string
 	backend  string
@@ -76,12 +77,13 @@ type model struct {
 	elapsed   time.Duration
 }
 
-func newModel(task, modelName, backend, workdir string, showDiff bool) model {
+func newModel(appName, task, modelName, backend, workdir string, showDiff bool) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colYellow)
 
 	return model{
+		appName:    appName,
 		task:       task,
 		model:      modelName,
 		backend:    backend,
@@ -359,7 +361,7 @@ func (m *model) fillRule(label string) string {
 
 func (m model) View() string {
 	if !m.ready {
-		return "starting zot…"
+		return "starting " + m.appName + "…"
 	}
 	return strings.Join([]string{
 		m.titleBar(),
@@ -371,7 +373,7 @@ func (m model) View() string {
 }
 
 func (m model) titleBar() string {
-	left := titleStyle.Render("✦ zot") + " " + m.badge()
+	left := titleStyle.Render("✦ "+m.appName) + " " + m.badge()
 	room := m.width - lipgloss.Width(left) - 2
 	if room < 8 {
 		return left

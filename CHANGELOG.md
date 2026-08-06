@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - unreleased
+
+### Added
+
+- **`tui.Meta.AppName` names the embedding application** in the title badge (`✦ rook`), the startup line and the plain-mode header, so a host reads as itself rather than "zot". Empty defaults to "zot", so zot and any bare caller are unchanged. (Extracted while embedding the viewer in rook - the only user-facing spot the viewer still hardcoded the "zot" name.)
+
 ## [0.9.0] - 2026-08-06
 
 ### Added

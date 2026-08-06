@@ -148,7 +148,7 @@ func TestRunPlainTranscript(t *testing.T) {
 		[]string{plainSuccess("tests pass")},
 	)
 
-	meta := Meta{Task: "run the tests", Model: "test-model", Backend: "openai", Workdir: "/tmp/work"}
+	meta := Meta{AppName: "zot", Task: "run the tests", Model: "test-model", Backend: "openai", Workdir: "/tmp/work"}
 
 	options := agent.ExecuteWithToolsOptions{
 		Tools: agent.Tools{
