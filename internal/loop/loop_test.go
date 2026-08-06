@@ -62,6 +62,14 @@ func truncated() string {
 	return `{"choices":[{"delta":{},"finish_reason":"length"}]}`
 }
 
+// usageFrame is a final chunk carrying the provider's own token counts.
+func usageFrame(prompt, completion int) string {
+	return fmt.Sprintf(
+		`{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d}}`,
+		prompt, completion, prompt+completion,
+	)
+}
+
 func tool(id, name, arguments string) string {
 	return fmt.Sprintf(
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":"tool_calls"}]}`,

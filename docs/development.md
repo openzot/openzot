@@ -64,7 +64,7 @@ which kind you have.
 | `internal/config/`     | layered config (defaults < file < env < compiled-in), XDG paths, env overrides |
 | `internal/buildinfo/`  | release vs developer build, and what that changes                              |
 | `internal/version/`    | build-time version stamping and GitHub update checks                           |
-| `internal/tui/`        | the Bubble Tea read-only viewer (model, render, styles, agent bridge)          |
+| `tui/`                 | public Bubble Tea read-only viewer (themeable; embeddable over any `agent` run) |
 | `configs/`             | example configuration                                                          |
 
 Contributor conventions live in [AGENTS.md](../AGENTS.md) and

@@ -2,6 +2,23 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-08-06
+
+### Added
+
+- **The read-only viewer is a public, embeddable package: `github.com/openzot/openzot/tui`.** It moved out of `internal/`, so another tool can render the same terminal view over its own agent run. The seam is the public `agent` surface - a caller supplies its own `*agent.Client` and `agent.ExecuteWithToolsOptions` (its own tools, skills and instructions), and the viewer renders the `AgentEvent` stream; the engine binding lives in the embedding application, not the view.
+- **Themeable brand colour via `tui.Theme`.** An embedder sets the view's accent and secondary; `tui.DefaultTheme()` is a neutral, near-monochrome identity so a host can own the colour. The semantic status colours (running / done / failed) and the diff gutters stay fixed, so their meaning reads the same in every application.
+- **The header stats bar is configurable, and now shows token usage and limit progress.** `ui.stats` (or `tui.Meta.Stats`) chooses which fields show and in what order - any of `model`, `backend`, `dir`, `iter`, `tools`, `edits`, `elapsed`, `tokens` (default: all). The `tokens` field reports the **provider's own** cumulative token counts (`↑` prompt, `↓` completion) - the real billed usage, server-side prompt caching and all, never a local estimate - surfaced live on a new `agent.UsageEvent` and accumulated in the run's `Budget`. And `iter` / `tools` / `elapsed` show progress against a configured limit (`5/1000`, `00:12/30:00`) when one is set - the 1,000,000 iteration backstop is treated as "no limit" and shows none.
+
+### Changed
+
+- **zot's own viewer is now neutral** (a slate accent) rather than the previous purple/pink, so it stays out of the way and reads as the default rather than a brand.
+- **The header meta bar colours each field by kind** - model and backend highlighted, tool and edit counts by meaning, paths and timing muted - with fixed functional hues (independent of the brand accent), so the header carries colour and stays scannable even under a neutral theme.
+
+### Fixed
+
+- **The viewer's scrollback is now bounded, and configurable.** It previously kept every log line for the whole run, so a long autonomous run (unbounded tool calls, up to a million iterations) grew the viewer's memory without limit and made each redraw re-process the entire history. The on-screen log is now capped at the most recent 5,000 lines by default - the full, untrimmed run is always in the session log on disk - and a marker points there once the log has been trimmed. Keep more (or less) on screen with `ui.scrollback` (or `ZOT_UI_SCROLLBACK`); embedders set `tui.Meta.MaxScrollback`.
+
 ## [0.8.1] - 2026-08-06
 
 ### Changed

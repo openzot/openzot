@@ -760,3 +760,41 @@ func TestContextStrategyEnvOverride(t *testing.T) {
 		t.Errorf("ZOT_AGENT_CONTEXT_STRATEGY not applied: %q", cfg.Agent.ContextStrategy)
 	}
 }
+
+// The viewer scrollback is a scalar UI field, so it takes the ZOT_UI_* env
+// override like the others, and a negative value is rejected at load.
+func TestScrollbackEnvOverrideAndValidation(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("ZAI_API_KEY", "sk-zai")
+	t.Setenv("ZOT_UI_SCROLLBACK", "20000")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.UI.Scrollback != 20000 {
+		t.Errorf("ZOT_UI_SCROLLBACK not applied: %d", cfg.UI.Scrollback)
+	}
+
+	if err := validConfig(func(c *Config) { c.UI.Scrollback = -1 }).Validate(); err == nil {
+		t.Error("a negative ui.scrollback must fail validation")
+	}
+}
+
+// ui.stats selects header fields; an unknown field name is a typo worth catching
+// at load rather than silently dropping the field.
+func TestUIStatsAreValidated(t *testing.T) {
+	if err := validConfig(func(c *Config) { c.UI.Stats = []string{"model", "iter"} }).Validate(); err != nil {
+		t.Errorf("a valid stat list must pass: %v", err)
+	}
+
+	if err := validConfig(func(c *Config) { c.UI.Stats = []string{"model", "bogus"} }).Validate(); err == nil {
+		t.Error("an unknown stat field must fail validation")
+	}
+
+	if err := validConfig(func(c *Config) { c.UI.Stats = nil }).Validate(); err != nil {
+		t.Errorf("an unset stat list must pass (defaults): %v", err)
+	}
+}

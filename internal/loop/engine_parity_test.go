@@ -135,3 +135,17 @@ func TestSettleModeEmptyTurnIsBoundedButNudgesToSettle(t *testing.T) {
 		t.Error("in settle mode an empty turn's nudge must point at _success/_failure, not the plain empty notice")
 	}
 }
+
+// The run accumulates the provider's own token counts (not the local estimate),
+// so a viewer or the session summary can show real usage. Each call bills its
+// whole prompt, so per-turn counts sum.
+func TestRunAccumulatesProviderReportedUsage(t *testing.T) {
+	client := stub(t, []string{text("all done"), usageFrame(100, 40)})
+
+	result := run(t, Options{Client: client})
+
+	if result.Budget.InputTokens != 100 || result.Budget.OutputTokens != 40 {
+		t.Errorf("run must accumulate provider usage, got in=%d out=%d",
+			result.Budget.InputTokens, result.Budget.OutputTokens)
+	}
+}
