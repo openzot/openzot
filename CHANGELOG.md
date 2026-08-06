@@ -2,7 +2,7 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
-## [0.9.1] - unreleased
+## [0.9.1] - 2026-08-06
 
 ### Added
 
