@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://zot.im/icon-dark.svg" alt="zot" width="96" height="96" />
+  <img width="96" height="96" alt="zot-icon-dark" src="https://github.com/user-attachments/assets/44908dda-fa7c-4698-815a-82343cf54a44" />
 </p>
 
 <h1 align="center">zot</h1>
@@ -172,9 +172,9 @@ upgrading.
 
 ## Ecosystem
 
-| Project                                       | Role                                                           |
-| --------------------------------------------- | -------------------------------------------------------------- |
+| Project                                       | Role                                                             |
+| --------------------------------------------- | ---------------------------------------------------------------- |
 | [Rook](https://github.com/pdparchitect/rook)  | An AI bug-hunting and security-audit agent built on zot's engine |
-| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use |
-| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands      |
-| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP |
+| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use   |
+| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands        |
+| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP   |
