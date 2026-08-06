@@ -24,7 +24,7 @@ func isInteractive() bool {
 // non-interactive shells and when --plain is set, so zot's output stays usable
 // in pipes, logs, and CI without a TTY or escape codes.
 func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
-	fmt.Printf("zot: %s\n", meta.Task)
+	fmt.Printf("%s: %s\n", meta.AppName, meta.Task)
 	fmt.Printf("backend %s · model %s · dir %s\n", meta.Backend, meta.Model, meta.Workdir)
 
 	events, errs := agent.ExecuteWithTools(ctx, client, opts)

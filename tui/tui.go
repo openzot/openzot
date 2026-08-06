@@ -17,6 +17,10 @@ import (
 
 // Meta is the header display information shown above the activity log.
 type Meta struct {
+	// AppName is the embedding application's name, shown in the title badge
+	// ("✦ rook"), the startup line, and the plain-mode header. Empty defaults to
+	// "zot", so a bare caller still reads correctly.
+	AppName string
 	// Task is the one-line instruction the agent is working on.
 	Task string
 	// Model is the model name driving the agent.
@@ -61,13 +65,19 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	// zot's neutral default (see applyTheme).
 	applyTheme(meta.Theme)
 
+	// A bare caller (or zot itself) leaves AppName empty; default it so the badge
+	// and headers still read correctly.
+	if meta.AppName == "" {
+		meta.AppName = "zot"
+	}
+
 	// Without a usable terminal (or when forced), stream plain text instead of
 	// trying to start an alt-screen program that would fail or garble.
 	if meta.Plain || !isInteractive() {
 		return runPlain(ctx, client, meta, opts)
 	}
 
-	m := newModel(meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)
+	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)
 	if meta.MaxScrollback > 0 {
 		m.maxEntries = meta.MaxScrollback
 	}

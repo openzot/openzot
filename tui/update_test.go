@@ -16,7 +16,7 @@ import (
 func sized(t *testing.T, width, height int) model {
 	t.Helper()
 
-	m := newModel("do the thing", "gpt-5.4-mini", "openai", "/tmp/work", false)
+	m := newModel("zot", "do the thing", "gpt-5.4-mini", "openai", "/tmp/work", false)
 
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 
@@ -32,7 +32,7 @@ func sized(t *testing.T, width, height int) model {
 // and the elapsed clock never advances - a screen that looks hung on a run that
 // is working fine.
 func TestInitStartsTheSpinnerAndClock(t *testing.T) {
-	m := newModel("task", "m", "b", "/w", false)
+	m := newModel("zot", "task", "m", "b", "/w", false)
 
 	cmd := m.Init()
 
@@ -276,7 +276,7 @@ func TestViewRendersWithoutPanicking(t *testing.T) {
 // Before the first size message there is nothing sensible to draw, and drawing
 // anyway used to produce a garbled frame.
 func TestViewBeforeReady(t *testing.T) {
-	m := newModel("task", "m", "b", "/w", false)
+	m := newModel("zot", "task", "m", "b", "/w", false)
 
 	if view := m.View(); strings.Contains(view, "\x1b[") && m.ready {
 		t.Error("an unready model should not draw a full frame")
@@ -953,7 +953,7 @@ func TestActivityLogIsBoundedForLongRuns(t *testing.T) {
 	// a not-yet-sized model: render() no-ops, so this exercises the scrollback cap
 	// without the per-append viewport cost (which is what a real, model-paced run
 	// pays anyway, now bounded to the cap)
-	m := newModel("do the thing", "m", "b", "d", false)
+	m := newModel("zot", "do the thing", "m", "b", "d", false)
 
 	limit := m.maxEntries          // DefaultMaxScrollback
 	total := limit + limit/4 + 200 // enough to force a trim past the cap + slack
@@ -997,7 +997,7 @@ func TestTrimmedLogShowsAMarker(t *testing.T) {
 // The scrollback cap is configurable (Meta.MaxScrollback / ui.scrollback): a
 // caller can keep fewer or more lines than the default.
 func TestScrollbackCapIsConfigurable(t *testing.T) {
-	m := newModel("t", "m", "b", "d", false)
+	m := newModel("zot", "t", "m", "b", "d", false)
 	m.maxEntries = 50 // what Run sets from Meta.MaxScrollback
 
 	for i := 0; i < 300; i++ {
