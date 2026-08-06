@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"regexp"
 
+	"github.com/openzot/openzot/agent"
 	"github.com/openzot/openzot/internal/config"
 	"github.com/openzot/openzot/internal/session"
 	"github.com/openzot/openzot/internal/version"
@@ -14,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadProjectContext(t *testing.T) {
@@ -36,13 +39,13 @@ func TestLoadProjectContext(t *testing.T) {
 		t.Fatalf("LoadProjectContext: %v", err)
 	}
 
-	// Backstory keeps the default and appends both AGENT.md files in order.
-	for _, want := range []string{DefaultBackstory[:20], "GLOBAL CONVENTIONS", "PROJECT CONVENTIONS"} {
-		if !strings.Contains(cfg.Agent.Backstory, want) {
-			t.Errorf("backstory missing %q", want)
+	// Instructions keeps the default and appends both AGENT.md files in order.
+	for _, want := range []string{DefaultInstructions[:20], "GLOBAL CONVENTIONS", "PROJECT CONVENTIONS"} {
+		if !strings.Contains(cfg.Agent.Instructions, want) {
+			t.Errorf("instructions missing %q", want)
 		}
 	}
-	if i, j := strings.Index(cfg.Agent.Backstory, "GLOBAL"), strings.Index(cfg.Agent.Backstory, "PROJECT"); i > j {
+	if i, j := strings.Index(cfg.Agent.Instructions, "GLOBAL"), strings.Index(cfg.Agent.Instructions, "PROJECT"); i > j {
 		t.Error("expected config-dir AGENT.md to appear before work-dir AGENT.md")
 	}
 
@@ -66,8 +69,8 @@ func TestLoadProjectContextNoFiles(t *testing.T) {
 	if err := LoadProjectContext(&cfg, t.TempDir()); err != nil {
 		t.Fatalf("LoadProjectContext: %v", err)
 	}
-	if cfg.Agent.Backstory != "" {
-		t.Error("expected backstory untouched when no AGENT.md is present")
+	if cfg.Agent.Instructions != "" {
+		t.Error("expected instructions untouched when no AGENT.md is present")
 	}
 
 	if len(cfg.Skills) != 0 {
@@ -175,7 +178,7 @@ backends:
 				t.Fatalf("Load: %v", err)
 			}
 
-			client, _, err := resolve(cfg, DefaultBackstory)
+			client, _, err := resolve(cfg, DefaultInstructions)
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
@@ -209,7 +212,7 @@ func TestABackendWithoutAProviderIsRejected(t *testing.T) {
 	cfg.DefaultBackend = "mybackend"
 	cfg.Backends = map[string]config.Backend{"mybackend": {APIKey: "sk-test"}}
 
-	_, _, err := resolve(cfg, DefaultBackstory)
+	_, _, err := resolve(cfg, DefaultInstructions)
 	if err == nil {
 		t.Fatal("a backend naming no provider must be rejected")
 	}
@@ -236,7 +239,7 @@ func TestResolveProviderBackends(t *testing.T) {
 	for _, name := range []string{"openai", "anthropic"} {
 		cfg.DefaultBackend = name
 
-		client, _, err := resolve(cfg, DefaultBackstory)
+		client, _, err := resolve(cfg, DefaultInstructions)
 		if err != nil {
 			t.Fatalf("resolve(%s): %v", name, err)
 		}
@@ -278,7 +281,7 @@ backends:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	client, opts, err := resolve(cfg, DefaultBackstory)
+	client, opts, err := resolve(cfg, DefaultInstructions)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -515,8 +518,10 @@ func TestRunWithRecordsASession(t *testing.T) {
 		t.Errorf("the outcome must be recorded: %+v", logged.Result)
 	}
 
-	if len(logged.Messages) == 0 || logged.Messages[0].Text != "do the thing" {
-		t.Errorf("the log must open with the brief: %+v", logged.Messages)
+	// the objective is the durable task, recorded in the meta and placed in the
+	// instructions; the opening message is the kickoff, not the task
+	if len(logged.Messages) == 0 {
+		t.Errorf("the log must record the opening message: %+v", logged.Messages)
 	}
 }
 
@@ -536,9 +541,10 @@ func TestRunWithResumesAnEarlierSession(t *testing.T) {
 	sessions := t.TempDir()
 
 	output, err := quietly(t, func() error {
-		return RunWith(context.Background(), cfg, "carry on", RunOptions{
+		return RunWith(context.Background(), cfg, "the original brief", RunOptions{
 			SessionDir: sessions,
 			Resume:     earlier,
+			Prompt:     "carry on",
 		})
 	})
 	if err != nil {
@@ -571,7 +577,8 @@ func TestRunWithResumesAnEarlierSession(t *testing.T) {
 
 	joined := strings.Join(texts, "|")
 
-	for _, want := range []string{"the original brief", "I got halfway", "carry on"} {
+	// the replayed conversation plus the new follow-up prompt
+	for _, want := range []string{"I got halfway", "carry on"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the resumed conversation is missing %q: %s", want, joined)
 		}
@@ -681,7 +688,7 @@ func TestTheDefaultModelAndBackendCanTalkToEachOther(t *testing.T) {
 		defaults.DefaultBackend: {APIKey: "test-key"},
 	}
 
-	client, _, err := resolve(cfg, DefaultBackstory)
+	client, _, err := resolve(cfg, DefaultInstructions)
 	if err != nil {
 		t.Fatalf("the default pair does not resolve: %v", err)
 	}
@@ -692,5 +699,122 @@ func TestTheDefaultModelAndBackendCanTalkToEachOther(t *testing.T) {
 
 	if client.BaseURL() == "" {
 		t.Errorf("the default backend %q resolved to no endpoint", defaults.DefaultBackend)
+	}
+}
+
+// The task is the durable objective, so it must land in the instructions (the
+// system prompt), which compaction never summarises and always orders first -
+// not as a user message, which a long run can compact away. An agent that
+// forgets its own objective is the worst way for a run to fail.
+func TestTaskGoesIntoTheInstructions(t *testing.T) {
+	got := withTask("SYSTEM PROMPT", "  build a parser  ")
+
+	if !strings.Contains(got, "SYSTEM PROMPT") {
+		t.Error("the base instructions must be preserved")
+	}
+
+	if !strings.Contains(got, "build a parser") {
+		t.Errorf("the task must be in the instructions: %q", got)
+	}
+
+	// trimmed, and clearly the task rather than run together with the prompt
+	if strings.Contains(got, "  build a parser  ") {
+		t.Error("the task should be trimmed")
+	}
+
+	// an empty task leaves the instructions untouched
+	if withTask("SYSTEM PROMPT", "   ") != "SYSTEM PROMPT" {
+		t.Error("an empty task must not alter the instructions")
+	}
+}
+
+// The instructions drifted once already - it told the agent to call "edit",
+// "exec", "exit" and "progress" when those tools did not exist. This pins it:
+// every tool the default instructions names in quotes must be a real tool the
+// agent is actually given, or a terminal tool the engine adds in settle mode.
+func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
+	real := map[string]bool{
+		// the terminal tools the loop injects in settle mode
+		"_success": true,
+		"_failure": true,
+	}
+
+	for name := range agent.DefaultTools() {
+		real[name] = true
+	}
+
+	// pull every "quoted" token out of the instructions and check the tool-looking
+	// ones are real
+	for _, quoted := range regexp.MustCompile(`"([a-z_]+)"`).FindAllStringSubmatch(DefaultInstructions, -1) {
+		name := quoted[1]
+
+		// only check things that look like tool names (a real tool, or the
+		// phantom ones we are guarding against)
+		phantom := map[string]bool{"edit": true, "exec": true, "exit": true, "abort": true, "plan": true, "progress": true}
+
+		if !real[name] && phantom[name] {
+			t.Errorf("the instructions names %q, which is not a real tool", name)
+		}
+	}
+
+	// and positively assert the tools the instructions promises are all present
+	for _, want := range []string{"plan", "progress", "read", "write", "list", "shell", "_success", "_failure"} {
+		if !real[want] {
+			t.Errorf("the instructions relies on %q but it is not a real tool", want)
+		}
+
+		if !strings.Contains(DefaultInstructions, `"`+want+`"`) {
+			t.Errorf("the instructions should name the %q tool so the model knows to use it", want)
+		}
+	}
+}
+
+// The settle and call budgets are configurable, and the config values have to
+// actually reach the run - otherwise the knob in the example config is a lie.
+// max_settles is the one the operator most wants: how hard zot pushes the model
+// to record an outcome before giving up.
+func TestRunBudgetsComeFromConfig(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DefaultBackend = "openai"
+	cfg.Backends = map[string]config.Backend{"openai": {APIKey: "sk-test"}}
+	cfg.Agent.MaxSettles = 5
+	cfg.Agent.MaxCalls = 33
+
+	_, opts, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if opts.MaxSettles != 5 {
+		t.Errorf("MaxSettles = %d, want the configured 5", opts.MaxSettles)
+	}
+
+	if opts.MaxCalls != 33 {
+		t.Errorf("MaxCalls = %d, want the configured 33", opts.MaxCalls)
+	}
+
+	// max_time is a duration string on the config, a time.Duration on the run
+	cfg.Agent.MaxTime = "30m"
+
+	_, timed, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if timed.MaxDuration != 30*time.Minute {
+		t.Errorf("MaxDuration = %v, want 30m", timed.MaxDuration)
+	}
+
+	// zero stays zero, so the agent layer falls back to its built-in default
+	// rather than pinning the budget to zero
+	cfg.Agent.MaxSettles = 0
+
+	_, opts, err = resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if opts.MaxSettles != 0 {
+		t.Errorf("MaxSettles = %d, want 0 (the sentinel for 'use the default')", opts.MaxSettles)
 	}
 }

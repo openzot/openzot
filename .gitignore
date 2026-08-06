@@ -4,6 +4,12 @@
 configs/zot.yaml
 .env
 
+# The configuration baked into a portable build (`-tags portable`). It usually
+# holds credentials, and a portable binary is only as safe to ship as its keys -
+# so the source of those keys must never be committed. The template beside it,
+# portable.example.yaml, is tracked; the filled-in file is not.
+internal/config/portable.yaml
+
 # Go workspace files, if anyone creates one locally. zot has no local module
 # dependencies, so a go.work here is only ever a personal experiment - and one
 # that will cap the toolchain below what go.mod requires if its go line drifts.

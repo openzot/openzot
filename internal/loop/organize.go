@@ -121,13 +121,13 @@ func dropOrphanedActivities(messages []Message) []Message {
 // dropEmpty removes messages that carry nothing.
 //
 // A message with no text and no structure costs tokens and tells the model
-// nothing. Backstory is exempt: an empty system prompt is a configuration
+// nothing. The system prompt is exempt: an empty one is a configuration
 // choice, and silently dropping it would change which message comes first.
 func dropEmpty(messages []Message) []Message {
 	kept := make([]Message, 0, len(messages))
 
 	for _, message := range messages {
-		if message.Text == "" && message.Activity == nil && message.Type != TypeBackstory {
+		if message.Text == "" && message.Activity == nil && message.Type != TypeInstructions {
 			continue
 		}
 
@@ -185,7 +185,7 @@ func hasPartner(messages []Message, message Message) bool {
 // hasLaterConversation reports whether anything the model would see follows.
 func hasLaterConversation(rest []Message) bool {
 	for _, message := range rest {
-		if message.Type != TypeBackstory {
+		if message.Type != TypeInstructions {
 			return true
 		}
 	}

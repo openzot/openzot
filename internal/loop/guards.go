@@ -7,6 +7,8 @@
 // happened to use the word "completed".
 package loop
 
+import "sort"
+
 // Bounds on a single run. Every default here encodes a failure that happened.
 const (
 	// DefaultMaxIterations caps agentic rounds - one model call plus the tools
@@ -37,15 +39,22 @@ const (
 	// never because its prose sounded final.
 	DefaultMaxSettles = 20
 
-	// MinInputTokens is reserved so the backstory and the tool schemas always
+	// MinInputTokens is reserved so the instructions and the tool schemas always
 	// fit, however long the conversation grows.
 	MinInputTokens = 10_000
 
-	// CallBudgetLowRatio and CallBudgetLowCap decide when to warn the model that
-	// it is running out of tool calls. Telling it before it runs out lets it
-	// wrap up; telling it after is just a failure.
-	CallBudgetLowRatio = 0.2
-	CallBudgetLowCap   = 10
+	// DefaultCompactMinTokens is the estimated-input-token floor below which the
+	// compact strategy leaves the conversation whole - summarising a short thread
+	// costs more than carrying it.
+	DefaultCompactMinTokens = 50_000
+
+	// DefaultCompactMinMessages is the floor on how many messages must be eligible
+	// for summarising before the compact strategy runs.
+	DefaultCompactMinMessages = 20
+
+	// DefaultCompactTriggerRatio is the fraction of the context window at which the
+	// compact strategy fires.
+	DefaultCompactTriggerRatio = 0.9
 
 	// RunawayGuardMinChars is the output length below which the streaming
 	// repetition guard will not trip. Short repetitive output ends on its own.
@@ -76,6 +85,9 @@ const (
 	// StopCalls - the tool-call budget ran out.
 	StopCalls StopReason = "calls"
 
+	// StopTime - the wall-clock time budget ran out.
+	StopTime StopReason = "time"
+
 	// StopContinuations - too many recovery attempts.
 	StopContinuations StopReason = "continuations"
 
@@ -104,24 +116,44 @@ type Budget struct {
 	Empties       int
 	Settles       int
 
-	// budgetWarned records that the low-call-budget notice has been injected, so
-	// it fires at most once per run.
-	budgetWarned bool
+	// iterCheckpoint, callCheckpoint and timeCheckpoint record the index of the
+	// next approaching-limit checkpoint to fire for each bounded limit, so each
+	// checkpoint notice is injected at most once.
+	iterCheckpoint int
+	callCheckpoint int
+	timeCheckpoint int
 }
 
-// callBudgetLowThreshold is the remaining-call count at which the model is
-// warned. Proportional, but capped: on a large budget a percentage would warn
-// far too early to be useful.
-func callBudgetLowThreshold(maxCalls int) int {
-	threshold := int(float64(maxCalls) * CallBudgetLowRatio)
+// DefaultLimitCheckpoints are the percentages of a bounded limit at which the
+// model is told it is approaching that limit - once each - so it can pace itself
+// and finish before the hard stop rather than being cut off mid-task with no
+// warning. Configurable per run.
+var DefaultLimitCheckpoints = []int{50, 80, 90}
 
-	if threshold > CallBudgetLowCap {
-		threshold = CallBudgetLowCap
+// normalizeCheckpoints cleans a configured checkpoint list into an ascending set
+// of valid percentages.
+//
+// Nil means "use the defaults"; a non-nil empty slice means "no checkpoints" -
+// the operator turned them off. Values outside 1..99 are dropped, because 0 is
+// no progress and 100 is the limit itself (already its own stop), and duplicates
+// are collapsed so a list cannot fire the same notice twice.
+func normalizeCheckpoints(configured []int) []int {
+	if configured == nil {
+		return DefaultLimitCheckpoints
 	}
 
-	if threshold < 1 {
-		threshold = 1
+	seen := map[int]bool{}
+	out := make([]int, 0, len(configured))
+
+	for _, p := range configured {
+		if p >= 1 && p <= 99 && !seen[p] {
+			seen[p] = true
+
+			out = append(out, p)
+		}
 	}
 
-	return threshold
+	sort.Ints(out)
+
+	return out
 }

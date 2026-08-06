@@ -155,6 +155,18 @@ func TestTickAdvancesTheElapsedClock(t *testing.T) {
 	}
 }
 
+// A compaction rewrites the conversation and spends a model call, so it must be
+// visible in the log rather than happening silently.
+func TestHandleEventShowsCompaction(t *testing.T) {
+	m := sized(t, 100, 30)
+
+	m.handleEvent(agent.CompactionEvent{Detail: "compacted 30 earlier messages into a checkpoint"})
+
+	if log := strings.Join(m.entries, "\n"); !strings.Contains(log, "compacted 30 earlier messages") {
+		t.Errorf("a compaction must appear in the log:\n%s", log)
+	}
+}
+
 func TestHandleEventBuildsTheLog(t *testing.T) {
 	m := sized(t, 100, 30)
 
@@ -858,5 +870,77 @@ func TestPlainDiffIgnoresNonEdits(t *testing.T) {
 
 	if !strings.Contains(got, "package main") {
 		t.Errorf("a write produced no diff: %q", got)
+	}
+}
+
+// The plan and progress renderers are the reason these tools exist in the
+// viewer: an operator watching a long run reads the plan to judge the approach
+// and the progress to see where it is. These pin that the structure survives
+// into the rendered lines, not just the tool name.
+func TestRenderPlanShowsNumberedSteps(t *testing.T) {
+	out := stripANSI(renderToolStart("plan", map[string]interface{}{
+		"steps":     []interface{}{"read the handler", "add validation", "write a test"},
+		"rationale": "smallest safe change first",
+	}))
+
+	for _, want := range []string{"plan", "smallest safe change first", "1. read the handler", "2. add validation", "3. write a test"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderProgressShowsStatus(t *testing.T) {
+	out := stripANSI(renderToolStart("progress", map[string]interface{}{
+		"current":   "adding validation",
+		"completed": []interface{}{"read the handler"},
+		"blockers":  []interface{}{"missing a fixture"},
+		"nextSteps": []interface{}{"write a test"},
+	}))
+
+	for _, want := range []string{"adding validation", "done", "read the handler", "blocked", "missing a fixture", "next", "write a test"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered progress missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A plan with no steps still renders its header rather than crashing, and a
+// model that emits a non-string step must not break the render.
+func TestPlanRenderingIsRobust(t *testing.T) {
+	if out := stripANSI(renderToolStart("plan", map[string]interface{}{})); !strings.Contains(out, "plan") {
+		t.Errorf("a stepless plan should still render a header: %q", out)
+	}
+
+	// strList drops the non-string entry rather than panicking
+	if got := strList(map[string]interface{}{"steps": []interface{}{"ok", 42, nil, "also ok"}}, "steps"); len(got) != 2 {
+		t.Errorf("strList should keep only the strings, got %v", got)
+	}
+
+	if got := strList(map[string]interface{}{"steps": "not an array"}, "steps"); got != nil {
+		t.Errorf("strList on a non-array should be nil, got %v", got)
+	}
+}
+
+// The plain (non-TTY) renderers surface the same structure for a piped run.
+func TestPlainPlanAndProgress(t *testing.T) {
+	plan := plainArg("plan", map[string]interface{}{
+		"steps":     []interface{}{"step one", "step two"},
+		"rationale": "because",
+	})
+	for _, want := range []string{"because", "1. step one", "2. step two"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("plain plan missing %q:\n%s", want, plan)
+		}
+	}
+
+	progress := plainArg("progress", map[string]interface{}{
+		"current":  "working",
+		"blockers": []interface{}{"a blocker"},
+	})
+	for _, want := range []string{"working", "blocked", "a blocker"} {
+		if !strings.Contains(progress, want) {
+			t.Errorf("plain progress missing %q:\n%s", want, progress)
+		}
 	}
 }

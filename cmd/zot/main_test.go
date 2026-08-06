@@ -89,13 +89,47 @@ func TestNothingAtRuntimeCanEnableDotEnv(t *testing.T) {
 	}
 }
 
+// A bare positional is the durable objective, with no separate prompt - `zot
+// "do X"` must keep working and stay durable.
 func TestResolveTaskFromArguments(t *testing.T) {
-	task, err := resolveTask("", []string{"add", "a", "health", "endpoint"})
+	task, prompt, err := resolveTask("", "", []string{"add", "a", "health", "endpoint"})
 	if err != nil {
 		t.Fatalf("resolveTask: %v", err)
 	}
 
 	if task != "add a health endpoint" {
+		t.Errorf("task = %q", task)
+	}
+
+	if prompt != "" {
+		t.Errorf("a bare positional should be the task, not a prompt; got prompt %q", prompt)
+	}
+}
+
+// --task is the objective; a positional alongside it is the opening prompt.
+func TestResolveTaskFlagWithPrompt(t *testing.T) {
+	task, prompt, err := resolveTask("build the parser", "", []string{"start", "with", "the", "lexer"})
+	if err != nil {
+		t.Fatalf("resolveTask: %v", err)
+	}
+
+	if task != "build the parser" {
+		t.Errorf("task = %q, want the --task value", task)
+	}
+
+	if prompt != "start with the lexer" {
+		t.Errorf("prompt = %q, want the positional text", prompt)
+	}
+}
+
+// --task wins over a positional as the objective.
+func TestResolveTaskFlagOverridesPositional(t *testing.T) {
+	task, _, err := resolveTask("the real objective", "", []string{"noise"})
+	if err != nil {
+		t.Fatalf("resolveTask: %v", err)
+	}
+
+	if task != "the real objective" {
 		t.Errorf("task = %q", task)
 	}
 }
@@ -107,7 +141,7 @@ func TestResolveTaskFromFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := resolveTask(path, nil)
+	task, _, err := resolveTask("", path, nil)
 	if err != nil {
 		t.Fatalf("resolveTask: %v", err)
 	}
@@ -117,8 +151,7 @@ func TestResolveTaskFromFile(t *testing.T) {
 	}
 }
 
-// A task file takes precedence, so a long brief does not have to survive shell
-// quoting.
+// A task file is the objective; the positional beside it is the opening prompt.
 func TestResolveTaskFilePrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task.md")
 
@@ -126,13 +159,17 @@ func TestResolveTaskFilePrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := resolveTask(path, []string{"from", "the", "args"})
+	task, prompt, err := resolveTask("", path, []string{"opening", "note"})
 	if err != nil {
 		t.Fatalf("resolveTask: %v", err)
 	}
 
 	if task != "from the file" {
-		t.Errorf("task = %q, want the file to win", task)
+		t.Errorf("task = %q, want the file as the objective", task)
+	}
+
+	if prompt != "opening note" {
+		t.Errorf("prompt = %q, want the positional text", prompt)
 	}
 }
 
@@ -145,20 +182,21 @@ func TestResolveTaskErrors(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		taskFlag string
 		taskFile string
 		args     []string
 	}{
 		// there is no interactive prompt to fall back on: zot is a viewer, so a
 		// missing task has to be an error rather than a wait
-		{"no task at all", "", nil},
-		{"whitespace-only arguments", "", []string{"  ", "\t"}},
-		{"a missing task file", filepath.Join(t.TempDir(), "nope.md"), nil},
-		{"an empty task file", empty, nil},
+		{"no task at all", "", "", nil},
+		{"whitespace-only arguments", "", "", []string{"  ", "\t"}},
+		{"a missing task file", "", filepath.Join(t.TempDir(), "nope.md"), nil},
+		{"an empty task file", "", empty, nil},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := resolveTask(test.taskFile, test.args); err == nil {
+			if _, _, err := resolveTask(test.taskFlag, test.taskFile, test.args); err == nil {
 				t.Error("expected an error")
 			}
 		})
@@ -649,8 +687,14 @@ backends:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if len(first.Messages) == 0 || first.Messages[0].Text != "the first task" {
-		t.Fatalf("the log must open with the brief: %+v", first.Messages)
+	// the task is the durable objective, recorded in the meta (and placed in the
+	// instructions), not as the opening user message
+	if first.Meta.Task != "the first task" {
+		t.Errorf("meta task = %q, want the objective", first.Meta.Task)
+	}
+
+	if len(first.Messages) == 0 {
+		t.Fatalf("the log must record the opening message: %+v", first.Messages)
 	}
 
 	if first.Meta.Model != "test-model" || first.Meta.Workdir == "" {
@@ -696,6 +740,12 @@ backends:
 		t.Errorf("ResumedFrom = %q, want %q", second.Meta.ResumedFrom, first.Meta.ID)
 	}
 
+	// the objective carries over from the resumed session - a resume keeps the
+	// original brief and adds to it, it does not replace it
+	if second.Meta.Task != "the first task" {
+		t.Errorf("resumed task = %q, want the original objective preserved", second.Meta.Task)
+	}
+
 	var texts []string
 
 	for _, message := range second.Messages {
@@ -704,8 +754,8 @@ backends:
 
 	joined := strings.Join(texts, "\n")
 
-	if !strings.Contains(joined, "the first task") || !strings.Contains(joined, "the follow-up") {
-		t.Errorf("a resumed log must hold both the old conversation and the new instruction:\n%s", joined)
+	if !strings.Contains(joined, "the follow-up") {
+		t.Errorf("a resumed log must hold the new instruction:\n%s", joined)
 	}
 }
 

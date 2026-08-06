@@ -25,6 +25,7 @@ const (
 	EventToolCallError  EventKind = "toolCallError"
 	EventRetry          EventKind = "retry"
 	EventRunaway        EventKind = "runaway"
+	EventCompact        EventKind = "compact"
 )
 
 // Event is emitted as a run progresses.
@@ -98,19 +99,6 @@ func toCompactionMessages(messages []Message) []compaction.Message {
 	return converted
 }
 
-func fromCompactionMessages(messages []compaction.Message) []Message {
-	converted := make([]Message, 0, len(messages))
-
-	for _, message := range messages {
-		converted = append(converted, Message{
-			Type: MessageType(message.Type),
-			Text: message.Text,
-		})
-	}
-
-	return converted
-}
-
 // toChatMessages renders the conversation into the provider wire format.
 //
 // Activity messages are the interesting case: a request half becomes an
@@ -178,7 +166,7 @@ func toChatMessages(messages []Message) []provider.ChatMessage {
 			// reasoning content on the way back in, and it is the model's
 			// scratchpad rather than conversation
 
-		case TypeBackstory, TypeContext:
+		case TypeInstructions, TypeCheckpoint:
 			converted = append(converted, provider.ChatMessage{
 				Role:    provider.RoleSystem,
 				Content: message.Text,

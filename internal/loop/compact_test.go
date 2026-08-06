@@ -113,7 +113,7 @@ func TestContextLimitTriggersCompaction(t *testing.T) {
 	var summarised bool
 
 	for _, message := range result.Messages {
-		if message.Type == TypeContext && strings.Contains(message.Text, "condensed") {
+		if message.Type == TypeCheckpoint && strings.Contains(message.Text, "condensed") {
 			summarised = true
 		}
 	}
@@ -175,9 +175,9 @@ func TestCompactCondensesAndKeepsTheTail(t *testing.T) {
 	}
 }
 
-// A backstory must never be summarised away, and must stay ahead of the summary
+// The system prompt must never be summarised away, and must stay ahead of the summary
 // so the model reads its instructions before the condensed history.
-func TestCompactKeepsBackstoryFirst(t *testing.T) {
+func TestCompactKeepsInstructionsFirst(t *testing.T) {
 	client, _ := contextLimitOnce(t)
 
 	engine, err := New(Options{Client: client})
@@ -188,7 +188,7 @@ func TestCompactKeepsBackstoryFirst(t *testing.T) {
 	engine.inputBudget = 2_000
 
 	messages := append(
-		[]Message{{Type: TypeBackstory, Text: "you are an agent with a specific persona"}},
+		[]Message{{Type: TypeInstructions, Text: "you are an agent with a specific persona"}},
 		longConversation(40)...,
 	)
 
@@ -198,16 +198,16 @@ func TestCompactKeepsBackstoryFirst(t *testing.T) {
 		t.Fatal("expected the conversation to be compacted")
 	}
 
-	if compacted[0].Type != TypeBackstory {
-		t.Fatalf("first message is %q, want the backstory to stay in front", compacted[0].Type)
+	if compacted[0].Type != TypeInstructions {
+		t.Fatalf("first message is %q, want the instructions to stay in front", compacted[0].Type)
 	}
 
 	if !strings.Contains(compacted[0].Text, "specific persona") {
-		t.Error("the backstory must survive verbatim, not be summarised")
+		t.Error("the instructions must survive verbatim, not be summarised")
 	}
 
-	if compacted[1].Type != TypeContext {
-		t.Errorf("second message is %q, want the summary directly after the backstory", compacted[1].Type)
+	if compacted[1].Type != TypeCheckpoint {
+		t.Errorf("second message is %q, want the summary directly after the instructions", compacted[1].Type)
 	}
 }
 

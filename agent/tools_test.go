@@ -453,3 +453,67 @@ func TestShellRespectsCancellation(t *testing.T) {
 		t.Log("a cancelled run returned output rather than an error, which is acceptable")
 	}
 }
+
+// plan and progress are reflective tools - they change nothing on disk, so the
+// contract is entirely in their arguments and their acknowledgement. A plan
+// without steps is the mistake worth catching: an empty plan is not a plan.
+func TestPlanTool(t *testing.T) {
+	out, err := call(t, DefaultTools(), "plan", map[string]any{
+		"steps":     []any{"read the code", "make the change", "run the tests"},
+		"rationale": "smallest safe change first",
+	})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+
+	text, _ := out.(string)
+
+	if !strings.Contains(text, "3 step") {
+		t.Errorf("plan ack should state the step count: %q", text)
+	}
+
+	if !strings.Contains(text, "smallest safe change first") {
+		t.Errorf("plan ack should carry the rationale: %q", text)
+	}
+
+	// a plan with no steps is rejected, so the model is told to actually plan
+	if _, err := call(t, DefaultTools(), "plan", map[string]any{"steps": []any{}}); err == nil {
+		t.Error("an empty plan must be an error")
+	}
+
+	if _, err := call(t, DefaultTools(), "plan", map[string]any{}); err == nil {
+		t.Error("a plan with no steps field must be an error")
+	}
+}
+
+func TestProgressTool(t *testing.T) {
+	out, err := call(t, DefaultTools(), "progress", map[string]any{
+		"completed": []any{"read the code"},
+		"current":   "making the change",
+		"nextSteps": []any{"run the tests"},
+	})
+	if err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+
+	if text, _ := out.(string); !strings.Contains(text, "making the change") {
+		t.Errorf("progress ack should name the current step: %q", text)
+	}
+
+	// progress with nothing is still valid - it is a checkpoint, not a command
+	if _, err := call(t, DefaultTools(), "progress", map[string]any{}); err != nil {
+		t.Errorf("an empty progress checkpoint should be allowed: %v", err)
+	}
+}
+
+// plan and progress must be in the toolbox both tools ship, or the instructions
+// that tells the agent to call them is lying.
+func TestPlanAndProgressAreInTheToolbox(t *testing.T) {
+	tools := DefaultTools()
+
+	for _, name := range []string{"plan", "progress"} {
+		if _, ok := tools[name]; !ok {
+			t.Errorf("DefaultTools is missing the %q tool", name)
+		}
+	}
+}

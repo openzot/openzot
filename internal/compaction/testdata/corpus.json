@@ -771,7 +771,7 @@
       "args": [
         [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context"
           },
           {
@@ -852,7 +852,7 @@
         ],
         "messagesToKeep": [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context"
           },
           {
@@ -876,19 +876,19 @@
       "args": [
         [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context a"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context b"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context c"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context d"
           }
         ],
@@ -900,19 +900,19 @@
         "messagesToSummarize": [],
         "messagesToKeep": [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context a"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context b"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context c"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context d"
           }
         ]
@@ -2054,7 +2054,7 @@
       "args": [
         [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "TOP_SECRET_SYSTEM_CONTEXT"
           },
           {
@@ -2518,7 +2518,7 @@
       "args": [
         [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "system context"
           },
           {
@@ -2560,7 +2560,7 @@
       ],
       "expected": [
         {
-          "type": "backstory",
+          "type": "instructions",
           "text": "system context"
         },
         {
@@ -2591,11 +2591,11 @@
       "args": [
         [
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "context a"
           },
           {
-            "type": "backstory",
+            "type": "instructions",
             "text": "context b"
           },
           {
@@ -2617,11 +2617,11 @@
       ],
       "expected": [
         {
-          "type": "backstory",
+          "type": "instructions",
           "text": "context a"
         },
         {
-          "type": "backstory",
+          "type": "instructions",
           "text": "context b"
         },
         {

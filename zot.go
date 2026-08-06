@@ -41,22 +41,50 @@ var skillSubdirs = []string{".skills", "skills"}
 // Validate method enforces the same checks the standalone binary runs.
 type Config = config.Config
 
-// DefaultBackstory is the system instruction handed to the agent when the
+// DefaultInstructions is the system prompt handed to the agent when the
 // configuration does not override it. It establishes the fully-autonomous,
 // no-questions-asked contract: zot has no input channel, so the agent must
 // never wait for the user.
-const DefaultBackstory = `You are zot, a fully autonomous software engineering agent operating inside a real working directory on the user's machine.
+const DefaultInstructions = `You are zot, a fully autonomous software engineering agent operating inside a real working directory on the user's machine.
 
 You have NO way to ask the user questions and you will receive NO further input. You must complete the task end to end on your own using your tools.
 
+Your tools:
+- "plan": lay out an ordered plan before you start, and revise it whenever your approach changes.
+- "read" and "list": inspect files and directories before you change them.
+- "write": create a file, or replace part of one.
+- "shell": run builds, tests, linters and any other non-interactive command. Never run interactive or long-lived ones.
+- "progress": record what you have done and what is left, so your state stays visible on a long run.
+
 Operating rules:
-- Begin by calling the "plan" tool to lay out concrete, ordered steps.
-- Use "read" to understand existing code before changing it. Prefer "edit" for surgical changes and "write" for new files.
-- Use "exec" to run builds, tests, linters, scaffolding and any non-interactive shell command. Never run interactive or long-lived commands.
-- Verify your work: after making changes, build and/or run the tests and fix what you broke.
-- Call "progress" as you complete steps so your reasoning is visible.
-- When the task is genuinely done (or truly cannot proceed), call "exit" with code 0 for success or a non-zero code for failure, and a short summary message.
-- Make reasonable assumptions instead of stopping. Do not ask for clarification.`
+- Begin by calling "plan" to lay out concrete, ordered steps.
+- Read before you write. After you change anything, build and run the tests, and fix what you broke.
+- Call "progress" as you complete steps.
+- Make reasonable assumptions instead of stopping. Do not ask for clarification.
+- The task is not finished until you record an outcome: call "_success" with a summary when the objective is met, or "_failure" with the reason when it genuinely cannot be. Do not simply stop.`
+
+// taskHeading introduces the task inside the instructions. The task lives in the
+// system prompt rather than as a user message so it survives compaction: a user
+// message can be summarised away on a long run, and an autonomous agent that
+// forgets its own objective is the worst way for a run to fail. The instructions
+// are never summarised and always ordered first.
+const taskHeading = "\n\n## Your task\n\n"
+
+// taskKickoff is the user message that starts a run when the caller gave no
+// prompt of its own. The objective is in the instructions; this only has to get the
+// agent moving.
+const taskKickoff = "Begin working on your task. Start by calling the plan tool to lay out your approach, then carry it through to completion."
+
+// withTask appends the task to the instructions, or returns them unchanged when
+// there is no task.
+func withTask(instructions, task string) string {
+	task = strings.TrimSpace(task)
+	if task == "" {
+		return instructions
+	}
+
+	return instructions + taskHeading + task
+}
 
 // Version reports the build version of the linked zot core.
 func Version() string { return version.Version }
@@ -72,11 +100,11 @@ func DefaultConfigPath() string { return config.DefaultConfigPath() }
 // given directories, searched in order (typically the config directory first,
 // then the working directory):
 //
-//   - <dir>/AGENT.md  - appended to the agent backstory
+//   - <dir>/AGENT.md  - appended to the agent instructions
 //   - <dir>/skills/   - loaded via the SDK and added as a "skills" feature
 //
 // Missing files and directories are ignored, and duplicate directories are
-// searched once. AGENT.md content augments (never replaces) the base backstory.
+// searched once. AGENT.md content augments (never replaces) the base instructions.
 func LoadProjectContext(cfg *Config, dirs ...string) error {
 	seen := map[string]bool{}
 	var search []string
@@ -88,9 +116,9 @@ func LoadProjectContext(cfg *Config, dirs ...string) error {
 		search = append(search, d)
 	}
 
-	base := cfg.Agent.Backstory
+	base := cfg.Agent.Instructions
 	if base == "" {
-		base = DefaultBackstory
+		base = DefaultInstructions
 	}
 
 	var instructions []string
@@ -107,7 +135,7 @@ func LoadProjectContext(cfg *Config, dirs ...string) error {
 	}
 
 	if len(instructions) > 0 {
-		cfg.Agent.Backstory = base + "\n\n" + projectContext + "\n\n" + strings.Join(instructions, "\n\n---\n\n")
+		cfg.Agent.Instructions = base + "\n\n" + projectContext + "\n\n" + strings.Join(instructions, "\n\n---\n\n")
 	}
 
 	res, err := agent.LoadSkills(skillDirs)
@@ -135,6 +163,12 @@ type RunOptions struct {
 	// OnSession is called once the log is open, with its path. Used to tell the
 	// operator where the record is before the run takes over the screen.
 	OnSession func(path string)
+
+	// Prompt is an optional user message that opens the run, distinct from the
+	// task. The task (in the instructions) is the durable objective; the prompt is
+	// an ephemeral nudge - "start with the error handling" - and may be
+	// compacted away later, which is fine because it is not the objective.
+	Prompt string
 }
 
 // Run executes one autonomous coding task, rendering the agent's activity in the
@@ -149,7 +183,7 @@ func Run(ctx context.Context, cfg Config, task string) error {
 func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) error {
 	config.ScrubBackendSecrets(cfg)
 
-	client, opts, err := resolve(cfg, DefaultBackstory)
+	client, opts, err := resolve(cfg, DefaultInstructions)
 	if err != nil {
 		return err
 	}
@@ -161,7 +195,18 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		opts.Messages = options.Resume.AgentMessages()
 	}
 
-	opts.Messages = append(opts.Messages, agent.Message{Type: agent.TypeUser, Text: task})
+	// The task is the durable objective and goes into the system prompt; the
+	// opening user message is the prompt if the caller gave one, otherwise a
+	// kickoff. This is what keeps the objective in context however long the run
+	// grows - see withTask.
+	opts.Instructions = withTask(opts.Instructions, task)
+
+	prompt := strings.TrimSpace(options.Prompt)
+	if prompt == "" {
+		prompt = taskKickoff
+	}
+
+	opts.Messages = append(opts.Messages, agent.Message{Type: agent.TypeUser, Text: prompt})
 
 	workdir, _ := os.Getwd()
 
@@ -208,7 +253,7 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 
 // resolve turns a configuration into a provider client and the agent options a
 // run uses. The returned options carry no messages; callers supply those.
-func resolve(cfg Config, defaultBackstory string) (*agent.Client, agent.ExecuteWithToolsOptions, error) {
+func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.ExecuteWithToolsOptions, error) {
 	var empty agent.ExecuteWithToolsOptions
 
 	backend, ok := cfg.Backends[cfg.DefaultBackend]
@@ -244,9 +289,9 @@ func resolve(cfg Config, defaultBackstory string) (*agent.Client, agent.ExecuteW
 			cfg.DefaultBackend, strings.Join(agent.Providers(), ", "))
 	}
 
-	backstory := cfg.Agent.Backstory
-	if backstory == "" {
-		backstory = defaultBackstory
+	instructions := cfg.Agent.Instructions
+	if instructions == "" {
+		instructions = defaultInstructions
 	}
 
 	client, err := agent.NewClient(agent.ClientOptions{
@@ -259,11 +304,34 @@ func resolve(cfg Config, defaultBackstory string) (*agent.Client, agent.ExecuteW
 		return nil, empty, fmt.Errorf("backend %q: %w", cfg.DefaultBackend, err)
 	}
 
+	// max_time was validated at load, so a parse error here would be a bug; treat
+	// it as unbounded rather than failing a run that already passed validation.
+	maxDuration, _ := cfg.Agent.MaxDuration()
+
 	opts := agent.ExecuteWithToolsOptions{
-		Backstory:     backstory,
-		Tools:         agent.DefaultTools(),
-		Skills:        cfg.Skills,
-		MaxIterations: maxIterations,
+		Instructions:     instructions,
+		Tools:            agent.DefaultTools(),
+		Skills:           cfg.Skills,
+		MaxIterations:    maxIterations,
+		MaxSettles:       cfg.Agent.MaxSettles,
+		MaxCalls:         cfg.Agent.MaxCalls,
+		MaxContinuations: cfg.Agent.MaxContinuations,
+		MaxCycles:        cfg.Agent.MaxCycles,
+		MaxEmpties:       cfg.Agent.MaxEmpties,
+		MaxDuration:      maxDuration,
+		LimitCheckpoints: cfg.Agent.LimitCheckpoints,
+		// Empty is the default (compact); the agent layer resolves the string.
+		ContextStrategy:     cfg.Agent.ContextStrategy,
+		CompactMinTokens:    cfg.Agent.CompactMinTokens,
+		CompactMinMessages:  cfg.Agent.CompactMinMessages,
+		CompactTriggerRatio: cfg.Agent.CompactTriggerRatio,
+	}
+
+	// MaxTokens is a pointer so that "unset" (provider decides) is distinct from
+	// a deliberate zero; the config uses a positive value to mean "cap here".
+	if cfg.Agent.MaxTokens > 0 {
+		limit := cfg.Agent.MaxTokens
+		opts.MaxTokens = &limit
 	}
 
 	return client, opts, nil

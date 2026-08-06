@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Budget semantics, ported from the TypeScript engine's maxIterations and
@@ -15,6 +16,43 @@ import (
 // mid-answer. Conflating them is how a run that is making steady progress
 // through tool calls gets killed for "running out of output space", and how a
 // model that never stops being truncated runs forever. Both were real.
+
+// A time cap ends a run at the iteration boundary. Unbounded by default, but a
+// run pinned to a deadline must stop with StopTime rather than running to the
+// iteration backstop.
+func TestATimeBudgetStopsTheRun(t *testing.T) {
+	calls := 0
+
+	result := run(t, Options{
+		// a stub that calls a tool forever
+		Client:        stub(t, []string{tool("call_1", "echo", "{}")}),
+		Tools:         echoTool(&calls),
+		MaxDuration:   time.Millisecond,
+		MaxIterations: 100000, // high, so time is what stops it, not iterations
+		MaxCycles:     100000, // high, so cycle detection is not what stops it
+	})
+
+	if result.Reason != StopTime {
+		t.Errorf("Reason = %q, want %q", result.Reason, StopTime)
+	}
+
+	// it did some work before the deadline, and nowhere near the iteration cap
+	if result.Budget.Iterations >= 100000 {
+		t.Errorf("Iterations = %d, want the time cap to bite first", result.Budget.Iterations)
+	}
+}
+
+// With no time cap, a run is never stopped for time - the default is unbounded.
+func TestTimeIsUnboundedByDefault(t *testing.T) {
+	result := run(t, Options{
+		Client:        stub(t, []string{text("done"), stop()}),
+		MaxIterations: 5,
+	})
+
+	if result.Reason == StopTime {
+		t.Error("a run with no time cap must never stop for time")
+	}
+}
 
 // A tool round is progress. It costs an iteration and a call, and nothing else.
 func TestToolRoundsDoNotSpendTheContinuationBudget(t *testing.T) {
@@ -171,13 +209,12 @@ func TestASingleIterationIsOneModelCall(t *testing.T) {
 
 // A non-positive budget means "unset", not "zero".
 //
-// The TypeScript engine honoured maxCalls=0 as a no-tools mode and then needed
-// a separate guard so a negative counter could not walk under it. zot has no
-// such mode - an agent that may not act is not an autonomous agent - so a
-// non-positive value falls back to the default. What matters is that it can
-// never be read as an unbounded budget, which is the way that mistake fails
-// dangerously.
-func TestANonPositiveBudgetFallsBackToTheDefault(t *testing.T) {
+// The distinction: the iteration count and the no-progress guards (cycles,
+// empties) are hard backstops - a non-positive value must never leave them
+// unbounded, because that is how a runaway run fails dangerously. The call and
+// time budgets are the opposite: unbounded is their intended default, so a
+// non-positive value means exactly that.
+func TestBudgetDefaults(t *testing.T) {
 	for _, value := range []int{0, -1, -1000} {
 		engine, err := New(Options{
 			Client:        stub(t, []string{stop()}),
@@ -190,14 +227,20 @@ func TestANonPositiveBudgetFallsBackToTheDefault(t *testing.T) {
 			t.Fatalf("New: %v", err)
 		}
 
-		if engine.maxCalls != DefaultMaxCalls || engine.maxIterations != DefaultMaxIterations {
-			t.Errorf("a budget of %d gave calls=%d iterations=%d, want the defaults",
-				value, engine.maxCalls, engine.maxIterations)
+		// backstops fall back to their finite defaults
+		if engine.maxIterations != DefaultMaxIterations {
+			t.Errorf("a budget of %d left iterations at %d, want the default backstop",
+				value, engine.maxIterations)
 		}
 
 		if engine.maxCycles <= 0 || engine.maxEmpties <= 0 {
 			t.Errorf("a budget of %d left a guard unbounded: cycles=%d empties=%d",
 				value, engine.maxCycles, engine.maxEmpties)
+		}
+
+		// calls stays unbounded - a non-positive value is "no cap", not a default
+		if engine.maxCalls != 0 {
+			t.Errorf("a budget of %d gave maxCalls=%d, want 0 (unbounded)", value, engine.maxCalls)
 		}
 	}
 }
@@ -402,4 +445,119 @@ func countActivities(messages []Message) (requests, responses int) {
 	}
 
 	return requests, responses
+}
+
+// The point of the whole feature: as a run approaches a bounded limit, the model
+// is told, at each configured checkpoint, so it can pace itself and finish
+// rather than being cut off mid-task. Here the iteration budget is 10 and the
+// checkpoints are 50% and 80%, so the model must be warned at iteration 5 and 8.
+func TestIterationCheckpointsFireAsTheLimitApproaches(t *testing.T) {
+	result := run(t, Options{
+		Client:           stub(t, []string{tool("call_1", "echo", "{}")}),
+		Tools:            echoTool(new(int)),
+		MaxIterations:    10,
+		MaxCycles:        100000, // don't let cycle detection stop it early
+		LimitCheckpoints: []int{50, 80},
+	})
+
+	if result.Reason != StopIterations {
+		t.Fatalf("Reason = %q, want the run to reach the iteration cap", result.Reason)
+	}
+
+	fired := 0
+
+	for _, m := range result.Messages {
+		if strings.Contains(m.Text, "through your step budget") {
+			fired++
+		}
+	}
+
+	if fired != 2 {
+		t.Errorf("iteration checkpoints fired %d times, want 2 (at 50%% and 80%%)", fired)
+	}
+}
+
+// Tool-call checkpoints fire against the call budget, independently of
+// iterations - a single iteration can burn many calls.
+func TestCallCheckpointsFire(t *testing.T) {
+	result := run(t, Options{
+		Client:           stub(t, []string{tool("call_1", "echo", "{}")}),
+		Tools:            echoTool(new(int)),
+		MaxCalls:         10,
+		MaxIterations:    1000,
+		MaxCycles:        100000,
+		LimitCheckpoints: []int{80},
+	})
+
+	fired := 0
+
+	for _, m := range result.Messages {
+		if strings.Contains(m.Text, "through your tool-call budget") {
+			fired++
+		}
+	}
+
+	if fired == 0 {
+		t.Error("the tool-call budget checkpoint never fired")
+	}
+}
+
+// An unbounded limit has nothing to approach, so it never fires a checkpoint -
+// only the finite iteration backstop does.
+func TestUnboundedLimitsHaveNoCheckpoints(t *testing.T) {
+	result := run(t, Options{
+		Client:           stub(t, []string{tool("call_1", "echo", "{}")}),
+		Tools:            echoTool(new(int)),
+		MaxIterations:    6,
+		MaxCalls:         0, // unbounded
+		MaxCycles:        100000,
+		LimitCheckpoints: []int{50},
+	})
+
+	for _, m := range result.Messages {
+		if strings.Contains(m.Text, "through your tool-call budget") {
+			t.Error("an unbounded call budget must not fire a checkpoint")
+		}
+	}
+}
+
+// An explicit empty checkpoint list turns the notices off entirely.
+func TestCheckpointsCanBeDisabled(t *testing.T) {
+	result := run(t, Options{
+		Client:           stub(t, []string{tool("call_1", "echo", "{}")}),
+		Tools:            echoTool(new(int)),
+		MaxIterations:    6,
+		MaxCycles:        100000,
+		LimitCheckpoints: []int{}, // disabled
+	})
+
+	for _, m := range result.Messages {
+		if strings.Contains(m.Text, "through your") {
+			t.Errorf("checkpoints were disabled but a notice fired: %q", m.Text)
+		}
+	}
+}
+
+// Each checkpoint fires at most once, even though the run passes it on many
+// subsequent iterations.
+func TestEachCheckpointFiresOnce(t *testing.T) {
+	result := run(t, Options{
+		Client:           stub(t, []string{tool("call_1", "echo", "{}")}),
+		Tools:            echoTool(new(int)),
+		MaxIterations:    20,
+		MaxCycles:        100000,
+		LimitCheckpoints: []int{50},
+	})
+
+	fired := 0
+
+	for _, m := range result.Messages {
+		if strings.Contains(m.Text, "through your step budget") {
+			fired++
+		}
+	}
+
+	if fired != 1 {
+		t.Errorf("the 50%% checkpoint fired %d times, want exactly once", fired)
+	}
 }

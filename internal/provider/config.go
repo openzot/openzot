@@ -31,7 +31,17 @@ const (
 	ZAI        = "zai"
 	Qwen       = "qwen"
 	Ollama     = "ollama"
-	Custom     = "custom"
+
+	// Vercel is the Vercel AI Gateway, an OpenAI-compatible proxy with a fixed
+	// endpoint. Like OpenRouter, it routes by a provider-qualified model name.
+	Vercel = "vercel"
+
+	// Cloudflare is the Cloudflare AI Gateway. Recognised, but with no fixed
+	// endpoint: its URL embeds the account and gateway ids, so a run must supply
+	// one. See gatewayProviders.
+	Cloudflare = "cloudflare"
+
+	Custom = "custom"
 )
 
 // baseURLs maps a provider to its OpenAI-compatible endpoint root.
@@ -53,13 +63,100 @@ var baseURLs = map[string]string{
 	ZAI:        "https://api.z.ai/api/paas/v4",
 	Qwen:       "https://dashscope.aliyuncs.com/compatible-mode/v1",
 	Ollama:     "http://localhost:11434/v1",
+	Vercel:     "https://ai-gateway.vercel.sh/v1",
+}
+
+// gatewayProviders are recognised providers whose endpoint is account-specific,
+// so they carry no fixed URL and a run must give a base_url. They are listed for
+// discoverability and a tailored error; the value is the URL shape to show.
+//
+// Cloudflare's AI Gateway is the case: the account and gateway ids live in the
+// path, so there is nothing to hardcode.
+var gatewayProviders = map[string]string{
+	Cloudflare: "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat",
+}
+
+// gatewaysQualifyModels are the providers that route by a creator-qualified
+// model name ("openai/gpt-4o"). For these, a bare model the user typed is
+// completed from the catalogue - see qualifyModel.
+var gatewaysQualifyModels = map[string]bool{
+	OpenRouter: true,
+	Vercel:     true,
+	Cloudflare: true,
+}
+
+// gatewaySlugs maps zot's provider name to a gateway's own creator slug, for the
+// cases where they differ. A provider absent from a gateway's map keeps its own
+// name, which is the common case.
+//
+// These are each gateway's naming convention, and they drift as gateways rename
+// creators - they are the one part of auto-qualification that has to be verified
+// against a gateway's published model list rather than derived. A wrong or
+// missing entry does not corrupt anything: it produces a slug the gateway
+// rejects, which is the same failure the user would have had typing the bare
+// name, only now it is one line to fix here.
+var gatewaySlugs = map[string]map[string]string{
+	OpenRouter: {
+		"zai":      "z-ai",
+		"meta":     "meta-llama",
+		"xai":      "x-ai",
+		"mistral":  "mistralai",
+		"moonshot": "moonshotai",
+	},
+	Vercel: {
+		// Vercel's slugs largely match zot's names; add mismatches as found.
+	},
+	Cloudflare: {
+		// Cloudflare's compat endpoint uses provider names close to zot's; add
+		// mismatches (e.g. google-ai-studio) as found.
+	},
+}
+
+// qualifyModel completes a bare model name for a gateway that routes by
+// creator/model.
+//
+// It acts only when all three hold: the backend is such a gateway, the model
+// carries no slash already, and the catalogue recognises it. Any of those
+// failing leaves the name exactly as the user typed it - guessing a prefix zot
+// cannot justify is worse than passing the name through, because a wrong prefix
+// misroutes silently where a bare name merely fails cleanly at the gateway.
+//
+// The point is that a model is the same model whichever gateway serves it: a
+// user should be able to say "glm-5.2" and have zot supply the "z-ai/" or "zai/"
+// each gateway happens to want.
+func qualifyModel(provider, model string) string {
+	if !gatewaysQualifyModels[provider] {
+		return model
+	}
+
+	if strings.Contains(model, "/") {
+		return model // already creator-qualified; respect it
+	}
+
+	origin := catalogue.Lookup(model).Provider
+
+	if origin == "" || origin == catalogue.Default.Provider {
+		return model // unknown model - nothing to qualify it with
+	}
+
+	slug := origin
+
+	if aliased, ok := gatewaySlugs[provider][origin]; ok {
+		slug = aliased
+	}
+
+	return slug + "/" + model
 }
 
 // Providers lists the known provider identifiers.
 func Providers() []string {
-	names := make([]string, 0, len(baseURLs)+1)
+	names := make([]string, 0, len(baseURLs)+len(gatewayProviders)+1)
 
 	for name := range baseURLs {
+		names = append(names, name)
+	}
+
+	for name := range gatewayProviders {
 		names = append(names, name)
 	}
 
@@ -125,6 +222,11 @@ func (c Config) Resolve() (Config, error) {
 		return Config{}, errors.New("provider: no model specified")
 	}
 
+	// On a gateway, complete a bare model name ("glm-5.2") into the
+	// creator-qualified form it routes by ("z-ai/glm-5.2"), so the user does not
+	// have to know each gateway's prefix.
+	resolved.Model = qualifyModel(resolved.Provider, resolved.Model)
+
 	base, known := baseURLs[resolved.Provider]
 
 	switch {
@@ -144,6 +246,12 @@ func (c Config) Resolve() (Config, error) {
 		resolved.BaseURL = base
 
 	default:
+		if hint, ok := gatewayProviders[resolved.Provider]; ok {
+			return Config{}, fmt.Errorf(
+				"provider: %q needs a base URL - its endpoint is account-specific (e.g. %s); set base_url on the backend",
+				resolved.Provider, hint)
+		}
+
 		return Config{}, fmt.Errorf("provider: unknown provider %q and no base URL given", resolved.Provider)
 	}
 

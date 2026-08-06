@@ -65,6 +65,9 @@ func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.E
 			}
 		case agent.ToolCallErrorEvent:
 			fmt.Printf("    error: %s: %s\n", e.Name, e.Error)
+		case agent.CompactionEvent:
+			flush()
+			fmt.Printf("  … %s\n", e.Detail)
 		case agent.AgentExitEvent:
 			sawExit = true
 			flush()
@@ -99,9 +102,44 @@ func plainArg(name string, args map[string]interface{}) string {
 		return truncate(str(args, "command"), 200)
 	case "skill":
 		return str(args, "name")
+	case "plan":
+		return plainPlan(args)
+	case "progress":
+		return plainProgress(args)
 	default:
 		return compactArgs(args)
 	}
+}
+
+// plainPlan renders the plan as a numbered list on its own lines, so a piped run
+// records the agent's strategy in full, not as a truncated key/value dump.
+func plainPlan(args map[string]interface{}) string {
+	steps := strList(args, "steps")
+
+	var b strings.Builder
+	if rationale := str(args, "rationale"); rationale != "" {
+		b.WriteString(rationale)
+	}
+	for i, step := range steps {
+		b.WriteString(fmt.Sprintf("\n      %d. %s", i+1, step))
+	}
+	return strings.TrimLeft(b.String(), "\n")
+}
+
+// plainProgress renders the current step plus done/blocked/next lines.
+func plainProgress(args map[string]interface{}) string {
+	var b strings.Builder
+	b.WriteString(str(args, "current"))
+	for _, section := range []struct{ label, key string }{
+		{"done", "completed"},
+		{"blocked", "blockers"},
+		{"next", "nextSteps"},
+	} {
+		for _, item := range strList(args, section.key) {
+			b.WriteString(fmt.Sprintf("\n      %-8s%s", section.label, item))
+		}
+	}
+	return strings.TrimLeft(b.String(), "\n")
 }
 
 // plainToolEnd summarises a tool result for the unstyled log.
