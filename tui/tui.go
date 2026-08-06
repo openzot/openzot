@@ -8,6 +8,7 @@ package tui
 
 import (
 	"context"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -29,6 +30,26 @@ type Meta struct {
 	// Plain forces the unstyled streaming renderer even in a terminal. Plain mode
 	// is also selected automatically when stdout is not a TTY.
 	Plain bool
+
+	// Theme is the colour identity for the view. The zero value is zot's neutral
+	// DefaultTheme; an embedding application passes its own accent (see Theme).
+	Theme Theme
+
+	// MaxScrollback caps how many log lines the viewer keeps on screen. Zero uses
+	// DefaultMaxScrollback; a larger value keeps more history (at more memory).
+	// The full run is always in the session log regardless.
+	MaxScrollback int
+
+	// Stats selects which header fields to show, and in what order (see
+	// KnownStats). Empty uses DefaultStats. Unknown names are ignored.
+	Stats []string
+
+	// MaxIterations, MaxCalls and MaxDuration are the configured run limits, shown
+	// as "5/1000" progress in the meta bar. Zero means unbounded (or not worth
+	// showing, e.g. the default iteration backstop), so no denominator appears.
+	MaxIterations int
+	MaxCalls      int
+	MaxDuration   time.Duration
 }
 
 // Run renders the read-only TUI while the autonomous agent executes. It owns the
@@ -36,6 +57,10 @@ type Meta struct {
 // errors. The agent runs in the background and communicates with the UI solely
 // through tea messages.
 func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+	// Set the brand colours before anything renders. An empty Theme falls back to
+	// zot's neutral default (see applyTheme).
+	applyTheme(meta.Theme)
+
 	// Without a usable terminal (or when forced), stream plain text instead of
 	// trying to start an alt-screen program that would fail or garble.
 	if meta.Plain || !isInteractive() {
@@ -43,6 +68,13 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	}
 
 	m := newModel(meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)
+	if meta.MaxScrollback > 0 {
+		m.maxEntries = meta.MaxScrollback
+	}
+	m.stats = meta.Stats
+	m.maxIterations = meta.MaxIterations
+	m.maxCalls = meta.MaxCalls
+	m.maxDuration = meta.MaxDuration
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	go runAgent(ctx, p, client, opts)

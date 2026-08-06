@@ -116,6 +116,13 @@ type Budget struct {
 	Empties       int
 	Settles       int
 
+	// InputTokens and OutputTokens accumulate the provider-reported prompt and
+	// completion tokens across the run - the actual billed usage, not the local
+	// estimate. Each model call bills its full prompt, so these are summed per
+	// turn.
+	InputTokens  int
+	OutputTokens int
+
 	// iterCheckpoint, callCheckpoint and timeCheckpoint record the index of the
 	// next approaching-limit checkpoint to fire for each bounded limit, so each
 	// checkpoint notice is injected at most once.

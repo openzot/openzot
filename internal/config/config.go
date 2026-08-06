@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/openzot/openzot/agent"
+	"github.com/openzot/openzot/tui"
 )
 
 // Config is the fully-resolved zot configuration.
@@ -124,6 +125,14 @@ type UI struct {
 	// Plain forces the unstyled streaming renderer (no full-screen TUI). It is
 	// also used automatically when stdout is not a terminal.
 	Plain bool `yaml:"plain"`
+	// Scrollback caps how many log lines the full-screen viewer keeps on screen.
+	// Zero uses the built-in default; raise it to keep more of a long run visible
+	// (at more memory). The full run is always in the session log regardless.
+	Scrollback int `yaml:"scrollback"`
+	// Stats selects which fields the header bar shows, and in what order (see
+	// tui.KnownStats: model, backend, dir, iter, tools, edits, elapsed). Empty
+	// uses the default set.
+	Stats []string `yaml:"stats"`
 }
 
 // Agent holds the knobs that shape an autonomous run.
@@ -420,6 +429,15 @@ func (c Config) Validate() error {
 	}
 	if c.Agent.CompactMinTokens < 0 || c.Agent.CompactMinMessages < 0 {
 		return fmt.Errorf("agent.compact_min_tokens / compact_min_messages must not be negative")
+	}
+	if c.UI.Scrollback < 0 {
+		return fmt.Errorf("ui.scrollback must not be negative")
+	}
+	for _, s := range c.UI.Stats {
+		if !tui.IsKnownStat(s) {
+			return fmt.Errorf("ui.stats: %q is not a known field (valid: %s)",
+				s, strings.Join(tui.KnownStats, ", "))
+		}
 	}
 	if _, ok := c.Backends[c.DefaultBackend]; !ok {
 		return fmt.Errorf("default backend %q is not configured", c.DefaultBackend)

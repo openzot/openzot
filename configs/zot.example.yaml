@@ -18,6 +18,7 @@
 #   agent.max_empties     -> ZOT_AGENT_MAX_EMPTIES
 #   agent.context_strategy -> ZOT_AGENT_CONTEXT_STRATEGY
 #   ui.plain              -> ZOT_UI_PLAIN
+#   ui.scrollback         -> ZOT_UI_SCROLLBACK
 #   default_backend       -> ZOT_DEFAULT_BACKEND
 #
 # Credentials: put the key DIRECTLY in this file, or reference an environment
@@ -123,6 +124,18 @@ ui:
   # Stream unstyled output instead of the full-screen viewer. Auto-enabled when
   # stdout is not a terminal, so a pipeline needs no flag.
   # plain: false
+
+  # How many log lines the full-screen viewer keeps on screen. Default 5000;
+  # raise it to keep more of a long run in the scrollback (at more memory). The
+  # full, untrimmed run is always in the session log regardless.
+  # scrollback: 5000
+
+  # Which fields the header stats bar shows, and in what order. Valid fields:
+  # model, backend, dir, iter, tools, edits, elapsed, tokens (default: all).
+  # `tokens` shows the provider's own reported usage; iter/tools/elapsed show
+  # progress against a limit (e.g. 5/1000) when one is set.
+  # (Config file only - a list has no single environment variable.)
+  # stats: [model, backend, iter, tools, elapsed, tokens]
 
 # Backends are the providers a run can target. zot talks to each one directly
 # over the OpenAI-compatible chat-completions API - there is no gateway and no

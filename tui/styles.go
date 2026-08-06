@@ -2,19 +2,20 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// The palette leans on the Charm look: a purple accent, a pink secondary, and a
-// small set of semantic colors for state.
+// The brand colours (accent, secondary) default to a neutral identity and are
+// overridden per embedder by applyTheme (see theme.go); the rest are fixed
+// semantic and neutral colours for state and log text.
 var (
-	colAccent = lipgloss.Color("#7D56F4") // charm purple
-	colPink   = lipgloss.Color("#F25D94")
-	colFg     = lipgloss.Color("#E6E6E6")
-	colDim    = lipgloss.Color("#7A7A7A")
-	colFaint  = lipgloss.Color("#4A4A4A")
-	colGreen  = lipgloss.Color("#2DD4A7")
-	colRed    = lipgloss.Color("#FF5A5A")
-	colYellow = lipgloss.Color("#F2C94C")
-	colCyan   = lipgloss.Color("#56C2FF")
-	colBlue   = lipgloss.Color("#5B8CFF")
+	colAccent    = lipgloss.Color("#6B7280") // neutral slate (brand accent; themed)
+	colSecondary = lipgloss.Color("#9CA3AF") // lighter slate  (brand secondary; themed)
+	colFg        = lipgloss.Color("#E6E6E6")
+	colDim       = lipgloss.Color("#7A7A7A")
+	colFaint     = lipgloss.Color("#4A4A4A")
+	colGreen     = lipgloss.Color("#2DD4A7")
+	colRed       = lipgloss.Color("#FF5A5A")
+	colYellow    = lipgloss.Color("#F2C94C")
+	colCyan      = lipgloss.Color("#56C2FF")
+	colBlue      = lipgloss.Color("#5B8CFF")
 )
 
 var (
@@ -27,9 +28,18 @@ var (
 
 	taskStyle = lipgloss.NewStyle().Foreground(colFg)
 
-	metaStyle  = lipgloss.NewStyle().Foreground(colDim)
-	metaKey    = lipgloss.NewStyle().Foreground(colFaint)
-	metaAccent = lipgloss.NewStyle().Foreground(colPink)
+	metaStyle = lipgloss.NewStyle().Foreground(colDim)
+	metaKey   = lipgloss.NewStyle().Foreground(colFaint)
+
+	// Meta-bar value colours. Fixed functional hues (not the brand accent), so the
+	// header carries colour and stays scannable even under a neutral theme: the
+	// model and backend are highlighted, the counters read by kind, and paths and
+	// timing stay muted.
+	metaModel   = lipgloss.NewStyle().Foreground(colCyan)
+	metaBackend = lipgloss.NewStyle().Foreground(colBlue)
+	metaCount   = lipgloss.NewStyle().Foreground(colFg)
+	metaTools   = lipgloss.NewStyle().Foreground(colGreen)
+	metaEdits   = lipgloss.NewStyle().Foreground(colYellow)
 
 	// Footer / hints.
 	footerStyle = lipgloss.NewStyle().Foreground(colDim)
@@ -55,8 +65,8 @@ var (
 	toolWriteStyle = lipgloss.NewStyle().Foreground(colGreen)
 	toolEditStyle  = lipgloss.NewStyle().Foreground(colYellow)
 	toolExecStyle  = lipgloss.NewStyle().Foreground(colBlue)
-	toolPlanStyle  = lipgloss.NewStyle().Bold(true).Foreground(colPink)
-	toolProgStyle  = lipgloss.NewStyle().Foreground(colPink)
+	toolPlanStyle  = lipgloss.NewStyle().Bold(true).Foreground(colSecondary)
+	toolProgStyle  = lipgloss.NewStyle().Foreground(colSecondary)
 	toolOtherStyle = lipgloss.NewStyle().Foreground(colAccent)
 
 	// Diff panel (opt-in via --diff / ui.diff).

@@ -22,8 +22,8 @@ import (
 
 	"github.com/openzot/openzot/internal/config"
 	"github.com/openzot/openzot/internal/session"
-	"github.com/openzot/openzot/internal/tui"
 	"github.com/openzot/openzot/internal/version"
+	"github.com/openzot/openzot/tui"
 )
 
 // Names zot looks for under each context directory.
@@ -247,13 +247,27 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		}
 	}
 
+	// Show the iteration progress denominator only for a real user-set limit -
+	// the default is a 1,000,000 backstop, which is not a budget worth displaying.
+	iterLimit := 0
+	if cfg.Agent.MaxIterations != config.Defaults().Agent.MaxIterations {
+		iterLimit = cfg.Agent.MaxIterations
+	}
+
+	maxDur, _ := cfg.Agent.MaxDuration() // already validated to parse
+
 	return tui.Run(ctx, client, tui.Meta{
-		Task:     task,
-		Model:    cfg.Agent.Model,
-		Backend:  cfg.DefaultBackend,
-		Workdir:  workdir,
-		ShowDiff: cfg.UI.Diff,
-		Plain:    cfg.UI.Plain,
+		Task:          task,
+		Model:         cfg.Agent.Model,
+		Backend:       cfg.DefaultBackend,
+		Workdir:       workdir,
+		ShowDiff:      cfg.UI.Diff,
+		Plain:         cfg.UI.Plain,
+		MaxScrollback: cfg.UI.Scrollback,
+		MaxIterations: iterLimit,
+		MaxCalls:      cfg.Agent.MaxCalls,
+		MaxDuration:   maxDur,
+		Stats:         cfg.UI.Stats,
 	}, opts)
 }
 

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -941,6 +942,177 @@ func TestPlainPlanAndProgress(t *testing.T) {
 	for _, want := range []string{"working", "blocked", "a blocker"} {
 		if !strings.Contains(progress, want) {
 			t.Errorf("plain progress missing %q:\n%s", want, progress)
+		}
+	}
+}
+
+// A long autonomous run can emit far more lines than anyone scrolls through, so
+// the viewer must bound its scrollback rather than grow memory without limit.
+// The full run stays in the session log.
+func TestActivityLogIsBoundedForLongRuns(t *testing.T) {
+	// a not-yet-sized model: render() no-ops, so this exercises the scrollback cap
+	// without the per-append viewport cost (which is what a real, model-paced run
+	// pays anyway, now bounded to the cap)
+	m := newModel("do the thing", "m", "b", "d", false)
+
+	limit := m.maxEntries          // DefaultMaxScrollback
+	total := limit + limit/4 + 200 // enough to force a trim past the cap + slack
+	for i := 0; i < total; i++ {
+		m.appendEntry(fmt.Sprintf("line %d", i))
+	}
+
+	// bounded: never more than the cap plus the trim slack, whatever the run length
+	if len(m.entries) > limit+limit/4 {
+		t.Fatalf("scrollback must stay bounded, got %d entries", len(m.entries))
+	}
+
+	if !m.truncated {
+		t.Error("truncation must be flagged once the cap is exceeded")
+	}
+
+	// the newest line always survives
+	if got := m.entries[len(m.entries)-1]; got != fmt.Sprintf("line %d", total-1) {
+		t.Errorf("the most recent line must be kept, got %q", got)
+	}
+
+	// the oldest kept line is exactly total - len(entries), and older ones are gone
+	oldest := total - len(m.entries)
+	if got := m.entries[0]; got != fmt.Sprintf("line %d", oldest) {
+		t.Errorf("the oldest kept line should be line %d, got %q", oldest, got)
+	}
+}
+
+// When the log has been trimmed, the viewer must say so and point at the session
+// log, so a watcher knows the on-screen history is not the whole run.
+func TestTrimmedLogShowsAMarker(t *testing.T) {
+	m := sized(t, 100, 30)
+	m.truncated = true
+	m.appendEntry("a recent line") // triggers a render
+
+	if !strings.Contains(m.vp.View(), "trimmed") {
+		t.Errorf("a trimmed log must show a marker, got:\n%s", m.vp.View())
+	}
+}
+
+// The scrollback cap is configurable (Meta.MaxScrollback / ui.scrollback): a
+// caller can keep fewer or more lines than the default.
+func TestScrollbackCapIsConfigurable(t *testing.T) {
+	m := newModel("t", "m", "b", "d", false)
+	m.maxEntries = 50 // what Run sets from Meta.MaxScrollback
+
+	for i := 0; i < 300; i++ {
+		m.appendEntry(fmt.Sprintf("line %d", i))
+	}
+
+	if len(m.entries) > m.maxEntries+m.maxEntries/4 {
+		t.Errorf("a custom cap of %d must be honoured, kept %d", m.maxEntries, len(m.entries))
+	}
+
+	if len(m.entries) < m.maxEntries {
+		t.Errorf("should keep about the cap %d, kept only %d", m.maxEntries, len(m.entries))
+	}
+}
+
+// The header shows only the configured fields, in the configured order.
+func TestMetaBarRendersConfiguredFieldsInOrder(t *testing.T) {
+	m := sized(t, 200, 30)
+	m.stats = []string{"iter", "model"} // a reversed subset
+	m.model = "glm-5.2"
+	m.iteration = 5
+
+	bar := m.metaBar()
+
+	if strings.Contains(bar, "backend") || strings.Contains(bar, "elapsed") {
+		t.Errorf("unconfigured fields must not show: %q", bar)
+	}
+
+	if i, j := strings.Index(bar, "iter"), strings.Index(bar, "model"); i < 0 || j < 0 || i > j {
+		t.Errorf("fields must appear in the configured order (iter then model): %q", bar)
+	}
+}
+
+// An empty stat list falls back to the default set.
+func TestMetaBarDefaultsWhenUnset(t *testing.T) {
+	m := sized(t, 400, 30)
+
+	bar := m.metaBar()
+
+	for _, field := range DefaultStats {
+		if !strings.Contains(bar, field) {
+			t.Errorf("the default bar must include %q: %q", field, bar)
+		}
+	}
+}
+
+// Guard against drift: every name in KnownStats must actually be renderable by
+// the meta bar (config validates against KnownStats, so a listed-but-unrendered
+// name would validate and then silently vanish).
+func TestEveryKnownStatIsRenderable(t *testing.T) {
+	m := sized(t, 500, 30)
+
+	for _, name := range KnownStats {
+		m.stats = []string{name}
+
+		if bar := m.metaBar(); !strings.Contains(bar, name) {
+			t.Errorf("KnownStats lists %q but the meta bar does not render it", name)
+		}
+	}
+}
+
+// The header shows the provider-reported token usage, and progress against any
+// configured limits (5/1000); a limit that is unset shows no denominator.
+func TestMetaBarShowsTokensAndLimits(t *testing.T) {
+	m := sized(t, 400, 30)
+	m.stats = []string{"iter", "tools", "elapsed", "tokens"}
+	m.iteration = 5
+	m.maxIterations = 1000
+	m.toolCount = 12 // maxCalls unset -> no denominator
+	m.maxDuration = 30 * time.Minute
+	m.inputTokens = 32000
+	m.outputTokens = 13000
+
+	bar := m.metaBar()
+
+	if !strings.Contains(bar, "5/1000") {
+		t.Errorf("iter must show progress against its limit: %q", bar)
+	}
+
+	if strings.Contains(bar, "12/") {
+		t.Errorf("tools has no limit and must show no denominator: %q", bar)
+	}
+
+	if !strings.Contains(bar, "/30:00") {
+		t.Errorf("elapsed must show the time limit: %q", bar)
+	}
+
+	if !strings.Contains(bar, "32.0k") || !strings.Contains(bar, "13.0k") {
+		t.Errorf("tokens must show provider usage compactly: %q", bar)
+	}
+}
+
+// A usage update from the run sets the counts the meta bar reads.
+func TestHandleEventRecordsUsage(t *testing.T) {
+	m := sized(t, 100, 30)
+
+	m.handleEvent(agent.UsageEvent{InputTokens: 1234, OutputTokens: 567})
+
+	if m.inputTokens != 1234 || m.outputTokens != 567 {
+		t.Errorf("usage not recorded: in=%d out=%d", m.inputTokens, m.outputTokens)
+	}
+}
+
+func TestFmtTokens(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{
+		{0, "0"},
+		{532, "532"},
+		{45200, "45.2k"},
+		{1_200_000, "1.2M"},
+	} {
+		if got := fmtTokens(tc.n); got != tc.want {
+			t.Errorf("fmtTokens(%d) = %q, want %q", tc.n, got, tc.want)
 		}
 	}
 }

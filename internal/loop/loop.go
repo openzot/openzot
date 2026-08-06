@@ -392,6 +392,20 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 			lastInputTokens = turn.InputTokens
 		}
 
+		// Accumulate the provider's reported usage - the actual billed tokens - and
+		// surface the running total so a viewer can show real cost rather than an
+		// estimate. Each call bills its whole prompt, so the per-turn counts sum.
+		if turn.InputTokens > 0 || turn.OutputTokens > 0 {
+			budget.InputTokens += turn.InputTokens
+			budget.OutputTokens += turn.OutputTokens
+
+			emit(Event{
+				Kind:         EventUsage,
+				InputTokens:  budget.InputTokens,
+				OutputTokens: budget.OutputTokens,
+			})
+		}
+
 		if err != nil {
 			// a context-limit rejection is recoverable: compact and retry
 			if limit, ok := provider.DetectContextLimit(err); ok && budget.Continuations < e.maxContinuations {
@@ -547,10 +561,13 @@ type turnResult struct {
 	ToolCalls    []provider.ToolCall
 	FinishReason string
 
-	// InputTokens is the prompt-token count the provider reported for this turn,
-	// or zero when it reported none. The compact strategy prefers it over the
-	// local estimate when deciding whether the window is filling.
-	InputTokens int
+	// InputTokens and OutputTokens are the prompt- and completion-token counts the
+	// provider reported for this turn (zero when it reported none). Provider counts,
+	// not the local estimate: they reflect what the provider actually processed,
+	// including any server-side prompt caching. The compact strategy prefers
+	// InputTokens over the estimate when deciding whether the window is filling.
+	InputTokens  int
+	OutputTokens int
 }
 
 // runTurn performs a single model call, streaming its output through emit and
@@ -605,8 +622,13 @@ func (e *Engine) runTurn(ctx context.Context, request provider.Request, emit fun
 			result.FinishReason = event.FinishReason
 		}
 
-		if event.Usage != nil && event.Usage.PromptTokens > 0 {
-			result.InputTokens = event.Usage.PromptTokens
+		if event.Usage != nil {
+			// the provider's own count, which reflects what it actually processed
+			// (server-side prompt caching and all) - never the local estimate
+			if event.Usage.PromptTokens > 0 {
+				result.InputTokens = event.Usage.PromptTokens
+			}
+			result.OutputTokens = event.Usage.CompletionTokens
 		}
 	}
 

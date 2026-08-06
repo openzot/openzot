@@ -99,6 +99,17 @@ type CompactionEvent struct {
 
 func (CompactionEvent) agentEventType() string { return "compaction" }
 
+// UsageEvent reports the run's cumulative token usage as the provider counts it -
+// the actual billed prompt and completion tokens (server-side prompt caching and
+// all), not a local estimate. Emitted after each model turn with the running
+// totals, so a consumer can show real usage or cost.
+type UsageEvent struct {
+	InputTokens  int
+	OutputTokens int
+}
+
+func (UsageEvent) agentEventType() string { return "usage" }
+
 // RunawayEvent is emitted when the streaming guard cut a degenerate turn short.
 //
 // Phrase is what the model got stuck repeating, which is worth surfacing: it
@@ -160,6 +171,8 @@ func translate(event loop.Event) (AgentEvent, bool) {
 		return RetryEvent{Error: event.Text}, true
 	case loop.EventCompact:
 		return CompactionEvent{Detail: event.Text}, true
+	case loop.EventUsage:
+		return UsageEvent{InputTokens: event.InputTokens, OutputTokens: event.OutputTokens}, true
 	case loop.EventRunaway:
 		return RunawayEvent{Phrase: event.Text}, true
 	default:

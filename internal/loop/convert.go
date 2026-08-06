@@ -26,6 +26,7 @@ const (
 	EventRetry          EventKind = "retry"
 	EventRunaway        EventKind = "runaway"
 	EventCompact        EventKind = "compact"
+	EventUsage          EventKind = "usage"
 )
 
 // Event is emitted as a run progresses.
@@ -42,6 +43,11 @@ type Event struct {
 	// Args are a tool call's decoded arguments; Result is what it returned.
 	Args   map[string]any
 	Result any
+
+	// InputTokens and OutputTokens carry the run's cumulative provider-reported
+	// token usage on an EventUsage.
+	InputTokens  int
+	OutputTokens int
 }
 
 func toThreadMessages(messages []Message) []thread.Message {

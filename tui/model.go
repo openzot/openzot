@@ -49,7 +49,10 @@ type model struct {
 	entries          []string
 	committedWrapped string
 	pending          string
-	follow           bool // auto-scroll to the newest activity
+	follow           bool     // auto-scroll to the newest activity
+	truncated        bool     // oldest lines have been dropped to bound memory
+	maxEntries       int      // scrollback cap (DefaultMaxScrollback unless overridden)
+	stats            []string // header fields to show, in order (DefaultStats when empty)
 
 	status    status
 	iteration int
@@ -58,6 +61,16 @@ type model struct {
 	exitCode  int
 	exitMsg   string
 	err       error
+
+	// Provider-reported cumulative token usage (not a local estimate).
+	inputTokens  int
+	outputTokens int
+
+	// Configured limits, for the "5/1000" progress display. Zero means the limit
+	// is unbounded (or the caller chose not to show it), so no denominator shows.
+	maxIterations int
+	maxCalls      int
+	maxDuration   time.Duration
 
 	startedAt time.Time
 	elapsed   time.Duration
@@ -69,15 +82,16 @@ func newModel(task, modelName, backend, workdir string, showDiff bool) model {
 	sp.Style = lipgloss.NewStyle().Foreground(colYellow)
 
 	return model{
-		task:      task,
-		model:     modelName,
-		backend:   backend,
-		workdir:   workdir,
-		showDiff:  showDiff,
-		spinner:   sp,
-		status:    statusRunning,
-		follow:    true,
-		startedAt: time.Now(),
+		task:       task,
+		model:      modelName,
+		backend:    backend,
+		workdir:    workdir,
+		showDiff:   showDiff,
+		spinner:    sp,
+		status:     statusRunning,
+		follow:     true,
+		startedAt:  time.Now(),
+		maxEntries: DefaultMaxScrollback,
 	}
 }
 
@@ -216,6 +230,11 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 		m.flushPending()
 		m.appendEntry(dividerStyle.Render("⤿ " + e.Detail))
 
+	case agent.UsageEvent:
+		// provider-reported cumulative token usage, shown in the meta bar
+		m.inputTokens = e.InputTokens
+		m.outputTokens = e.OutputTokens
+
 	case agent.AgentExitEvent:
 		m.exitCode = e.Code
 		m.exitMsg = e.Message
@@ -232,9 +251,46 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 
 // --- viewport content management --------------------------------------------
 
+// DefaultMaxScrollback is the on-screen log cap used when a caller does not set
+// its own (Meta.MaxScrollback). An autonomous run can emit an unbounded number of
+// events (millions of iterations, unbounded tool calls), so keeping every line
+// would grow the viewer's memory without limit; once the cap is reached the
+// oldest lines are dropped, and the full untrimmed run is always in the session
+// log on disk. A caller that wants to keep more on screen raises the cap.
+const DefaultMaxScrollback = 5000
+
 func (m *model) appendEntry(s string) {
 	m.entries = append(m.entries, s)
-	m.committedWrapped = m.wrap(strings.Join(m.entries, "\n"))
+
+	// The buffer may grow a quarter past the cap before trimming, so the (linear)
+	// re-wrap a trim costs is amortised over many appends rather than paid on every
+	// append once the cap is reached.
+	slack := m.maxEntries / 4
+
+	if len(m.entries) > m.maxEntries+slack {
+		// Keep the most recent m.maxEntries, copied into a fresh slice so the old
+		// backing array is released rather than retained behind a reslice, then
+		// rebuild the wrapped cache from the trimmed set.
+		kept := make([]string, m.maxEntries)
+		copy(kept, m.entries[len(m.entries)-m.maxEntries:])
+		m.entries = kept
+		m.truncated = true
+		m.rewrap()
+
+		return
+	}
+
+	// Append only the newly wrapped entry to the cache. Wrapping each entry to the
+	// viewport width is equivalent to wrapping the whole joined buffer - the wrap
+	// is per line - so per-append cost stays independent of how long the run has
+	// been, instead of re-wrapping the entire history on every line.
+	wrapped := m.wrap(s)
+	if m.committedWrapped == "" {
+		m.committedWrapped = wrapped
+	} else {
+		m.committedWrapped += "\n" + wrapped
+	}
+
 	m.render()
 }
 
@@ -261,6 +317,14 @@ func (m *model) render() {
 		return
 	}
 	body := m.committedWrapped
+	if m.truncated {
+		marker := m.wrap(dividerStyle.Render("  ⋮ earlier activity trimmed — the full run is in the session log"))
+		if body != "" {
+			body = marker + "\n" + body
+		} else {
+			body = marker
+		}
+	}
 	if p := strings.TrimSpace(m.pending); p != "" {
 		if body != "" {
 			body += "\n"
@@ -328,18 +392,72 @@ func (m model) badge() string {
 	}
 }
 
-func (m model) metaBar() string {
-	seg := func(k, v string) string { return metaKey.Render(k+" ") + metaAccent.Render(v) }
-	parts := []string{
-		seg("backend", m.backend),
-		seg("model", m.model),
-		seg("dir", truncate(m.workdir, 36)),
-		seg("iter", fmt.Sprintf("%d", m.iteration)),
-		seg("tools", fmt.Sprintf("%d", m.toolCount)),
-		seg("edits", fmt.Sprintf("%d", m.fileEdits)),
-		seg("elapsed", fmtDuration(m.elapsed)),
+// KnownStats is every field the header meta bar can show. A caller's stat list
+// (Meta.Stats / ui.stats) is validated against it, and new stats are added here
+// as they arrive.
+var KnownStats = []string{"backend", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
+
+// DefaultStats is the field set and order used when no stats are configured.
+var DefaultStats = []string{"backend", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
+
+// IsKnownStat reports whether name is a renderable meta-bar field.
+func IsKnownStat(name string) bool {
+	for _, k := range KnownStats {
+		if k == name {
+			return true
+		}
 	}
+
+	return false
+}
+
+func (m model) metaBar() string {
+	seg := func(k, v string, value lipgloss.Style) string {
+		return metaKey.Render(k+" ") + value.Render(v)
+	}
+
+	// counted renders "n" or "n/max" when a limit is set, so progress against a
+	// configured budget is visible.
+	counted := func(n, max int) string {
+		if max > 0 {
+			return fmt.Sprintf("%d/%d", n, max)
+		}
+
+		return fmt.Sprintf("%d", n)
+	}
+
+	elapsed := fmtDuration(m.elapsed)
+	if m.maxDuration > 0 {
+		elapsed += "/" + fmtDuration(m.maxDuration)
+	}
+
+	// Every renderable field, keyed by its stat name. The keys must match
+	// KnownStats (a test guards this).
+	segments := map[string]string{
+		"backend": seg("backend", m.backend, metaBackend),
+		"model":   seg("model", m.model, metaModel),
+		"dir":     seg("dir", truncate(m.workdir, 36), metaStyle),
+		"iter":    seg("iter", counted(m.iteration, m.maxIterations), metaCount),
+		"tools":   seg("tools", counted(m.toolCount, m.maxCalls), metaTools),
+		"edits":   seg("edits", fmt.Sprintf("%d", m.fileEdits), metaEdits),
+		"elapsed": seg("elapsed", elapsed, metaStyle),
+		"tokens":  seg("tokens", fmt.Sprintf("↑%s ↓%s", fmtTokens(m.inputTokens), fmtTokens(m.outputTokens)), metaModel),
+	}
+
+	fields := m.stats
+	if len(fields) == 0 {
+		fields = DefaultStats
+	}
+
+	parts := make([]string, 0, len(fields))
+	for _, name := range fields {
+		if s, ok := segments[name]; ok {
+			parts = append(parts, s)
+		}
+	}
+
 	line := strings.Join(parts, metaStyle.Render("  ·  "))
+
 	return lipgloss.NewStyle().MaxWidth(m.width).Render(line)
 }
 
@@ -354,6 +472,18 @@ func (m model) footer() string {
 	}
 	tail := footerStyle.Render("  ·  press " + keyHint.Render("q") + " to exit")
 	return hints + tail
+}
+
+// fmtTokens renders a token count compactly: 532, 45.2k, 1.2M.
+func fmtTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 func fmtDuration(d time.Duration) string {
