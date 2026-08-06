@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-08-06
+
+### Changed
+
+- **The default instructions now frame a run as a non-interactive batch session and tell the agent to act, not narrate**, imitating the batch-mode prompt of the engine zot was derived from: the deliverable is the changed working tree, not prose, so the model is told there is no reader to summarise or analyse tool output for, to keep working, and to end only by recording an outcome with a terminal tool.
+
 ## [0.8.0] - 2026-08-05
 
 ### Features
