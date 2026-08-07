@@ -4,7 +4,7 @@ SHELL := /bin/bash
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X github.com/openzot/openzot/internal/version.Version=$(VERSION)
 
-CMDS = zot
+CMDS = zot zotui
 
 # Cross-compilation defaults to the host, so `make cross` with no arguments
 # builds something predictable rather than whatever was last exported.
