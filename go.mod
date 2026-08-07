@@ -13,7 +13,10 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/tiktoken-go/tokenizer v0.8.1
+require (
+	github.com/spf13/pflag v1.0.5
+	github.com/tiktoken-go/tokenizer v0.8.1
+)
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect

@@ -1,12 +1,12 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"github.com/openzot/openzot"
 	"github.com/openzot/openzot/internal/buildinfo"
 	"github.com/openzot/openzot/internal/config"
 	"github.com/openzot/openzot/internal/session"
+	"github.com/spf13/pflag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -269,6 +269,27 @@ func TestUsageDescribesTheRealCommands(t *testing.T) {
 	}
 }
 
+// The CLI uses pflag (GNU-style), so a flag may appear AFTER the positional
+// task: `zot "do X" --plain` parses --plain as a flag and keeps the task intact.
+// The stdlib flag package stopped at the first non-flag, folding --plain into the
+// task string - this locks the behaviour that motivated the switch.
+func TestFlagsAfterThePositionalTaskAreParsed(t *testing.T) {
+	set := pflag.NewFlagSet("zot", pflag.ContinueOnError)
+	plain := set.Bool("plain", false, "")
+
+	if err := set.Parse([]string{"do", "the", "thing", "--plain"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	if !*plain {
+		t.Error("--plain given after the task must be parsed as a flag, not swallowed into it")
+	}
+
+	if got := strings.Join(set.Args(), " "); got != "do the thing" {
+		t.Errorf("positional task = %q, want the words before the flag", got)
+	}
+}
+
 func TestStringSliceFlag(t *testing.T) {
 	var slice stringSlice
 
@@ -428,15 +449,15 @@ func withArgs(t *testing.T, args ...string) {
 	t.Helper()
 
 	originalArgs := os.Args
-	originalFlags := flag.CommandLine
+	originalFlags := pflag.CommandLine
 
 	os.Args = append([]string{"zot"}, args...)
-	flag.CommandLine = flag.NewFlagSet("zot", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(io.Discard)
+	pflag.CommandLine = pflag.NewFlagSet("zot", pflag.ContinueOnError)
+	pflag.CommandLine.SetOutput(io.Discard)
 
 	t.Cleanup(func() {
 		os.Args = originalArgs
-		flag.CommandLine = originalFlags
+		pflag.CommandLine = originalFlags
 	})
 }
 

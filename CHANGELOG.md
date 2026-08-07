@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - unreleased
+
+### Changed
+
+- **The CLI now uses GNU-style flags (`spf13/pflag`), matching rook and the rest of the ecosystem.** Long flags are double-dash (`--backend`, `--dir`), flags may appear **after** the positional task (`zot "do X" --plain` now works, where before the flag was folded into the task string), and `--help`'s flag list finally renders `--flag` to match the examples and the docs - the single-/double-dash mismatch the stdlib `flag` package produced is gone. **Breaking:** single-dash long flags (`-backend`) no longer parse - use `--backend`. zot has no short flags and every documented example already used `--`, so anything following the docs is unaffected.
+
 ## [0.9.1] - 2026-08-06
 
 ### Added
