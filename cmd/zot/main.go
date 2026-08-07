@@ -20,7 +20,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+	"github.com/spf13/pflag"
 
 	"github.com/openzot/openzot"
 	"github.com/openzot/openzot/internal/buildinfo"
@@ -60,21 +60,21 @@ func run() error {
 		return listSessions(os.Args[2:])
 	}
 
-	configPath := flag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := flag.String("backend", "", "backend to run against: a provider such as zai (default), openai, anthropic, groq, ollama, or a backend named in the config")
-	model := flag.String("model", "", "override the model name (default: glm-5.2, which only the zai backend serves)")
-	dir := flag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
-	maxIter := flag.Int("max-iterations", 0, "override the safety cap on agent iterations")
-	taskFlag := flag.String("task", "", "the durable objective, placed in the system prompt so it survives a long run (overrides a positional task)")
-	taskFile := flag.String("task-file", "", "read the durable objective from a file")
-	diffFlag := flag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
-	plainFlag := flag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
-	resume := flag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
-	sessionDir := flag.String("session-dir", "", "where session logs are written (default: "+config.DefaultSessionDir()+")")
-	noSession := flag.Bool("no-session", false, "do not record a session log for this run")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Usage = usage
-	flag.Parse()
+	configPath := pflag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
+	backend := pflag.String("backend", "", "backend to run against: a provider such as zai (default), openai, anthropic, groq, ollama, or a backend named in the config")
+	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai backend serves)")
+	dir := pflag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
+	maxIter := pflag.Int("max-iterations", 0, "override the safety cap on agent iterations")
+	taskFlag := pflag.String("task", "", "the durable objective, placed in the system prompt so it survives a long run (overrides a positional task)")
+	taskFile := pflag.String("task-file", "", "read the durable objective from a file")
+	diffFlag := pflag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
+	plainFlag := pflag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
+	resume := pflag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
+	sessionDir := pflag.String("session-dir", "", "where session logs are written (default: "+config.DefaultSessionDir()+")")
+	noSession := pflag.Bool("no-session", false, "do not record a session log for this run")
+	showVersion := pflag.Bool("version", false, "print version and exit")
+	pflag.Usage = usage
+	pflag.Parse()
 
 	if *showVersion {
 		// the build kind is on the version line because it changes what the
@@ -123,7 +123,7 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
 	}
 
-	task, prompt, err := resolveTask(*taskFlag, *taskFile, flag.Args())
+	task, prompt, err := resolveTask(*taskFlag, *taskFile, pflag.Args())
 
 	// A resumed run inherits its objective from the session it continues; any new
 	// command-line text is a follow-up prompt, not a replacement objective - a
@@ -131,7 +131,7 @@ func run() error {
 	// --task / --task-file still overrides, for deliberately changing course.
 	if resumed != nil && *taskFlag == "" && *taskFile == "" {
 		task = resumed.Meta.Task
-		prompt = strings.TrimSpace(strings.Join(flag.Args(), " "))
+		prompt = strings.TrimSpace(strings.Join(pflag.Args(), " "))
 		err = nil
 	}
 
@@ -146,7 +146,7 @@ func run() error {
 
 	passed := map[string]bool{}
 
-	flag.Visit(func(f *flag.Flag) { passed[f.Name] = true })
+	pflag.Visit(func(f *pflag.Flag) { passed[f.Name] = true })
 
 	applyOverrides(&cfg, overrides{
 		Backend:       *backend,
@@ -196,7 +196,7 @@ func run() error {
 
 // listSessions prints previous runs, newest first.
 func listSessions(args []string) error {
-	set := flag.NewFlagSet("sessions", flag.ContinueOnError)
+	set := pflag.NewFlagSet("sessions", pflag.ContinueOnError)
 
 	dir := set.String("session-dir", config.DefaultSessionDir(), "directory to list")
 
@@ -408,10 +408,10 @@ Commands:
   sessions   list previous runs, newest first
 
 Flags:`)
-	flag.PrintDefaults()
+	pflag.PrintDefaults()
 }
 
-// stringSlice is a flag.Value that accumulates a repeatable string flag.
+// stringSlice accumulates a repeatable string flag value (String/Set).
 type stringSlice []string
 
 func (s *stringSlice) String() string { return strings.Join(*s, ",") }
