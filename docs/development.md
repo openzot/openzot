@@ -25,9 +25,9 @@ and `make cross GOOS=… GOARCH=…` are also available.
 The repository includes a standard [Dev Container](https://containers.dev/)
 under [`.devcontainer/`](../.devcontainer/). Open the checkout in a compatible
 editor and choose **Reopen in Container**. It provides the pinned Go toolchain,
-Git, Make, ripgrep, SQLite, and Docker-in-Docker. Go's build and module caches,
-Docker data, and zotui's SQLite state live in named volumes, so rebuilding the
-container does not throw them away.
+Git plus the official Git LFS Dev Container Feature, Make, ripgrep, SQLite, and
+Docker-in-Docker. Go's build and module caches, Docker data, and zotui's SQLite
+state live in named volumes, so rebuilding the container does not throw them away.
 
 Once the container is ready:
 
