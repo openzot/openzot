@@ -71,7 +71,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.Model != "glm" || w.MaxIterations != 20 || w.Schedule.Cron != "0 */4 * * *" {
+	if w.Model != "glm" || w.MaxIterations != 1_000_000 || w.Schedule.Cron != "0 */4 * * *" {
 		t.Fatalf("defaults or schedule lost: %+v", w)
 	}
 	err = a.UpdateWorker(ctx, id, app.WorkerParams{Name: "API owner", Repo: "acme",

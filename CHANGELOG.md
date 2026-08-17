@@ -19,6 +19,7 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 - **The zotui worker form now presents repositories from the selected code source.** A sole configured repository is selected automatically, multiple repositories are offered as a dropdown, and connections without a fixed list retain an explicitly explained `owner/name` field instead of making every repository look like unvalidated free text.
 - **The browser command center now has a product route at `/workers`.** `/` redirects there, while the mockup artifact path `/operations/instances.html` is no longer public.
+- **New zotui workers now inherit zot's 1,000,000-iteration default.** The browser, application validation, and persistence path no longer carry conflicting 20-iteration scaffold fallbacks.
 
 ## [0.9.1] - 2026-08-06
 

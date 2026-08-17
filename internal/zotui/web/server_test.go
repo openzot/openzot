@@ -74,6 +74,9 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	if got := statePayload.Choices.Repositories["acme"]; len(got) != 1 || got[0] != "acme/api" {
 		t.Fatalf("repository choices did not reach the browser: %v", got)
 	}
+	if statePayload.Choices.DefaultMaxIterations != 1_000_000 {
+		t.Fatalf("worker default did not reach the browser: %d", statePayload.Choices.DefaultMaxIterations)
+	}
 
 	runID, err := st.CreateRun(context.Background(), store.Run{WorkerID: created["id"], Mission: "ship it", Model: "glm", MaxIterations: 8})
 	if err != nil {

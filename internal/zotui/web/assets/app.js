@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 
-let state = { choices: { repos: [], repositories: {}, environments: [], models: [] }, workers: [] };
+let state = { choices: { repos: [], repositories: {}, environments: [], models: [], defaultMaxIterations: 1000000 }, workers: [] };
 let selectedWorker = 0;
 let selectedRun = 0;
 let editingID = "";
@@ -259,7 +259,7 @@ function openCreate() {
   $("#create-submit").textContent = "Create worker";
   $("#instance-name").value = "";
   $("#objective").value = "";
-  $("#max-iterations").value = "20";
+  $("#max-iterations").value = String(state.choices.defaultMaxIterations ?? 1000000);
   $("#model").value = state.choices.models[0] || "";
   schedule = { cron: "", timezone: "UTC", runtimeMinutes: 90 };
   updateScheduleSummary();

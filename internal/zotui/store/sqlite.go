@@ -47,9 +47,6 @@ func (s *sqlStore) CreateWorker(ctx context.Context, w Worker) (string, error) {
 	if w.ID == "" {
 		w.ID = newID("worker")
 	}
-	if w.MaxIterations <= 0 {
-		w.MaxIterations = 20
-	}
 	now := unix(time.Now())
 	_, err := s.db.ExecContext(ctx, s.d.rebind(`INSERT INTO workers
 (id, name, repo, repository, environment, model, mission, max_iterations, schedule_cron, schedule_tz, runtime_minutes, created_at, updated_at)

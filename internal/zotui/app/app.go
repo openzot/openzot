@@ -33,15 +33,18 @@ type App struct {
 
 type runCancel struct{ cancel context.CancelFunc }
 
+const DefaultMaxIterations = 1_000_000
+
 func New(cfg *config.Config, st store.Store) *App {
 	return &App{cfg: cfg, store: st, repoCache: map[string]repo.Provider{}, cancels: map[string]*runCancel{}}
 }
 
 type Choices struct {
-	Repos        []string            `json:"repos"`
-	Repositories map[string][]string `json:"repositories"`
-	Environments []string            `json:"environments"`
-	Models       []string            `json:"models"`
+	Repos                []string            `json:"repos"`
+	Repositories         map[string][]string `json:"repositories"`
+	Environments         []string            `json:"environments"`
+	Models               []string            `json:"models"`
+	DefaultMaxIterations int                 `json:"defaultMaxIterations"`
 }
 
 func (a *App) Choices() Choices {
@@ -51,7 +54,8 @@ func (a *App) Choices() Choices {
 		sort.Strings(repositories[name])
 	}
 	return Choices{Repos: sortedKeys(a.cfg.Repos), Repositories: repositories,
-		Environments: sortedKeys(a.cfg.Environments), Models: sortedKeys(a.cfg.Models)}
+		Environments: sortedKeys(a.cfg.Environments), Models: sortedKeys(a.cfg.Models),
+		DefaultMaxIterations: DefaultMaxIterations}
 }
 
 type WorkerParams struct {
@@ -285,7 +289,7 @@ func (a *App) buildWorker(p WorkerParams) (store.Worker, error) {
 		return store.Worker{}, fmt.Errorf("unknown model %q", p.Model)
 	}
 	if p.MaxIterations <= 0 {
-		p.MaxIterations = 20
+		p.MaxIterations = DefaultMaxIterations
 	}
 	if err := validateSchedule(p.Schedule); err != nil {
 		return store.Worker{}, err
