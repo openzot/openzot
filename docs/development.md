@@ -43,14 +43,15 @@ launches an ephemeral Docker container per run. The checkout is mounted at
 `/workspace`; the model credential, if supplied, is written into the container's
 temporary zot config and the container is removed when the run ends.
 
-The dev container builds `openzot/zot:dev` during setup. That worker image
-contains zot, the pinned Go toolchain, Git, Make, and the other tools needed to
-exercise this repository. Run `make dev-image` after changing code that must be
-available inside new worker containers.
+The dev container builds the Linux amd64 and arm64 Zot worker artifacts during
+setup. Zotui embeds those compressed executables and transfers the matching one
+into every sandbox it creates. Environment images therefore contain only their
+toolchain and dependencies; they do not need to install or track Zot.
 
-`make dev-ui` and `make dev-image` also work outside the container when a Docker
-daemon is available. The local SQLite database is kept under the ignored
-`.local/` directory unless `ZOTUI_STORE_DSN` overrides it.
+`make dev-ui` generates the worker artifacts automatically and also works
+outside the container when a Docker daemon is available. The local SQLite
+database is kept under the ignored `.local/` directory unless
+`ZOTUI_STORE_DSN` overrides it.
 See [zotui-configuration.md](zotui-configuration.md) for complete local Docker
 and Vercel Sandbox configurations, model credentials, and repository setup.
 

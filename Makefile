@@ -5,13 +5,15 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X github.com/openzot/openzot/internal/version.Version=$(VERSION)
 
 CMDS = zot zotui
+WORKER_ASSET_DIR = internal/zotui/worker/artifacts
+WORKER_BUILD_DIR = $(CURDIR)/.local/build
 
 # Cross-compilation defaults to the host, so `make cross` with no arguments
 # builds something predictable rather than whatever was last exported.
 GOOS   ?= $(shell go env GOHOSTOS)
 GOARCH ?= $(shell go env GOHOSTARCH)
 
-.PHONY: help build dev dev-image dev-ui vendor-ui clean test race cover cover-check vet lint fmt cross
+.PHONY: help build dev worker-assets image dev-ui vendor-ui clean test race cover cover-check vet lint fmt cross
 
 # Listing the targets rather than assuming one: zot has two build variants that
 # differ in what the binary may read from disk, and picking the wrong one
@@ -19,9 +21,10 @@ GOARCH ?= $(shell go env GOHOSTARCH)
 help:
 	@echo "zot - an automated software factory in a single binary"
 	@echo
-	@echo "  make build      Build ./zot for release ($(GOOS)/$(GOARCH))"
-	@echo "  make dev        Build ./zot for development - see below"
-	@echo "  make dev-image  Build the Docker image used by local zotui compute"
+	@echo "  make build      Build zot and zotui for release ($(GOOS)/$(GOARCH))"
+	@echo "  make dev        Build zot and zotui for development - see below"
+	@echo "  make worker-assets  Embed Linux Zot workers for sandbox deployment"
+	@echo "  make image      Build the lean Zot runtime image"
 	@echo "  make dev-ui     Run the browser command center for local development"
 	@echo "  make vendor-ui  Refresh pinned third-party UI assets committed to source"
 	@echo "  make test       Run the test suite"
@@ -43,8 +46,8 @@ help:
 	@echo "Overrides: VERSION=$(VERSION)"
 	@echo "           GOOS=$(GOOS) GOARCH=$(GOARCH)"
 
-build:
-	@for cmd in $(CMDS); do \
+build: worker-assets
+	@set -e; for cmd in $(CMDS); do \
 		echo "Building $$cmd ($(VERSION), release)..."; \
 		CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \
 	done
@@ -53,19 +56,30 @@ build:
 # working directory, which a released binary must never do - pointing zot at a
 # checkout would otherwise be enough to load whatever credentials are lying
 # around in it.
-dev:
-	@for cmd in $(CMDS); do \
+dev: worker-assets
+	@set -e; for cmd in $(CMDS); do \
 		echo "Building $$cmd ($(VERSION), dev - reads .env)..."; \
 		CGO_ENABLED=0 go build -tags dev -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \
 	done
 
-dev-image:
-	docker build --file .devcontainer/Dockerfile.worker --build-arg VERSION=dev --tag openzot/zot:dev .
+image:
+	docker build --build-arg VERSION=$(VERSION) --tag openzot/zot:local .
+
+worker-assets:
+	@mkdir -p "$(WORKER_ASSET_DIR)" "$(WORKER_BUILD_DIR)"
+	@set -eu; for arch in amd64 arm64; do \
+		echo "Building embedded zot worker ($(VERSION), linux/$$arch)..."; \
+		worker_binary="$(WORKER_BUILD_DIR)/zot-linux-$$arch"; \
+		worker_asset="$(WORKER_ASSET_DIR)/zot-linux-$$arch.gz"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o "$$worker_binary" ./cmd/zot; \
+		gzip -n -9 -c "$$worker_binary" > "$$worker_asset.tmp"; \
+		mv "$$worker_asset.tmp" "$$worker_asset"; \
+	done
 
 # Uses the credential-free fixture by default. Override ZOTUI_CONFIG to exercise
 # a real provider configuration; the dev container sets the listen address so
 # its forwarded port is reachable from the host.
-dev-ui:
+dev-ui: worker-assets
 	@ZOTUI_CONFIG="$${ZOTUI_CONFIG:-$(CURDIR)/.devcontainer/zotui.dev.yaml}" \
 		ZOTUI_ADDR="$${ZOTUI_ADDR:-127.0.0.1:8080}" \
 		ZOTUI_REPO_PATH="$${ZOTUI_REPO_PATH:-$(CURDIR)}" \
@@ -105,10 +119,11 @@ lint: vet
 
 clean:
 	rm -f $(CMDS)
+	rm -f $(WORKER_ASSET_DIR)/zot-linux-*.gz
 
 # Cross-compile a specific platform: make cross GOOS=darwin GOARCH=arm64
-cross:
-	@for cmd in $(CMDS); do \
+cross: worker-assets
+	@set -e; for cmd in $(CMDS); do \
 		echo "Building $$cmd ($(VERSION)) for $(GOOS)/$(GOARCH)..."; \
 		CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \
 	done

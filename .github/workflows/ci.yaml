@@ -65,10 +65,10 @@ jobs:
         run: ./scripts/coverage.sh
 
       - name: Build
-        run: CGO_ENABLED=0 go build -trimpath ./cmd/zot
+        run: make build
 
       - name: Build (developer build)
-        run: CGO_ENABLED=0 go build -trimpath -tags dev ./cmd/zot
+        run: make dev
 
   cross-compile:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -108,9 +108,10 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
+          make worker-assets
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-          for cmd in zot; do
+          for cmd in zot zotui; do
             go build -trimpath -o "${cmd}${EXT}" "./cmd/${cmd}"
           done
 
@@ -159,13 +160,14 @@ jobs:
             exit 1
           fi
 
-          # The agent's exec tool needs a usable shell and a writable workspace
-          # as the unprivileged image user.
+          # The standalone image needs a usable POSIX shell and writable
+          # workspace as the unprivileged image user. Zotui environments are
+          # separate images into which the server deploys its worker binary.
           docker run --rm --entrypoint sh openzot/zot:ci -c '
             set -eu
             test "$(id -u)" = "10001"
-            git --version >/dev/null
-            bash --version >/dev/null
+            ! command -v git >/dev/null
+            ! command -v rg >/dev/null
             test -f /usr/local/share/zot/zot.example.yaml
             cd /workspace && echo probe > probe.txt && cat probe.txt
           '

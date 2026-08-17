@@ -45,12 +45,13 @@ func (r *fakeRunner) Run(_ context.Context, in io.Reader, out io.Writer, _ strin
 }
 
 func TestDockerSandboxLifecycle(t *testing.T) {
-	runner := &fakeRunner{responses: []response{{}, {}, {}, {code: 7, output: "worker failed\n"}, {}}}
+	runner := &fakeRunner{responses: []response{{}, {}, {}, {}, {code: 7, output: "worker failed\n"}, {}}}
 	driver := newDriver(runner)
 	sandbox, err := driver.Create(context.Background(), compute.Spec{
-		Image:         "openzot/zot:dev",
+		Image:         "golang:1.26.5-bookworm",
 		Env:           map[string]string{"GOFLAGS": "-mod=mod"},
 		Mounts:        []compute.Mount{{Source: "/src/openzot", Target: "/workspace"}},
+		Worker:        compute.Worker{Platform: "linux/amd64", Data: []byte("deployed-zot-binary")},
 		Model:         compute.ModelSpec{Provider: "zai", Model: "glm-5.2", APIKey: "secret", BaseURL: "https://models.test"},
 		MaxIterations: 41,
 	})
@@ -61,13 +62,18 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 		t.Fatalf("Type = %q", driver.Type())
 	}
 	create := strings.Join(runner.calls[0].args, " ")
-	for _, want := range []string{"create --name zotui-", "--workdir /workspace", "--env GOFLAGS=-mod=mod", "--mount type=bind,source=/src/openzot,target=/workspace", "--entrypoint sh openzot/zot:dev"} {
+	for _, want := range []string{"create --name zotui-", "--workdir /workspace", "--env GOFLAGS=-mod=mod", "--mount type=bind,source=/src/openzot,target=/workspace", "--entrypoint sh golang:1.26.5-bookworm"} {
 		if !strings.Contains(create, want) {
 			t.Errorf("docker create does not contain %q: %s", want, create)
 		}
 	}
 	if runner.calls[1].args[0] != "start" {
 		t.Fatalf("second call = %v", runner.calls[1].args)
+	}
+	installedWorker := strings.Join(runner.calls[2].args, " ")
+	if runner.calls[2].stdin != "deployed-zot-binary" || !strings.Contains(installedWorker, "cat > /tmp/zotui-worker/zot") ||
+		!strings.Contains(installedWorker, "chmod 755 /tmp/zotui-worker/zot") {
+		t.Fatalf("installed worker = args %v, stdin %q", runner.calls[2].args, runner.calls[2].stdin)
 	}
 	var installed struct {
 		DefaultBackend string `json:"default_backend"`
@@ -77,7 +83,7 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 		} `json:"agent"`
 		Backends map[string]map[string]string `json:"backends"`
 	}
-	if err := json.Unmarshal([]byte(runner.calls[2].stdin), &installed); err != nil {
+	if err := json.Unmarshal([]byte(runner.calls[3].stdin), &installed); err != nil {
 		t.Fatalf("installed config: %v", err)
 	}
 	if installed.DefaultBackend != "worker" || installed.Agent.Model != "glm-5.2" || installed.Agent.MaxIterations != 41 || installed.Backends["worker"]["api_key"] != "secret" {
@@ -85,26 +91,26 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 	}
 
 	var output strings.Builder
-	code, err := sandbox.Exec(context.Background(), []string{"zot", "repair the tests"}, map[string]string{"ZOT_REPO": "openzot/openzot", "GH_TOKEN": ""}, &output)
+	code, err := sandbox.Exec(context.Background(), []string{sandbox.WorkerPath(), "repair the tests"}, map[string]string{"ZOT_REPO": "openzot/openzot", "GH_TOKEN": ""}, &output)
 	if err != nil || code != 7 || output.String() != "worker failed\n" {
 		t.Fatalf("Exec = code %d, output %q, err %v", code, output.String(), err)
 	}
-	execCall := strings.Join(runner.calls[3].args, " ")
+	execCall := strings.Join(runner.calls[4].args, " ")
 	// A browser can render ANSI but cannot drive an interactive terminal. A TTY
 	// would make zot print pager controls and alternate-screen frames.
-	if got := runner.calls[3].args; len(got) < 1 || got[0] != "exec" || slices.Contains(got, "--tty") {
+	if got := runner.calls[4].args; len(got) < 1 || got[0] != "exec" || slices.Contains(got, "--tty") {
 		t.Fatalf("docker exec allocated an interactive TTY: %v", got)
 	}
-	if !strings.Contains(execCall, "--env ZOT_REPO=openzot/openzot") || !strings.HasSuffix(execCall, "zot repair the tests") {
+	if !strings.Contains(execCall, "--env ZOT_REPO=openzot/openzot") || !strings.HasSuffix(execCall, "/tmp/zotui-worker/zot repair the tests") {
 		t.Fatalf("docker exec = %s", execCall)
 	}
 	if err := sandbox.Destroy(context.Background()); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	if err := sandbox.Destroy(context.Background()); err != nil || len(runner.calls) != 5 {
+	if err := sandbox.Destroy(context.Background()); err != nil || len(runner.calls) != 6 {
 		t.Fatalf("idempotent Destroy made another call: %v, calls=%d", err, len(runner.calls))
 	}
-	if got := runner.calls[4].args; len(got) != 3 || got[0] != "rm" || got[1] != "--force" {
+	if got := runner.calls[5].args; len(got) != 3 || got[0] != "rm" || got[1] != "--force" {
 		t.Fatalf("cleanup call = %v", got)
 	}
 }
@@ -112,7 +118,7 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 func TestCreateCleansUpAfterStartFailure(t *testing.T) {
 	runner := &fakeRunner{responses: []response{{}, {code: 1, output: "cannot start"}, {}}}
 	_, err := newDriver(runner).Create(context.Background(), compute.Spec{
-		Image: "image", Model: compute.ModelSpec{Provider: "openai", Model: "gpt"},
+		Image: "image", Worker: compute.Worker{Data: []byte("zot")}, Model: compute.ModelSpec{Provider: "openai", Model: "gpt"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot start") {
 		t.Fatalf("Create error = %v", err)
@@ -126,6 +132,7 @@ func TestCreateValidatesSpecBeforeDocker(t *testing.T) {
 	tests := []compute.Spec{
 		{},
 		{Image: "image"},
+		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}},
 		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}, Mounts: []compute.Mount{{Source: "/bad,path", Target: "/workspace"}}},
 	}
 	for _, spec := range tests {

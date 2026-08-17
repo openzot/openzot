@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 
 ARG GO_VERSION=1.26.5
-ARG BUILDPLATFORM=linux/amd64
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 
@@ -23,9 +22,10 @@ RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
 
 FROM alpine:3.22
 
-# zot is autonomous: its exec tool runs shell commands in the working directory,
-# so the runtime image carries the basics a coding task usually reaches for.
-RUN apk add --no-cache bash ca-certificates curl git openssh-client tzdata && \
+# The release image is deliberately lean: Zot, TLS roots, timezone data, and
+# Alpine's POSIX shell. Zotui injects its own worker binary into separately
+# configured environment images, which provide any development tools.
+RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S -g 10001 zot && \
     adduser -S -D -H -u 10001 -G zot zot && \
     mkdir -p \

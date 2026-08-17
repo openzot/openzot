@@ -98,7 +98,7 @@ type Model struct {
 type Environment struct {
 	Compute      string            `yaml:"compute"`      // references a key in Compute
 	Model        string            `yaml:"model"`        // default model (references Models)
-	Image        string            `yaml:"image"`        // base image: toolchain + zot
+	Image        string            `yaml:"image"`        // environment tools; zotui deploys Zot
 	Env          map[string]string `yaml:"env"`          // environment variables
 	Repositories []string          `yaml:"repositories"` // optional per-env lockdown
 }

@@ -23,12 +23,13 @@ docker pull ghcr.io/openzot/openzot:latest
 | Tags | `vX.Y.Z`, `X.Y.Z`, `X.Y`, and `latest` for stable releases. Prereleases (`v0.5.0-beta.1`) publish only their exact tags and never move `latest`. |
 | Platforms | `linux/amd64`, `linux/arm64` |
 | Entrypoint | `zot` - arguments after the image name are zot's own |
-| Base | `alpine:3.22` plus `bash`, `ca-certificates`, `curl`, `git`, `openssh-client`, `tzdata` |
+| Base | `alpine:3.22` plus TLS roots and timezone data |
 
-The runtime packages are there because the agent's `shell` tool runs real
-commands: a task that clones, builds, or commits needs them. Anything else your
-task needs (a language toolchain, a package manager) has to come from an image
-built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
+The published image is deliberately the pure runtime: the Zot executable and a
+POSIX shell, without Git, ripgrep, compilers, or language toolchains. It is useful
+for a mounted workspace whose task needs no extra executable. Zotui does not
+require this image: it deploys its embedded Zot worker into whichever toolchain
+image an environment selects.
 
 ### Layout
 
@@ -90,8 +91,8 @@ docker run --rm -it \
 ```
 
 That is the safest shape available: the run cannot see your filesystem at all.
-Retrieve the result with `docker cp`, or seed the volume first from a git clone
-the agent performs itself.
+Retrieve the result with `docker cp`. Seed the volume separately when the task
+needs existing source; the lean image does not include Git.
 
 ### Credentials
 
@@ -212,14 +213,29 @@ USER zot
 Pin the base tag rather than tracking `latest`, so an agent's behaviour does not
 change under a build you did not intend.
 
+Zotui environments work differently: start from the image that already has the
+project's tools, and do not add Zot to it. For example, a Go environment can use
+the upstream Go image directly:
+
+```yaml
+environments:
+  go-development:
+    image: golang:1.26.5-bookworm
+```
+
+The command center transfers the matching Linux Zot executable into each new
+sandbox before starting the run. A custom environment image is needed only when
+the task needs tools absent from its upstream language image.
+
 ## Building locally
 
 ```bash
-docker build --build-arg VERSION=v0.4.1 --tag openzot/zot:local .
+make image
 docker run --rm openzot/zot:local --version
 ```
 
-`VERSION` is what gets stamped into the binary and reported by `--version`;
+`make image` stamps the current Git description into the binary. When invoking
+Docker directly, `--build-arg VERSION=...` controls what `--version` reports;
 without it the build produces `dev` and the update check is skipped. Note that
 `go.work` is excluded from the build context by `.dockerignore` - a workspace
 file someone created locally must not leak into an image build and cap the

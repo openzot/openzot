@@ -22,7 +22,7 @@ environments:
   go-development:
     compute: development
     model: development
-    image: openzot/zot:dev
+    image: golang:1.26.5-bookworm
     env:
       GOFLAGS: -mod=mod
     repositories:

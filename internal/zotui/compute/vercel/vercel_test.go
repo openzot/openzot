@@ -19,6 +19,8 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 	var createBody map[string]any
 	var commandBody map[string]any
 	var installedConfig []byte
+	var installedWorker []byte
+	var installedWorkerMode int64
 	stopped := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +40,10 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 			if got := r.Header.Get("x-cwd"); got != "/vercel/sandbox" {
 				t.Errorf("config extraction cwd = %q", got)
 			}
-			installedConfig = readTarFile(t, r.Body, ".zot-home/.config/zot/config.json")
+			installed := readTarFiles(t, r.Body)
+			installedConfig = installed[".zot-home/.config/zot/config.json"].data
+			installedWorker = installed[".zot-worker/zot"].data
+			installedWorkerMode = installed[".zot-worker/zot"].mode
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v2/sandboxes/sessions/sess_123/cmd":
@@ -60,7 +65,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 
 	driver := newDriver("sandbox-token", "team_123", "prj_123", server.URL, server.Client())
 	sandbox, err := driver.Create(context.Background(), compute.Spec{
-		Image: "zot-runtime:latest",
+		Image: "go-environment:latest",
 		Env:   map[string]string{"GOFLAGS": "-mod=mod"},
 		Source: compute.Source{
 			URL:       "https://github.com/openzot/openzot.git",
@@ -68,6 +73,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 			Password:  "repo-token",
 			Directory: "openzot",
 		},
+		Worker:        compute.Worker{Platform: "linux/amd64", Data: []byte("deployed-zot-binary")},
 		Model:         compute.ModelSpec{Provider: "zai", Model: "glm-5.2", APIKey: "model-secret"},
 		MaxIterations: 99,
 	})
@@ -77,7 +83,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 	if driver.Type() != "vercel" {
 		t.Fatalf("Type = %q", driver.Type())
 	}
-	if createBody["projectId"] != "prj_123" || createBody["image"] != "zot-runtime:latest" || createBody["persistent"] != false {
+	if createBody["projectId"] != "prj_123" || createBody["image"] != "go-environment:latest" || createBody["persistent"] != false {
 		t.Fatalf("create body = %#v", createBody)
 	}
 	if createBody["timeout"] != float64((45 * time.Minute).Milliseconds()) {
@@ -103,16 +109,19 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 	if configBody.Agent.MaxIterations != 99 || configBody.Backends["worker"]["api_key"] != "model-secret" {
 		t.Fatalf("installed config = %+v", configBody)
 	}
+	if string(installedWorker) != "deployed-zot-binary" || installedWorkerMode != 0o755 {
+		t.Fatalf("installed worker = %q, mode %#o", installedWorker, installedWorkerMode)
+	}
 
 	var output strings.Builder
-	code, err := sandbox.Exec(context.Background(), []string{"zot", "fix the tests"}, map[string]string{"ZOT_UI_COLOR": "always"}, &output)
+	code, err := sandbox.Exec(context.Background(), []string{sandbox.WorkerPath(), "fix the tests"}, map[string]string{"ZOT_UI_COLOR": "always"}, &output)
 	if err != nil || code != 7 {
 		t.Fatalf("Exec = code %d, err %v", code, err)
 	}
 	if output.String() != "\x1b[32mworking\x1b[0m\nwarning\n" {
 		t.Fatalf("raw output = %q", output.String())
 	}
-	if commandBody["command"] != "zot" || commandBody["cwd"] != "/vercel/sandbox/openzot" || commandBody["wait"] != true || commandBody["logs"] != true {
+	if commandBody["command"] != "/vercel/sandbox/.zot-worker/zot" || commandBody["cwd"] != "/vercel/sandbox/openzot" || commandBody["wait"] != true || commandBody["logs"] != true {
 		t.Fatalf("command body = %#v", commandBody)
 	}
 	if err := sandbox.Destroy(context.Background()); err != nil {
@@ -131,6 +140,7 @@ func TestCreateRejectsUnsupportedOrIncompleteSpecs(t *testing.T) {
 	tests := []compute.Spec{
 		{},
 		{Image: "image"},
+		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}},
 		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}, Mounts: []compute.Mount{{Source: "/local", Target: "/workspace"}}},
 		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}, Source: compute.Source{Directory: "../outside"}},
 	}
@@ -145,16 +155,16 @@ func TestCreateRejectsUnsupportedOrIncompleteSpecs(t *testing.T) {
 		"team":    newDriver("token", "", "project", "https://example.invalid", http.DefaultClient),
 		"project": newDriver("token", "team", "", "https://example.invalid", http.DefaultClient),
 	} {
-		if _, err := driver.Create(context.Background(), compute.Spec{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}}); err == nil {
+		if _, err := driver.Create(context.Background(), validSpec()); err == nil {
 			t.Fatalf("Create accepted missing %s", name)
 		}
 	}
 	invalidTimeout := New("token", "team", "project", "not-a-duration", "https://example.invalid")
-	if _, err := invalidTimeout.Create(context.Background(), compute.Spec{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}}); err == nil {
+	if _, err := invalidTimeout.Create(context.Background(), validSpec()); err == nil {
 		t.Fatal("Create accepted an invalid timeout")
 	}
 	invalidURL := New("token", "team", "project", "1m", "not-an-absolute-url")
-	if _, err := invalidURL.Create(context.Background(), compute.Spec{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}}); err == nil {
+	if _, err := invalidURL.Create(context.Background(), validSpec()); err == nil {
 		t.Fatal("Create accepted an invalid base URL")
 	}
 }
@@ -180,7 +190,7 @@ func TestCreateStopsSandboxWhenConfigurationUploadFails(t *testing.T) {
 
 	driver := newDriver("token", "team", "project", server.URL, server.Client())
 	_, err := driver.Create(context.Background(), compute.Spec{
-		Image: "zot-runtime:latest", Model: compute.ModelSpec{Provider: "zai", Model: "glm-5.2"},
+		Image: "go-environment:latest", Worker: compute.Worker{Data: []byte("zot")}, Model: compute.ModelSpec{Provider: "zai", Model: "glm-5.2"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "storage unavailable") {
 		t.Fatalf("Create error = %v", err)
@@ -190,6 +200,11 @@ func TestCreateStopsSandboxWhenConfigurationUploadFails(t *testing.T) {
 	}
 }
 
+func validSpec() compute.Spec {
+	return compute.Spec{Image: "image", Worker: compute.Worker{Data: []byte("zot")},
+		Model: compute.ModelSpec{Provider: "p", Model: "m"}}
+}
+
 func decodeJSON(t *testing.T, r io.Reader, target any) {
 	t.Helper()
 	if err := json.NewDecoder(r).Decode(target); err != nil {
@@ -197,7 +212,12 @@ func decodeJSON(t *testing.T, r io.Reader, target any) {
 	}
 }
 
-func readTarFile(t *testing.T, r io.Reader, name string) []byte {
+type archivedFile struct {
+	data []byte
+	mode int64
+}
+
+func readTarFiles(t *testing.T, r io.Reader) map[string]archivedFile {
 	t.Helper()
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -205,20 +225,19 @@ func readTarFile(t *testing.T, r io.Reader, name string) []byte {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	files := map[string]archivedFile{}
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
-			t.Fatalf("%q not found in archive", name)
+			return files
 		}
 		if err != nil {
 			t.Fatalf("read archive: %v", err)
 		}
-		if header.Name == name {
-			body, err := io.ReadAll(tr)
-			if err != nil {
-				t.Fatalf("read %q: %v", name, err)
-			}
-			return body
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read %q: %v", header.Name, err)
 		}
+		files[header.Name] = archivedFile{data: body, mode: header.Mode}
 	}
 }

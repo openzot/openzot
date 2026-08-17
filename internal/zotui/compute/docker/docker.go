@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 const (
 	workspace  = "/workspace"
 	configPath = "/tmp/zot.yaml"
+	workerPath = "/tmp/zotui-worker/zot"
 )
 
 type commandRunner interface {
@@ -58,7 +60,11 @@ func newDriver(runner commandRunner) *Driver { return &Driver{binary: "docker", 
 // Type implements compute.Provider.
 func (d *Driver) Type() string { return "docker" }
 
-// Create starts a container and installs the resolved zot configuration in it.
+// Platform implements compute.Provider. Docker Desktop and the development
+// container run Linux containers using the host architecture by default.
+func (*Driver) Platform() string { return "linux/" + runtime.GOARCH }
+
+// Create starts a container and installs the Zot worker and its configuration.
 func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox, error) {
 	if err := validateSpec(spec); err != nil {
 		return nil, err
@@ -98,6 +104,13 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 		s.cleanup()
 		return nil, commandError("start", code, runErr, output.String())
 	}
+	output.Reset()
+	installWorker := "umask 077; mkdir -p /tmp/zotui-worker; cat > " + workerPath + "; chmod 755 " + workerPath
+	if code, runErr := d.runner.Run(ctx, bytes.NewReader(spec.Worker.Data), &output, d.binary,
+		"exec", "-i", name, "sh", "-c", installWorker); runErr != nil || code != 0 {
+		s.cleanup()
+		return nil, commandError("install worker", code, runErr, output.String())
+	}
 
 	data, err := compute.EncodeZotConfig(spec)
 	if err != nil {
@@ -119,6 +132,8 @@ type sandbox struct {
 	mu     sync.Mutex
 	dead   bool
 }
+
+func (*sandbox) WorkerPath() string { return workerPath }
 
 func (s *sandbox) Exec(ctx context.Context, cmd []string, env map[string]string, out io.Writer) (int, error) {
 	if len(cmd) == 0 {
@@ -162,6 +177,9 @@ func validateSpec(spec compute.Spec) error {
 	}
 	if strings.TrimSpace(spec.Model.Provider) == "" || strings.TrimSpace(spec.Model.Model) == "" {
 		return fmt.Errorf("docker: model provider and name are required")
+	}
+	if len(spec.Worker.Data) == 0 {
+		return fmt.Errorf("docker: worker binary is required")
 	}
 	for _, mount := range spec.Mounts {
 		if mount.Source == "" || mount.Target == "" {

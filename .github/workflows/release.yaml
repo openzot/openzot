@@ -75,6 +75,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          make worker-assets VERSION="${VERSION}"
           LDFLAGS="-s -w -X github.com/openzot/openzot/internal/version.Version=${VERSION}"
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
@@ -82,7 +83,7 @@ jobs:
           OUTDIR="dist/zot-${VERSION}-${GOOS}-${GOARCH}"
           mkdir -p "${OUTDIR}"
 
-          for cmd in zot; do
+          for cmd in zot zotui; do
             echo "Building ${cmd}..."
             go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/${cmd}${EXT}" "./cmd/${cmd}"
           done

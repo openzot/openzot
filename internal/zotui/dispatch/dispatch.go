@@ -29,6 +29,7 @@ type Resolver interface {
 type Dispatcher struct {
 	Repo     repo.Provider
 	Resolver Resolver
+	Worker   func(string) (compute.Worker, error)
 	Output   io.Writer
 }
 
@@ -39,6 +40,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, execution Execution) (*Result
 	provider, spec, err := d.Resolver.Resolve(execution)
 	if err != nil {
 		return nil, fmt.Errorf("resolve run: %w", err)
+	}
+	if d.Worker == nil {
+		return nil, fmt.Errorf("resolve worker: no worker source configured")
+	}
+	spec.Worker, err = d.Worker(spec.Platform)
+	if err != nil {
+		return nil, fmt.Errorf("resolve worker: %w", err)
 	}
 	token, err := d.Repo.MintToken(ctx, []string{execution.Repository})
 	if err != nil {
@@ -63,7 +71,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, execution Execution) (*Result
 	if token.Value != "" {
 		env["GH_TOKEN"] = token.Value
 	}
-	code, err := sandbox.Exec(ctx, []string{"zot", execution.Mission}, env, d.Output)
+	workerPath := sandbox.WorkerPath()
+	if workerPath == "" {
+		return nil, fmt.Errorf("execute run: compute returned no installed worker path")
+	}
+	code, err := sandbox.Exec(ctx, []string{workerPath, execution.Mission}, env, d.Output)
 	if err != nil {
 		return nil, fmt.Errorf("execute run: %w", err)
 	}

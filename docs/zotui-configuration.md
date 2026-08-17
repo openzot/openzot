@@ -104,11 +104,9 @@ Remote compute clones these repositories anonymously. The explicit list is
 required; a credential-free connection cannot discover every repository on
 GitHub.
 
-### Private GitHub and GitLab status
+### Private GitHub repositories
 
-The configuration schema already describes GitHub App and GitLab connections,
-but their live token/discovery implementations are not complete yet. Do not
-depend on these paths for a working private-repository run today:
+Use a GitHub App installation for private repositories:
 
 ```yaml
 repos:
@@ -117,13 +115,32 @@ repos:
     app_id: 123456
     installation_id: 7654321
     private_key: $GITHUB_APP_PRIVATE_KEY
+```
+
+Those three values are all ZotUI needs. Create the App and choose its repository
+permissions in GitHub, install it on the account or organization, then copy the
+App ID and installation ID and export the generated PEM private key. ZotUI uses
+an App JWT to discover the installation's repositories for the worker form. It
+mints a new installation token restricted to the selected repository for every
+run; only that short-lived token enters the sandbox as `GH_TOKEN` and as the
+credential for the initial remote clone. The App private key never leaves the
+ZotUI host.
+
+The GitHub App's own permission settings remain the upper bound. Grant only the
+permissions the worker needs—for example, Contents read-only for clone-only
+work, or Contents read/write and Pull requests read/write when it must push and
+open pull requests. ZotUI deliberately has no permission fields that can widen
+those settings.
+
+To narrow what the command center offers without changing the installation,
+add an optional lockdown list:
+
+```yaml
     repositories:
       - acme/private-api
 ```
 
-The GitHub App private key stays on the zotui host. Once the remaining exchange
-is implemented, only its short-lived, repository-scoped token should enter a
-sandbox.
+GitLab remains a configuration seam and is not implemented yet.
 
 ## Compute
 
@@ -141,15 +158,20 @@ compute:
     type: docker
 ```
 
-Build the development worker image before starting a run:
+An environment image supplies the project toolchain; Zotui supplies Zot. For
+example, local Go development can use the upstream image directly:
 
-```bash
-make dev-image
+```yaml
+environments:
+  go-development:
+    compute: development
+    model: gateway
+    image: golang:1.26.5-bookworm
 ```
 
-This creates `openzot/zot:dev` from
-`.devcontainer/Dockerfile.worker`. Each run gets a fresh container and zotui
-removes it afterward, including after cancellation.
+`make dev-ui` builds and embeds release-mode Linux worker binaries automatically.
+Each run gets a fresh container, receives the matching executable and private
+configuration, and is removed afterward, including after cancellation.
 
 ### Vercel Sandbox
 
@@ -177,18 +199,21 @@ the Hobby-plan maximum; use a longer value only when the Vercel plan permits it.
 Vercel documents access-token and OIDC authentication in its
 [Sandbox guide](https://vercel.com/docs/sandbox).
 
-#### The worker image
+#### The environment image
 
 Vercel Sandbox custom images come from the project-scoped Vercel Container
 Registry (VCR). The image must contain:
 
-- the `zot` binary on `PATH`;
 - Git and a shell;
 - the language toolchains and utilities the worker is expected to use.
 
+It does not contain Zot. The command center uploads its embedded Linux amd64
+worker after Vercel creates the sandbox, so updating Zotui updates the worker
+without rebuilding every environment image.
+
 Creating the Vercel project and access token can be done in the web UI. Building
-and pushing the image is a registry operation and currently uses Docker or
-another OCI client. One route for this repository is:
+and pushing a project-specific toolchain image is a registry operation and uses
+Docker or another OCI client. Given a local `acme-go-environment:latest` image:
 
 ```bash
 export VERCEL_TOKEN="..."
@@ -198,11 +223,9 @@ printf '%s' "$VERCEL_TOKEN" | docker login vcr.vercel.com \
   --username "$VERCEL_TEAM_ID" \
   --password-stdin
 
-docker build --platform linux/amd64 \
-  --file .devcontainer/Dockerfile.worker \
-  --tag vcr.vercel.com/<team-slug>/<project-slug>/zot-runtime:latest \
-  .
-docker push vcr.vercel.com/<team-slug>/<project-slug>/zot-runtime:latest
+docker tag acme-go-environment:latest \
+  vcr.vercel.com/<team-slug>/<project-slug>/go-environment:latest
+docker push vcr.vercel.com/<team-slug>/<project-slug>/go-environment:latest
 ```
 
 Use slugs—not `team_...` and `prj_...` IDs—in the registry path. The repository
@@ -213,13 +236,13 @@ covers OIDC login, access-token login, image paths, and current registry limits.
 An environment in the same Vercel project can use the short image name:
 
 ```yaml
-image: zot-runtime:latest
+image: go-environment:latest
 ```
 
 The Vercel driver creates a non-persistent sandbox, seeds the selected remote
-Git repository, runs zot from that repository directory, streams raw ANSI
-output to the browser, and stops the sandbox at the end. Local host mounts are
-not supported.
+Git repository, installs Zot and its private configuration, runs from that
+repository directory, streams raw ANSI output to the browser, and stops the
+sandbox at the end. Local host mounts are not supported.
 
 ### Cloudflare status
 
@@ -286,7 +309,7 @@ environments:
   go-development:
     compute: development
     model: gateway
-    image: openzot/zot:dev
+    image: golang:1.26.5-bookworm
     env:
       GOFLAGS: -mod=mod
     repositories:
@@ -348,7 +371,7 @@ environments:
   go-development:
     compute: development
     model: gateway
-    image: openzot/zot:dev
+    image: golang:1.26.5-bookworm
     env:
       GOFLAGS: -mod=mod
     repositories:
@@ -364,7 +387,6 @@ export ZOTUI_CONFIG="$PWD/.local/zotui.yaml"
 export ZOTUI_REPO_PATH="$PWD"
 export ZOTUI_STORE_DSN="$PWD/.local/state/zotui.db"
 export AI_GATEWAY_API_KEY="..."
-make dev-image
 make dev-ui
 ```
 
@@ -398,7 +420,7 @@ environments:
   vercel-go:
     compute: vercel
     model: gateway
-    image: zot-runtime:latest
+    image: go-environment:latest
     repositories:
       - public/openzot/openzot
 

@@ -89,7 +89,12 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	response := stateResponse{Choices: s.app.Choices(), Workers: make([]workerResponse, 0, len(workers))}
+	choices, err := s.app.Choices(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	response := stateResponse{Choices: choices, Workers: make([]workerResponse, 0, len(workers))}
 	for _, worker := range workers {
 		runs, err := s.app.Runs(r.Context(), worker.ID)
 		if err != nil {

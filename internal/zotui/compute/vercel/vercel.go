@@ -28,6 +28,8 @@ const (
 	workspace      = "/vercel/sandbox"
 	configPath     = workspace + "/.zot-home/.config/zot/config.json"
 	configArchive  = ".zot-home/.config/zot/config.json"
+	workerPath     = workspace + "/.zot-worker/zot"
+	workerArchive  = ".zot-worker/zot"
 	defaultTimeout = 45 * time.Minute
 )
 
@@ -63,7 +65,9 @@ func newDriver(token, teamID, projectID, baseURL string, client *http.Client) *D
 // Type implements compute.Provider.
 func (*Driver) Type() string { return "vercel" }
 
-// Create starts a Vercel sandbox and installs its private zot configuration.
+func (*Driver) Platform() string { return "linux/amd64" }
+
+// Create starts a Vercel sandbox and installs the Zot worker and its private configuration.
 func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox, error) {
 	if err := d.validate(spec); err != nil {
 		return nil, err
@@ -111,7 +115,7 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 		s.cleanup()
 		return nil, fmt.Errorf("vercel: encode zot config: %w", err)
 	}
-	if err := s.installConfig(ctx, config); err != nil {
+	if err := s.installPayload(ctx, config, spec.Worker.Data); err != nil {
 		s.cleanup()
 		return nil, err
 	}
@@ -139,6 +143,9 @@ func (d *Driver) validate(spec compute.Spec) error {
 	}
 	if strings.TrimSpace(spec.Model.Provider) == "" || strings.TrimSpace(spec.Model.Model) == "" {
 		return errors.New("vercel: model provider and name are required")
+	}
+	if len(spec.Worker.Data) == 0 {
+		return errors.New("vercel: worker binary is required")
 	}
 	if len(spec.Mounts) != 0 {
 		return errors.New("vercel: local host mounts are not supported; use a remote repo connection")
@@ -193,21 +200,29 @@ type sandbox struct {
 	dead      bool
 }
 
-func (s *sandbox) installConfig(ctx context.Context, config []byte) error {
+func (*sandbox) WorkerPath() string { return workerPath }
+
+func (s *sandbox) installPayload(ctx context.Context, config, worker []byte) error {
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(gz)
-	if err := tw.WriteHeader(&tar.Header{Name: configArchive, Mode: 0o600, Size: int64(len(config)), Typeflag: tar.TypeReg}); err != nil {
-		return fmt.Errorf("vercel: archive zot config: %w", err)
-	}
-	if _, err := tw.Write(config); err != nil {
-		return fmt.Errorf("vercel: archive zot config: %w", err)
+	for _, file := range []struct {
+		name string
+		mode int64
+		data []byte
+	}{{configArchive, 0o600, config}, {workerArchive, 0o755, worker}} {
+		if err := tw.WriteHeader(&tar.Header{Name: file.name, Mode: file.mode, Size: int64(len(file.data)), Typeflag: tar.TypeReg}); err != nil {
+			return fmt.Errorf("vercel: archive runtime payload: %w", err)
+		}
+		if _, err := tw.Write(file.data); err != nil {
+			return fmt.Errorf("vercel: archive runtime payload: %w", err)
+		}
 	}
 	if err := tw.Close(); err != nil {
-		return fmt.Errorf("vercel: archive zot config: %w", err)
+		return fmt.Errorf("vercel: archive runtime payload: %w", err)
 	}
 	if err := gz.Close(); err != nil {
-		return fmt.Errorf("vercel: archive zot config: %w", err)
+		return fmt.Errorf("vercel: archive runtime payload: %w", err)
 	}
 
 	path := "/v2/sandboxes/sessions/" + url.PathEscape(s.sessionID) + "/fs/write"
@@ -215,11 +230,11 @@ func (s *sandbox) installConfig(ctx context.Context, config []byte) error {
 		"Content-Type": "application/gzip", "x-cwd": workspace,
 	})
 	if err != nil {
-		return fmt.Errorf("vercel: install zot config: %w", err)
+		return fmt.Errorf("vercel: install runtime payload: %w", err)
 	}
 	defer response.Body.Close()
 	if err := checkResponse(response); err != nil {
-		return fmt.Errorf("vercel: install zot config: %w", err)
+		return fmt.Errorf("vercel: install runtime payload: %w", err)
 	}
 	return nil
 }

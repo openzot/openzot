@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openzot/openzot/internal/zotui/compute"
 	"github.com/openzot/openzot/internal/zotui/compute/cloudflare"
@@ -21,6 +22,7 @@ import (
 	githubrepo "github.com/openzot/openzot/internal/zotui/repo/github"
 	localrepo "github.com/openzot/openzot/internal/zotui/repo/local"
 	"github.com/openzot/openzot/internal/zotui/store"
+	workerbin "github.com/openzot/openzot/internal/zotui/worker"
 )
 
 // App wires configuration, durable state, and remote execution together.
@@ -28,17 +30,26 @@ type App struct {
 	cfg   *config.Config
 	store store.Store
 
-	mu        sync.Mutex
-	repoCache map[string]repo.Provider
-	cancels   map[string]*runCancel
+	mu              sync.Mutex
+	repoCache       map[string]repo.Provider
+	repositoryCache map[string]repositoryChoices
+	cancels         map[string]*runCancel
 }
 
 type runCancel struct{ cancel context.CancelFunc }
 
+type repositoryChoices struct {
+	repositories []string
+	expires      time.Time
+}
+
 const DefaultMaxIterations = 1_000_000
 
+const repositoryCacheTTL = 5 * time.Minute
+
 func New(cfg *config.Config, st store.Store) *App {
-	return &App{cfg: cfg, store: st, repoCache: map[string]repo.Provider{}, cancels: map[string]*runCancel{}}
+	return &App{cfg: cfg, store: st, repoCache: map[string]repo.Provider{},
+		repositoryCache: map[string]repositoryChoices{}, cancels: map[string]*runCancel{}}
 }
 
 type Choices struct {
@@ -49,15 +60,18 @@ type Choices struct {
 	DefaultMaxIterations int                 `json:"defaultMaxIterations"`
 }
 
-func (a *App) Choices() Choices {
+func (a *App) Choices(ctx context.Context) (Choices, error) {
 	repositories := make(map[string][]string, len(a.cfg.Repos))
-	for name, configured := range a.cfg.Repos {
-		repositories[name] = slices.Clone(configured.Repositories)
-		sort.Strings(repositories[name])
+	for _, name := range sortedKeys(a.cfg.Repos) {
+		discovered, err := a.repositoriesFor(ctx, name)
+		if err != nil {
+			return Choices{}, fmt.Errorf("repositories for %q: %w", name, err)
+		}
+		repositories[name] = discovered
 	}
 	return Choices{Repos: sortedKeys(a.cfg.Repos), Repositories: repositories,
 		Environments: sortedKeys(a.cfg.Environments), Models: sortedKeys(a.cfg.Models),
-		DefaultMaxIterations: DefaultMaxIterations}
+		DefaultMaxIterations: DefaultMaxIterations}, nil
 }
 
 type WorkerParams struct {
@@ -222,7 +236,7 @@ func (a *App) dispatch(ctx context.Context, id string, execution dispatch.Execut
 	writer := &runWriter{ctx: context.Background(), store: a.store, runID: id}
 	rp, err := a.repoFor(execution.Repo)
 	if err == nil {
-		d := &dispatch.Dispatcher{Repo: rp, Resolver: a, Output: writer}
+		d := &dispatch.Dispatcher{Repo: rp, Resolver: a, Worker: workerbin.Load, Output: writer}
 		var res *dispatch.Result
 		res, err = d.Dispatch(ctx, execution)
 		if err == nil && res != nil && res.ExitCode != 0 {
@@ -324,11 +338,7 @@ func (a *App) authorize(ctx context.Context, execution dispatch.Execution) error
 		}
 		return nil
 	}
-	rp, err := a.repoFor(execution.Repo)
-	if err != nil {
-		return err
-	}
-	repositories, err := rp.ListRepositories(ctx)
+	repositories, err := a.repositoriesFor(ctx, execution.Repo)
 	if err != nil {
 		return fmt.Errorf("discover repositories: %w", err)
 	}
@@ -336,6 +346,42 @@ func (a *App) authorize(ctx context.Context, execution dispatch.Execution) error
 		return fmt.Errorf("repository %q is not available from repo %q", execution.Repository, execution.Repo)
 	}
 	return nil
+}
+
+func (a *App) repositoriesFor(ctx context.Context, name string) ([]string, error) {
+	configured, ok := a.cfg.Repos[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown repo %q", name)
+	}
+	if len(configured.Repositories) > 0 {
+		repositories := slices.Clone(configured.Repositories)
+		sort.Strings(repositories)
+		return repositories, nil
+	}
+
+	now := time.Now()
+	a.mu.Lock()
+	if cached, ok := a.repositoryCache[name]; ok && now.Before(cached.expires) {
+		repositories := slices.Clone(cached.repositories)
+		a.mu.Unlock()
+		return repositories, nil
+	}
+	a.mu.Unlock()
+
+	provider, err := a.repoFor(name)
+	if err != nil {
+		return nil, err
+	}
+	repositories, err := provider.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	repositories = slices.Clone(repositories)
+	sort.Strings(repositories)
+	a.mu.Lock()
+	a.repositoryCache[name] = repositoryChoices{repositories: slices.Clone(repositories), expires: now.Add(repositoryCacheTTL)}
+	a.mu.Unlock()
+	return slices.Clone(repositories), nil
 }
 
 func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.Spec, error) {
@@ -374,7 +420,7 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 		source = compute.Source{URL: "https://github.com/" + execution.Repository + ".git",
 			Username: "x-access-token", Directory: parts[1]}
 	}
-	return driver, compute.Spec{Image: env.Image, Env: env.Env, Mounts: mounts, Source: source, MaxIterations: execution.MaxIterations,
+	return driver, compute.Spec{Image: env.Image, Platform: driver.Platform(), Env: env.Env, Mounts: mounts, Source: source, MaxIterations: execution.MaxIterations,
 		Model: compute.ModelSpec{Provider: m.Provider, Model: m.Model, APIKey: m.APIKey, BaseURL: m.BaseURL}}, nil
 }
 

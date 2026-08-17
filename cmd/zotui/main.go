@@ -6,8 +6,8 @@
 // repos, compute, models and environments; override its path
 // with $ZOTUI_CONFIG.
 //
-// Local Docker and public-GitHub Vercel Sandbox runs work end to end. The
-// private GitHub token exchange and Cloudflare compute remain provider seams.
+// Local Docker and GitHub-backed Vercel Sandbox runs work end to end. Cloudflare
+// compute remains a provider seam.
 package main
 
 import (

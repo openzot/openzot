@@ -82,21 +82,22 @@ environments:
   # local-development:
   #   compute: local
   #   model: glm
-  #   image: openzot/zot:dev
+  #   # Environment image: toolchain only. Zotui installs Zot at run time.
+  #   image: golang:1.26.5-bookworm
   #   repositories:
   #     - development/openzot/openzot
   # vercel-development:
   #   compute: vercel
   #   model: glm
-  #   # Custom images must be pushed to this project's Vercel Container Registry.
-  #   # The image must contain the zot binary and the required development tools.
-  #   image: zot-runtime:latest
+  #   # Custom toolchain images must be pushed to this project's Vercel Container
+  #   # Registry. Zotui installs its embedded Zot worker after creating the sandbox.
+  #   image: go-environment:latest
   #   repositories:
   #     - public/openzot/openzot
   go-ubuntu:
     compute: cf
     model: glm
-    image: ghcr.io/openzot/openzot-toolchain:latest # base image: toolchain + the zot binary
+    image: ghcr.io/acme/go-environment:latest # environment tools; Zot is deployed by zotui
     env:
       GOFLAGS: -mod=mod
     # Optional per-environment lockdown: restrict this environment to specific

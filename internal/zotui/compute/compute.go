@@ -11,15 +11,24 @@ import (
 	"io"
 )
 
-// Spec is a resolved environment: the base image, env vars, and model config a
-// sandbox boots zot with.
+// Spec is a resolved environment plus the Zot executable the provider installs.
 type Spec struct {
 	Image         string
+	Platform      string
 	Env           map[string]string
 	Mounts        []Mount
 	Source        Source
+	Worker        Worker
 	Model         ModelSpec
 	MaxIterations int
+}
+
+// Worker is the Zot executable the command center deploys into a sandbox.
+// Environment images provide tools and dependencies; they do not need to carry
+// a particular Zot release themselves.
+type Worker struct {
+	Platform string
+	Data     []byte
 }
 
 // Mount exposes a host path inside a sandbox.
@@ -63,6 +72,8 @@ func EncodeZotConfig(spec Spec) ([]byte, error) {
 type Provider interface {
 	// Type is the provider name (docker, cloudflare, vercel, ssh, ...).
 	Type() string
+	// Platform is the operating system and architecture workers run on.
+	Platform() string
 
 	// Create boots a sandbox from spec and returns a handle to it.
 	Create(ctx context.Context, spec Spec) (Sandbox, error)
@@ -70,6 +81,9 @@ type Provider interface {
 
 // Sandbox is a running compute instance a worker run executes in.
 type Sandbox interface {
+	// WorkerPath is the absolute path where Create installed the worker binary.
+	WorkerPath() string
+
 	// Exec runs a command, streaming combined output to out, and returns the
 	// command's exit code. env is merged over the sandbox's baseline environment.
 	Exec(ctx context.Context, cmd []string, env map[string]string, out io.Writer) (int, error)

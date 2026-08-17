@@ -26,6 +26,8 @@ func New(accountID, apiToken string) *Driver {
 // Type implements compute.Provider.
 func (d *Driver) Type() string { return "cloudflare" }
 
+func (d *Driver) Platform() string { return "linux/amd64" }
+
 // Create boots a sandbox from spec.
 func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox, error) {
 	// TODO: call the Cloudflare Sandbox API to boot a container from spec.Image
@@ -38,6 +40,8 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 type sandbox struct {
 	id string
 }
+
+func (s *sandbox) WorkerPath() string { return "" }
 
 func (s *sandbox) Exec(ctx context.Context, cmd []string, env map[string]string, out io.Writer) (int, error) {
 	return 0, errors.New("cloudflare: Exec not wired yet")

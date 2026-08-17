@@ -38,10 +38,13 @@ func TestChoicesGroupRepositoriesByConnection(t *testing.T) {
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
 			"second": {Repositories: []string{"zeta/api", "alpha/web"}},
-			"first":  {},
+			"first":  {Type: "local"},
 		},
 	}
-	choices := app.New(cfg, nil).Choices()
+	choices, err := app.New(cfg, nil).Choices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(choices.Repos) != 2 || choices.Repos[0] != "first" || choices.Repos[1] != "second" {
 		t.Fatalf("repo connections = %v", choices.Repos)
 	}
@@ -53,7 +56,11 @@ func TestChoicesGroupRepositoriesByConnection(t *testing.T) {
 	}
 
 	choices.Repositories["second"][0] = "changed/outside"
-	if got := app.New(cfg, nil).Choices().Repositories["second"][0]; got != "alpha/web" {
+	choices, err = app.New(cfg, nil).Choices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := choices.Repositories["second"][0]; got != "alpha/web" {
 		t.Fatalf("choices exposed configuration state: %q", got)
 	}
 }
@@ -155,14 +162,14 @@ func TestLocalRepoResolvesDockerCompute(t *testing.T) {
 		Repos:        map[string]config.Repo{"checkout": {Type: "local", Path: "/workspaces/openzot", Repositories: []string{"openzot/openzot"}}},
 		Compute:      map[string]config.Compute{"development": {Type: "docker"}},
 		Models:       map[string]config.Model{"local": {Provider: "zai", Model: "glm", APIKey: "secret"}},
-		Environments: map[string]config.Environment{"dev": {Compute: "development", Model: "local", Image: "openzot/zot:dev"}},
+		Environments: map[string]config.Environment{"dev": {Compute: "development", Model: "local", Image: "golang:1.26.5-bookworm"}},
 	}
 	a := app.New(cfg, openStore(t))
 	provider, spec, err := a.Resolve(dispatch.Execution{Repo: "checkout", Repository: "openzot/openzot", Environment: "dev", Model: "local", MaxIterations: 27})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if provider.Type() != "docker" || spec.Image != "openzot/zot:dev" || spec.MaxIterations != 27 {
+	if provider.Type() != "docker" || spec.Image != "golang:1.26.5-bookworm" || spec.MaxIterations != 27 {
 		t.Fatalf("resolved compute = %s, %+v", provider.Type(), spec)
 	}
 	if len(spec.Mounts) != 1 || spec.Mounts[0].Source != "/workspaces/openzot" || spec.Mounts[0].Target != "/workspace" {
@@ -186,7 +193,7 @@ func TestGitHubRepoResolvesVercelComputeAndGitSource(t *testing.T) {
 		}},
 		Models: map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2", APIKey: "model-secret"}},
 		Environments: map[string]config.Environment{"remote": {
-			Compute: "remote", Model: "glm", Image: "zot-runtime:latest",
+			Compute: "remote", Model: "glm", Image: "go-environment:latest",
 		}},
 	}
 
@@ -207,7 +214,7 @@ func TestWorkerRejectsLocalRepoOnVercelCompute(t *testing.T) {
 		Compute: map[string]config.Compute{"remote": {Type: "vercel"}},
 		Models:  map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2"}},
 		Environments: map[string]config.Environment{"remote": {
-			Compute: "remote", Model: "glm", Image: "zot-runtime:latest",
+			Compute: "remote", Model: "glm", Image: "go-environment:latest",
 		}},
 	}
 	_, err := app.New(cfg, openStore(t)).CreateWorker(context.Background(), app.WorkerParams{

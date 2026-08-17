@@ -30,7 +30,7 @@
       "onAutoForward": "notify"
     }
   },
-  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.cache/go-build /home/vscode/go/pkg/mod /home/vscode/.local/state/zotui && go mod download && make dev-image",
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.cache/go-build /home/vscode/go/pkg/mod /home/vscode/.local/state/zotui && go mod download && make worker-assets",
   "runArgs": ["--init"],
   "shutdownAction": "stopContainer",
   "customizations": {
