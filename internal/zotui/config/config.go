@@ -1,10 +1,9 @@
 // Package config defines the zotui configuration: the repository connections,
 // compute providers, models, environments that bind compute to an image and env
-// vars, and the store that tracks scheduled jobs.
+// vars, and the store that tracks workers and their runs.
 //
-// Both the TUI and the future web interface load this same file - there is one
-// config and one loader, so the two faces can never drift. Jobs are NOT in the
-// config: they are scheduled from the tool at runtime and tracked in the store.
+// Workers are not in the config: they are created in the web command center and
+// tracked in the store.
 package config
 
 import (
@@ -19,9 +18,9 @@ import (
 
 // Config is the whole zotui configuration.
 type Config struct {
-	// Repos are the repository connections a job's code can come from, keyed by
+	// Repos are the repository connections a worker's code can come from, keyed by
 	// name. Several connect at once - multiple GitHub orgs, GitHub and GitLab
-	// together, self-hosted instances. A job names which repo connection it uses.
+	// together, self-hosted instances. A worker names which connection it uses.
 	Repos map[string]Repo `yaml:"repos"`
 
 	// Compute holds the providers that create or expose remote computers, keyed by
@@ -29,14 +28,14 @@ type Config struct {
 	Compute map[string]Compute `yaml:"compute"`
 
 	// Models are the LLM configs zot reasons with, keyed by a name an environment
-	// or a job references. Each carries the provider credential.
+	// or worker references. Each carries the provider credential.
 	Models map[string]Model `yaml:"models"`
 
 	// Environments bind compute to a base image and env vars - the blueprint a
-	// job's sandbox is created from.
+	// run's sandbox is created from.
 	Environments map[string]Environment `yaml:"environments"`
 
-	// Store selects where scheduled jobs and their progress are persisted.
+	// Store selects where workers, runs, and output are persisted.
 	Store StoreConfig `yaml:"store"`
 }
 
@@ -48,7 +47,8 @@ type Config struct {
 // every repository it exposes; listing narrows to exactly those (owner/name
 // within the connection). It can only restrict reach, never widen it.
 type Repo struct {
-	Type string `yaml:"type"` // github, gitlab
+	Type string `yaml:"type"` // github, gitlab, local
+	Path string `yaml:"path"` // local: checkout path mounted into the sandbox
 
 	// github: a GitHub App installation
 	AppID          int64  `yaml:"app_id"`
@@ -64,7 +64,7 @@ type Repo struct {
 
 // Compute is a provider of remote computers: its type and credentials.
 type Compute struct {
-	Type      string `yaml:"type"`       // cloudflare, vercel, ssh, ...
+	Type      string `yaml:"type"`       // cloudflare, docker, vercel, ssh, ...
 	AccountID string `yaml:"account_id"` // provider-specific
 	APIToken  string `yaml:"api_token"`
 	BaseURL   string `yaml:"base_url"` // optional endpoint override
@@ -72,7 +72,7 @@ type Compute struct {
 
 // Model is an LLM configuration zot reasons with: the provider, the model name,
 // and the credential to reach it. The key is held on the host and injected into a
-// job's sandbox at dispatch - never baked into the image.
+// run's sandbox at dispatch - never baked into the image.
 type Model struct {
 	Provider string `yaml:"provider"` // zai, openai, anthropic, ...
 	Model    string `yaml:"model"`    // the model name the provider knows
@@ -81,9 +81,9 @@ type Model struct {
 }
 
 // Environment binds compute to a base image and a set of environment variables -
-// the reusable blueprint a job's sandbox is created from: define once, spawn many
-// ephemeral sandboxes. Model is the default model for jobs on this environment; a
-// job can override it at dispatch.
+// the reusable blueprint a run's sandbox is created from: define once, spawn many
+// ephemeral sandboxes. Model is the default model for workers on this environment;
+// a worker can override it.
 //
 // Repositories is an OPTIONAL per-environment lockdown: when set, only these
 // repositories may run on this environment, additional to any per-repo lockdown.
@@ -97,7 +97,7 @@ type Environment struct {
 	Repositories []string          `yaml:"repositories"` // optional per-env lockdown
 }
 
-// StoreConfig selects and locates the job store.
+// StoreConfig selects and locates the command center store.
 type StoreConfig struct {
 	Driver string `yaml:"driver"` // sqlite (default), postgres, ...
 	DSN    string `yaml:"dsn"`    // path or connection string
@@ -129,6 +129,7 @@ func (c *Config) expand() {
 	for name, s := range c.Repos {
 		s.PrivateKey = os.ExpandEnv(s.PrivateKey)
 		s.Token = os.ExpandEnv(s.Token)
+		s.Path = expandHome(os.ExpandEnv(s.Path))
 		c.Repos[name] = s
 	}
 	for name, r := range c.Compute {

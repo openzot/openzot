@@ -1,0 +1,48 @@
+{
+  "name": "openzot",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "GO_VERSION": "1.26.5"
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {}
+  },
+  "workspaceFolder": "/workspaces/openzot",
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "ZOTUI_ADDR": "0.0.0.0:8080",
+    "ZOTUI_CONFIG": "/workspaces/openzot/.devcontainer/zotui.dev.yaml",
+    "ZOTUI_REPO_PATH": "/workspaces/openzot",
+    "ZOTUI_STORE_DSN": "/home/vscode/.local/state/zotui/zotui.db"
+  },
+  "mounts": [
+    "source=openzot-go-build-cache,target=/home/vscode/.cache/go-build,type=volume",
+    "source=openzot-go-module-cache,target=/home/vscode/go/pkg/mod,type=volume",
+    "source=openzot-zotui-state,target=/home/vscode/.local/state/zotui,type=volume"
+  ],
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "zotui command center",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.cache/go-build /home/vscode/go/pkg/mod /home/vscode/.local/state/zotui && go mod download && make dev-image",
+  "runArgs": ["--init"],
+  "shutdownAction": "stopContainer",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "go.toolsManagement.autoUpdate": true
+      }
+    }
+  }
+}

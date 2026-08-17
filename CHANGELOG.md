@@ -4,9 +4,15 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ## [0.10.0] - unreleased
 
+### Added
+
+- **Local Docker compute for zotui.** A `local` repo mounts an existing checkout into an ephemeral container supplied by `compute.type: docker`; zotui streams the run output and removes the container even after cancellation. `make dev-image` builds the worker image used by the development environment.
+- **A repository development container for Go and zotui work.** It pins the project toolchain, runs as a non-root developer, provides Docker-in-Docker, persists Go caches, Docker data, and zotui state in named volumes, forwards the command-center port, builds the local worker image, and includes a credential-free fixture configuration. `make dev-ui` provides the same local workflow outside the container.
+
 ### Changed
 
-- **Breaking (`zotui` config): repository connections are now `repos`, compute providers are `compute`, and an environment references `compute`.** The configuration now reads as the job path itself: repo + environment + model, with the environment binding compute to its image and variables. The old `sources`, `runners`, and `environments.*.runner` keys are removed rather than retained as aliases; unknown keys now fail during config loading instead of being silently ignored. Existing experimental zotui databases use the old `source` column and must be recreated.
+- **Breaking (`zotui`): the terminal command center is replaced by the browser software-factory UI.** Running `zotui` now serves the embedded web app on `127.0.0.1:8080` (override with `ZOTUI_ADDR`). Its backend models durable reusable workers, recurring schedules, and distinct run histories with controls and output, replacing the one-shot `jobs` table. Migration 2 removes that experimental table and its records.
+- **Breaking (`zotui` config): repository connections are now `repos`, compute providers are `compute`, and an environment references `compute`.** The configuration now reads as the job path itself: repo + environment + model, with the environment binding compute to its image and variables. The old `sources`, `runners`, and `environments.*.runner` keys are removed rather than retained as aliases; unknown keys now fail during config loading instead of being silently ignored.
 - **The CLI now uses GNU-style flags (`spf13/pflag`), matching rook and the rest of the ecosystem.** Long flags are double-dash (`--backend`, `--dir`), flags may appear **after** the positional task (`zot "do X" --plain` now works, where before the flag was folded into the task string), and `--help`'s flag list finally renders `--flag` to match the examples and the docs - the single-/double-dash mismatch the stdlib `flag` package produced is gone. **Breaking:** single-dash long flags (`-backend`) no longer parse - use `--backend`. zot has no short flags and every documented example already used `--`, so anything following the docs is unaffected.
 
 ## [0.9.1] - 2026-08-06

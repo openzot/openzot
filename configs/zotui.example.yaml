@@ -1,16 +1,13 @@
 # zotui configuration.
 #
-# zotui is the command center over the zot engine: you schedule a coding job onto
-# an ephemeral sandbox, then close the tool and come back later to see how it went.
-# Progress is tracked in a store, so the tool is a view over durable state - not a
-# process you have to babysit.
-#
-# The TUI and the (future) web interface both read THIS file. One config, two faces.
+# zotui is the browser command center over the zot engine. You define reusable
+# workers, start or schedule runs on remote environments, and inspect their output.
+# Workers and run history are durable, so closing the browser loses no state.
 
-# Repos are the repository connections jobs get their code from and how zotui
-# mints per-job credentials. A map, so several connect at once: multiple GitHub
+# Repos are the repository connections workers get their code from and how zotui
+# mints per-run credentials. A map, so several connect at once: multiple GitHub
 # orgs, GitHub and GitLab together, self-hosted instances. `type` picks the
-# implementation; a job names which repo connection it targets. Each repo has an
+# implementation; a worker names which repo connection it targets. Each repo has an
 # OPTIONAL lockdown - omit to discover every repository it exposes, or list some
 # to restrict to those.
 repos:
@@ -19,7 +16,7 @@ repos:
     app_id: 123456
     installation_id: 7654321
     # PEM private key, inline or a $VAR reference. Held only on the host - never
-    # sent to a sandbox. zotui mints a short-lived, repo-scoped token per job.
+    # sent to a sandbox. zotui mints a short-lived, repo-scoped token per run.
     private_key: $ACME_GITHUB_APP_KEY
     # repositories:            # optional per-repo lockdown (owner/name)
     #   - acme-corp/api
@@ -29,17 +26,27 @@ repos:
     base_url: https://gitlab.example.com
     token: $LABS_GITLAB_TOKEN
 
-# Compute is where remote computers and sandboxes come from. Today: cloudflare.
-# Later: vercel, and your own machines over ssh.
+  # A checkout already present on the zotui host. Docker compute mounts it into
+  # the worker container at /workspace and does not mint a remote credential.
+  # development:
+  #   type: local
+  #   path: $ZOTUI_REPO_PATH
+  #   repositories:
+  #     - openzot/openzot
+
+# Compute is where computers and sandboxes come from. Docker provides local
+# ephemeral compute; cloudflare is the remote provider seam.
 compute:
+  local:
+    type: docker
   cf:
     type: cloudflare
     account_id: $CLOUDFLARE_ACCOUNT_ID
     api_token: $CLOUDFLARE_API_TOKEN
 
 # Models zot reasons with. Each names the provider, the model, and the credential
-# to reach it - held on the host and injected into a job's sandbox at dispatch. An
-# environment picks a default; a job can override it when it is scheduled.
+# to reach it - held on the host and injected into a run's sandbox. An environment
+# picks a default; a worker can override it.
 models:
   glm:
     provider: zai
@@ -51,9 +58,15 @@ models:
     api_key: $ANTHROPIC_API_KEY
 
 # Environments bind compute to a base image and env vars - the reusable blueprint
-# a job's sandbox is created from: define once, spawn many ephemeral sandboxes.
-# `model` is the default model for jobs here; a scheduled job may override it.
+# a run's sandbox is created from: define once, spawn many ephemeral sandboxes.
+# `model` is the default model for workers on this environment.
 environments:
+  # local-development:
+  #   compute: local
+  #   model: glm
+  #   image: openzot/zot:dev
+  #   repositories:
+  #     - development/openzot/openzot
   go-ubuntu:
     compute: cf
     model: glm
@@ -65,8 +78,8 @@ environments:
     # repositories:
     #   - acme/acme-corp/api
 
-# Where scheduled jobs and their progress are stored, so you can schedule, close
-# the tool, and reopen later to see where a job got to. sqlite by default;
+# Where workers, their run history, and output are stored, so you can close the
+# browser and return later without losing state. sqlite by default;
 # postgres and others can slot in.
 store:
   driver: sqlite

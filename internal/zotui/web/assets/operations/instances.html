@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>ZOT — Software Factory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@wterm/dom@0.3.2/src/terminal.css" />
+  <link rel="stylesheet" href="../global.css?v=20260817-zot-parity" />
+  <script src="../components.js?v=20260817-zot-parity"></script>
+</head>
+<body>
+  <zot-ambient
+    count="40"
+    fixed-count
+    variant="soft"
+    x-step="137.5"
+    y-step="83.1"
+    speed=".08"
+    speed-step=".018"
+    alpha=".25"
+    alpha-step="0"
+  ></zot-ambient>
+
+  <main class="frame" aria-label="ZOT software factory environment operations">
+    <zot-topbar product="ZOT" state="FACTORY CONTROL / CONNECTED"></zot-topbar>
+
+    <section class="workspace">
+      <aside class="instance-rail" aria-label="Zot workers">
+        <div class="rail-head"><span class="eyebrow">Workers</span><button class="new-instance" id="new-instance" aria-label="Create Zot worker" title="Create worker">+</button></div>
+        <div class="rail-summary">
+          <div class="rail-stat"><span>Active</span><strong id="active-count">02</strong></div>
+          <div class="rail-stat"><span>Paused</span><strong id="paused-count">00</strong></div>
+          <div class="rail-stat"><span>Runs</span><strong id="run-count">28</strong></div>
+        </div>
+        <div class="instance-list" id="instance-list"></div>
+      </aside>
+
+      <section class="main-panel" aria-label="Selected Zot worker">
+        <header class="instance-header">
+          <div>
+            <div class="header-kicker" id="header-kicker">Autonomous software factory / product</div>
+            <div class="header-title"><h1 id="instance-title">ZOT-PRODUCT</h1></div>
+            <div class="header-detail"><span>instance <b class="instance-id" id="instance-id">ZT-6F22</b></span><span>runtime <b id="environment-value">Remote builder · Linux amd64</b></span><span>schedule <b id="backend-value">Every 4 hours · Europe/London · 90m runtime</b></span><span>mission <b id="objective-value">Continuously turn repeated user demand into tested improvements and review-ready pull requests</b></span></div>
+          </div>
+          <div class="actions"><button class="action" id="edit-worker">Edit worker</button><button class="action" id="run-pause">Pause run</button><button class="action" id="run-stop">Stop run</button><button class="action primary" id="run-start">Start new run</button></div>
+        </header>
+
+        <div class="operation-grid">
+          <section class="run-column" aria-label="Worker outcomes">
+            <div class="section-head"><span>Work ledger</span><b id="run-list-count">03 records</b></div>
+            <div class="run-list" id="run-list"></div>
+          </section>
+
+          <section class="output-column" aria-label="Selected worker output">
+            <div class="section-head">
+              <div class="output-meta"><span id="output-run-id">20260810-084237-7312</span><span>WORKER OUTPUT</span></div>
+              <div class="output-meta"><button class="output-action" id="view-topology">View PRs ↗</button><span class="live-tail" id="tail-state">LIVE TAIL</span></div>
+            </div>
+            <div class="terminal-shell">
+              <div class="terminal" id="terminal" aria-label="ZOT worker output"></div>
+              <div class="terminal-sweep" id="output-sweep" aria-hidden="true"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="telemetry" aria-label="Worker telemetry">
+          <div class="metric blue"><div class="metric-label">Worker state</div><div class="metric-value" id="metric-state">RUNNING <small>/ ITERATION 92</small></div><div class="bar" id="state-bar" style="--value:42%"></div></div>
+          <div class="metric"><div class="metric-label">Current action</div><div class="metric-value" id="metric-tool">TEST <small>/ integration suite</small></div><div class="bar" style="--value:58%"></div></div>
+          <div class="metric"><div class="metric-label">Iterations</div><div class="metric-value" id="metric-iterations">92 <small>/ 1,000,000</small></div><div class="bar" id="iteration-bar" style="--value:2%"></div></div>
+          <div class="metric"><div class="metric-label">Active time</div><div class="metric-value" id="metric-elapsed">14:22</div><div class="bar" style="--value:36%"></div></div>
+        </div>
+      </section>
+    </section>
+
+    <zot-footer
+      version="v0.1.0"
+      section="SOFTWARE FACTORY"
+      start="2026-08-10T08:46:55.000Z"
+      keys="R:LAUNCH WORKER,N:CREATE WORKER,↑↓:RECORDS,ESC:CLOSE"
+    ></zot-footer>
+  </main>
+
+  <dialog id="create-dialog" aria-labelledby="dialog-title">
+    <form method="dialog" id="create-form">
+      <header class="dialog-head">
+        <div><small id="dialog-kicker">Provision autonomous runtime</small><h2 id="dialog-title">Create ZOT worker_</h2></div>
+        <button class="dialog-close" id="dialog-close" type="button" aria-label="Close dialog">×</button>
+      </header>
+      <div class="dialog-body">
+        <section class="form-section">
+          <div class="form-label"><span>01 / Environment</span><b id="environment-label">SANDBOX VM</b></div>
+          <div class="environment-grid" id="environment-grid"></div>
+          <div class="dependent-selector" id="remote-machine-selector" hidden>
+            <div class="selector-label"><span>Remote builder</span><b id="remote-machine-label">BUILDER-EU-03</b></div>
+            <div class="machine-grid" role="listbox" aria-label="Connected remote machines">
+              <button type="button" class="machine-choice active" data-machine="builder-eu-03" role="option" aria-selected="true"><span>ONLINE</span><strong>BUILDER-EU-03</strong><small>Linux amd64 · eu-west-2 · cache 84%</small></button>
+              <button type="button" class="machine-choice" data-machine="builder-arm-02" role="option" aria-selected="false"><span>ONLINE</span><strong>BUILDER-ARM-02</strong><small>Linux arm64 · eu-central-1 · cache 71%</small></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="form-section">
+          <div class="form-label"><span>02 / Schedule</span><b id="schedule-label">NO SCHEDULE</b></div>
+          <button class="cron-trigger" id="open-schedule-dialog" type="button" aria-haspopup="dialog" aria-controls="schedule-dialog">
+            <span><small id="schedule-kind">Automatic start</small><code id="schedule-cron">Not configured</code></span>
+            <span><strong id="schedule-human">Starts manually</strong><span class="cron-meta" id="schedule-meta">Open to add a cron schedule</span></span>
+            <i>ADD ↗</i>
+          </button>
+        </section>
+
+        <section class="form-section">
+          <div class="form-label"><span>03 / Worker configuration</span><b>ZOT RUNTIME v0.1.0</b></div>
+          <div class="field-grid">
+            <div class="field full"><label for="instance-name">Worker name</label><input id="instance-name" name="name" value="zot-product-builder" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required /></div>
+            <div class="field"><label for="repo">Repo connection</label><select id="repo" name="repo" required></select></div>
+            <div class="field"><label for="repository">Repository</label><input id="repository" name="repository" placeholder="owner/name" autocomplete="off" required /></div>
+            <div class="field full"><label id="model-label">Model</label><input id="model" name="model" type="hidden" value="glm-5.2"/><div class="model-grid" id="model-grid" role="listbox" aria-labelledby="model-label"></div></div>
+            <div class="field full"><label for="max-iterations">Iteration budget</label><input id="max-iterations" name="iterations" type="number" value="1000000" min="1" max="1000000" required /></div>
+            <div class="field full"><label for="objective">Mission</label><textarea id="objective" name="objective" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required>Continuously identify high-confidence product opportunities from user demand, implement the strongest candidates, verify them, and create review-ready pull requests.</textarea><span class="field-hint">The worker generates and prioritizes its own work from this mission until paused or stopped.</span></div>
+          </div>
+        </section>
+      </div>
+      <footer class="dialog-foot">
+        <div class="dialog-actions"><button class="action" id="dialog-cancel" type="button">Cancel</button><button class="action primary" id="create-submit" value="default">Create worker</button></div>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="cron-dialog" id="schedule-dialog" aria-labelledby="schedule-dialog-title">
+    <form method="dialog" id="schedule-form">
+      <header class="dialog-head">
+        <div><small>Automatic worker start</small><h2 id="schedule-dialog-title">Define cron schedule_</h2></div>
+        <button class="dialog-close" id="schedule-dialog-close" type="button" aria-label="Close schedule dialog">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="cron-mode-switch" role="tablist" aria-label="Schedule input method">
+          <button class="cron-mode active" id="cron-direct-tab" type="button" data-cron-mode="direct" role="tab" aria-selected="true"><strong>Write cron</strong><small>Enter the expression directly</small></button>
+          <button class="cron-mode" id="cron-ai-tab" type="button" data-cron-mode="ai" role="tab" aria-selected="false"><strong>Generate with AI</strong><small>Describe when Zot should run</small></button>
+        </div>
+
+        <section class="cron-panel" id="cron-direct-panel" role="tabpanel">
+          <div class="field"><label for="cron-expression">Cron expression</label><input class="cron-expression" id="cron-expression" value="0 */4 * * *" placeholder="0 */4 * * *" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" /></div>
+          <div class="field-grid" style="margin-top:10px">
+            <div class="field"><label for="cron-timezone">Timezone</label><select id="cron-timezone"><option>Europe/London</option><option>UTC</option><option>America/New_York</option><option>America/Los_Angeles</option><option>Asia/Tokyo</option></select></div>
+            <div class="field"><label for="cron-runtime">Maximum runtime / minutes</label><input id="cron-runtime" type="number" value="90" min="5" max="1440" /></div>
+          </div>
+          <div class="cron-result" id="cron-parse-result"><span>Parsed</span><div><strong id="cron-description">Every 4 hours</strong><small id="cron-next">Next start 12:00 · Europe/London · checkpoint after 90 minutes</small></div></div>
+        </section>
+
+        <section class="cron-panel" id="cron-ai-panel" role="tabpanel" hidden>
+          <div class="ai-compose">
+            <div class="field"><label for="cron-prompt">Describe the schedule</label><textarea id="cron-prompt" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">Run every four hours on weekdays between 08:00 and 20:00 London time. Stop after 90 minutes.</textarea></div>
+            <button class="action primary" id="generate-cron" type="button">Generate</button>
+          </div>
+          <div class="ai-generated" id="ai-generated" aria-live="polite"><code id="ai-cron-expression">0 8-20/4 * * 1-5</code><small id="ai-cron-description">Every 4 hours, 08:00–20:00, Monday–Friday · Europe/London · 90 minute runtime</small></div>
+        </section>
+      </div>
+      <footer class="dialog-foot">
+        <button class="action" id="schedule-clear" type="button" hidden>Remove schedule</button>
+        <div class="dialog-actions"><button class="action" id="schedule-cancel" type="button">Cancel</button><button class="action primary" id="schedule-apply" type="button">Apply schedule</button></div>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"><small>WORKER REGISTERED</small><div id="toast-result">ZOT-PRODUCT-BUILDER / IDLE_</div></div>
+
+  <script type="module" src="../app.js"></script>
+</body>
+</html>

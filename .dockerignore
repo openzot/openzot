@@ -1,6 +1,7 @@
 .git
 .github
 .env
+.local
 dist
 zot
 zot-dev

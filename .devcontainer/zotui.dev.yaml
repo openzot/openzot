@@ -1,0 +1,33 @@
+# Safe fixture configuration for developing the zotui web command center.
+# It contains no credentials. Runs execute in ephemeral Docker containers with
+# the current checkout mounted at /workspace.
+repos:
+  openzot:
+    type: local
+    path: $ZOTUI_REPO_PATH
+    repositories:
+      - openzot/openzot
+
+compute:
+  development:
+    type: docker
+
+models:
+  development:
+    provider: zai
+    model: glm-5.2
+    api_key: $ZAI_API_KEY
+
+environments:
+  go-development:
+    compute: development
+    model: development
+    image: openzot/zot:dev
+    env:
+      GOFLAGS: -mod=mod
+    repositories:
+      - openzot/openzot/openzot
+
+store:
+  driver: sqlite
+  dsn: $ZOTUI_STORE_DSN

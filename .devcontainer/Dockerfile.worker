@@ -1,0 +1,28 @@
+ARG GO_VERSION=1.26.5
+FROM golang:${GO_VERSION}-bookworm
+
+ARG VERSION=dev
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        jq \
+        make \
+        openssh-client \
+        ripgrep \
+        sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download && chmod -R a+rwX /go/pkg/mod
+
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X github.com/openzot/openzot/internal/version.Version=${VERSION}" \
+    -o /usr/local/bin/zot ./cmd/zot
+
+WORKDIR /workspace
+ENTRYPOINT ["zot"]

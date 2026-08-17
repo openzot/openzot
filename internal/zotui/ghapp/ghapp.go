@@ -1,8 +1,8 @@
 // Package ghapp mints short-lived, repository-scoped GitHub App installation
 // tokens.
 //
-// zotui hands one to each job's sandbox so the remote system can access exactly
-// the repository the job needs, with a credential that expires within the hour.
+// zotui hands one to each run's sandbox so the remote system can access exactly
+// the repository the worker needs, with a credential that expires within the hour.
 // The App private key never leaves the host - only the minted, narrowly-scoped
 // token is injected into the sandbox.
 package ghapp

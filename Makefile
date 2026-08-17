@@ -11,7 +11,7 @@ CMDS = zot zotui
 GOOS   ?= $(shell go env GOHOSTOS)
 GOARCH ?= $(shell go env GOHOSTARCH)
 
-.PHONY: help build dev clean test race cover cover-check vet lint fmt cross
+.PHONY: help build dev dev-image dev-ui clean test race cover cover-check vet lint fmt cross
 
 # Listing the targets rather than assuming one: zot has two build variants that
 # differ in what the binary may read from disk, and picking the wrong one
@@ -21,6 +21,8 @@ help:
 	@echo
 	@echo "  make build      Build ./zot for release ($(GOOS)/$(GOARCH))"
 	@echo "  make dev        Build ./zot for development - see below"
+	@echo "  make dev-image  Build the Docker image used by local zotui compute"
+	@echo "  make dev-ui     Run the browser command center for local development"
 	@echo "  make test       Run the test suite"
 	@echo "  make race       Run the test suite under the race detector"
 	@echo "  make cover      Report per-package test coverage"
@@ -55,6 +57,19 @@ dev:
 		echo "Building $$cmd ($(VERSION), dev - reads .env)..."; \
 		CGO_ENABLED=0 go build -tags dev -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \
 	done
+
+dev-image:
+	docker build --file .devcontainer/Dockerfile.worker --build-arg VERSION=dev --tag openzot/zot:dev .
+
+# Uses the credential-free fixture by default. Override ZOTUI_CONFIG to exercise
+# a real provider configuration; the dev container sets the listen address so
+# its forwarded port is reachable from the host.
+dev-ui:
+	@ZOTUI_CONFIG="$${ZOTUI_CONFIG:-$(CURDIR)/.devcontainer/zotui.dev.yaml}" \
+		ZOTUI_ADDR="$${ZOTUI_ADDR:-127.0.0.1:8080}" \
+		ZOTUI_REPO_PATH="$${ZOTUI_REPO_PATH:-$(CURDIR)}" \
+		ZOTUI_STORE_DSN="$${ZOTUI_STORE_DSN:-$(CURDIR)/.local/state/zotui.db}" \
+		go run ./cmd/zotui
 
 fmt:
 	go fmt ./...

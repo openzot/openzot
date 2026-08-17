@@ -1,30 +1,30 @@
-// Command zotui is the command center over the zot engine. Running it opens a
-// full-screen terminal app to see scheduled tasks, inspect them, cancel one, and
-// create a new one; jobs and their progress live in a store, so you can close the
-// tool and reopen it later to see where things got to.
+// Command zotui serves the browser command center over the zot engine. Workers,
+// runs, and output live in a store, so closing the browser loses no state.
 //
 // The only other command is `zotui config`, which opens the config in $EDITOR
 // (seeding it from an embedded template on first run). The config file locates the
 // repos, compute, models and environments; override its path
 // with $ZOTUI_CONFIG.
 //
-// This is an early scaffold: the config, store, scheduling flow and the TUI are in
-// place; the GitHub token exchange and Cloudflare compute are stubbed, so a
-// dispatched job currently fails fast at those seams.
+// Local checkouts and Docker compute run end to end. The GitHub token exchange
+// and Cloudflare compute remain provider seams for future implementations.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/openzot/openzot/configs"
 	"github.com/openzot/openzot/internal/zotui/app"
 	"github.com/openzot/openzot/internal/zotui/config"
 	"github.com/openzot/openzot/internal/zotui/store"
-	"github.com/openzot/openzot/internal/zotui/tui"
+	"github.com/openzot/openzot/internal/zotui/web"
 )
 
 func main() {
@@ -47,7 +47,7 @@ func run() error {
 		return editConfig()
 	}
 
-	// Everything else opens the command center.
+	// Everything else serves the command center.
 	path := config.DefaultConfigPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("no config at %s - run 'zotui config' to create one", path)
@@ -64,7 +64,13 @@ func run() error {
 	}
 	defer st.Close()
 
-	return tui.Run(app.New(cfg, st))
+	addr := firstNonEmpty(os.Getenv("ZOTUI_ADDR"), "127.0.0.1:8080")
+	fmt.Fprintf(os.Stderr, "zotui: command center at http://%s\n", addr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	commandCenter := app.New(cfg, st)
+	go commandCenter.RunScheduler(ctx)
+	return web.Serve(ctx, addr, web.New(commandCenter))
 }
 
 // editConfig ensures the config file exists - seeding it from the embedded

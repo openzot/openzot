@@ -1,5 +1,6 @@
 /zot
 /zotui
+/.local/
 
 configs/zot.yaml
 .env

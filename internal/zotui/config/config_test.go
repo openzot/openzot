@@ -89,8 +89,24 @@ store:
 	}
 }
 
+func TestLoadExpandsLocalRepoPath(t *testing.T) {
+	t.Setenv("TEST_CHECKOUT", filepath.Join(t.TempDir(), "checkout"))
+	cfg, err := Load(writeConfig(t, `
+repos:
+  checkout:
+    type: local
+    path: $TEST_CHECKOUT
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Repos["checkout"].Path; got != os.Getenv("TEST_CHECKOUT") {
+		t.Fatalf("expanded path = %q", got)
+	}
+}
+
 // Removed config names must fail rather than be ignored and leave the command
-// center with an empty graph that only breaks when a job is scheduled.
+// center with an empty graph that only breaks when a worker is started.
 func TestLoadRejectsRemovedTerminology(t *testing.T) {
 	tests := map[string]string{
 		"sources": `sources:

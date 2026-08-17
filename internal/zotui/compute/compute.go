@@ -1,9 +1,8 @@
 // Package compute abstracts the providers that turn a resolved environment into
 // a running remote computer.
 //
-// Cloudflare is the first driver. Vercel and registered computers (bring-your-own
-// over SSH) satisfy the same two interfaces: a Provider that creates sandboxes,
-// and a Sandbox that can execute commands and be torn down.
+// Docker and remote providers satisfy the same two interfaces: a Provider that
+// creates sandboxes, and a Sandbox that executes commands and can be torn down.
 package compute
 
 import (
@@ -14,9 +13,18 @@ import (
 // Spec is a resolved environment: the base image, env vars, and model config a
 // sandbox boots zot with.
 type Spec struct {
-	Image string
-	Env   map[string]string
-	Model ModelSpec
+	Image         string
+	Env           map[string]string
+	Mounts        []Mount
+	Model         ModelSpec
+	MaxIterations int
+}
+
+// Mount exposes a host path inside a sandbox.
+type Mount struct {
+	Source   string
+	Target   string
+	ReadOnly bool
 }
 
 // ModelSpec is the resolved LLM config injected into the sandbox for zot: the
@@ -30,20 +38,20 @@ type ModelSpec struct {
 
 // Provider creates ephemeral computers for one configured compute service.
 type Provider interface {
-	// Type is the provider name (cloudflare, vercel, ssh, ...).
+	// Type is the provider name (docker, cloudflare, vercel, ssh, ...).
 	Type() string
 
 	// Create boots a sandbox from spec and returns a handle to it.
 	Create(ctx context.Context, spec Spec) (Sandbox, error)
 }
 
-// Sandbox is a running compute instance a job executes in.
+// Sandbox is a running compute instance a worker run executes in.
 type Sandbox interface {
 	// Exec runs a command, streaming combined output to out, and returns the
 	// command's exit code. env is merged over the sandbox's baseline environment.
 	Exec(ctx context.Context, cmd []string, env map[string]string, out io.Writer) (int, error)
 
-	// Destroy tears the sandbox down. Called even when a job fails, so a leaked
+	// Destroy tears the sandbox down. Called even when a run fails, so a leaked
 	// credential never outlives the run.
 	Destroy(ctx context.Context) error
 }

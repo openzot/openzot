@@ -1,5 +1,5 @@
-// Package repo abstracts repository connections: where jobs get their code and
-// how zotui mints per-job credentials for it.
+// Package repo abstracts repository connections: where workers get their code
+// and how zotui mints per-run credentials for it.
 //
 // GitHub is the first implementation (a GitHub App that mints installation
 // tokens); GitLab and others satisfy the same interface, so the rest of zotui
@@ -12,7 +12,7 @@ import (
 )
 
 // Token is a short-lived, repository-scoped credential a provider mints for one
-// job's sandbox.
+// run's sandbox.
 type Token struct {
 	Value     string
 	ExpiresAt time.Time
