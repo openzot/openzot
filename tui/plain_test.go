@@ -313,7 +313,7 @@ func TestRunPlainShowsDiffsWhenAsked(t *testing.T) {
 func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	client := plainServer(t, []string{plainSuccess("finished")})
 
-	meta := Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Plain: true}
+	meta := Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Plain: true, Color: "always"}
 
 	output, err := capture(t, func() error {
 		return Run(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
@@ -324,6 +324,9 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 
 	if !strings.Contains(output, "finished") {
 		t.Errorf("Run should have produced a plain transcript:\n%s", output)
+	}
+	if strings.Contains(output, "\x1b[") {
+		t.Errorf("explicit plain mode must override color capability:\n%q", output)
 	}
 
 	// under `go test` stdout is not a terminal, so even without Plain the
@@ -339,6 +342,60 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 
 	if !strings.Contains(output, "again") {
 		t.Errorf("a non-TTY Run must fall back to plain:\n%s", output)
+	}
+	if strings.Contains(output, "\x1b[") {
+		t.Errorf("auto color must keep an ordinary non-TTY stream basic:\n%q", output)
+	}
+}
+
+// A browser terminal supports ANSI styling but cannot drive Bubble Tea's
+// keyboard UI, so it needs a coloured stream without pager affordances.
+func TestRunUsesAColoredStreamWithoutInteractiveControls(t *testing.T) {
+	client := plainServer(t, []string{plainSuccess("finished")})
+	output, err := capture(t, func() error {
+		return Run(context.Background(), client,
+			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Color: "always"},
+			agent.ExecuteWithToolsOptions{})
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(output, "\x1b[") {
+		t.Fatalf("a color-capable stream must contain ANSI styling:\n%q", output)
+	}
+	for _, interactive := range []string{"top/bottom", " scroll ", " quit"} {
+		if strings.Contains(output, interactive) {
+			t.Errorf("stream contains interactive affordance %q:\n%s", interactive, output)
+		}
+	}
+}
+
+func TestStreamColorCapability(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  string
+		env   map[string]string
+		color bool
+	}{
+		{name: "explicit always", mode: "always", color: true},
+		{name: "explicit never beats force", mode: "never", env: map[string]string{"FORCE_COLOR": "1"}},
+		{name: "force color", mode: "auto", env: map[string]string{"FORCE_COLOR": "1"}, color: true},
+		{name: "clicolor force", env: map[string]string{"CLICOLOR_FORCE": "1"}, color: true},
+		{name: "no color beats ambient force", env: map[string]string{"NO_COLOR": "1", "FORCE_COLOR": "1"}},
+		{name: "auto pipe stays basic", mode: "auto"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, name := range []string{"NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"} {
+				t.Setenv(name, "")
+			}
+			for name, value := range test.env {
+				t.Setenv(name, value)
+			}
+			if got := streamColorEnabled(test.mode); got != test.color {
+				t.Errorf("streamColorEnabled(%q) = %v, want %v", test.mode, got, test.color)
+			}
+		})
 	}
 }
 

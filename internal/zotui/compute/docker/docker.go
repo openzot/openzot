@@ -125,9 +125,9 @@ func (s *sandbox) Exec(ctx context.Context, cmd []string, env map[string]string,
 	if len(cmd) == 0 {
 		return -1, fmt.Errorf("docker: command is required")
 	}
-	// Zot's terminal UI is read-only, but it still needs stdout attached to a
-	// pseudo-TTY to emit its ANSI screen instead of the unstyled pipe transcript.
-	args := []string{"exec", "--tty"}
+	// Keep stdout as a stream. The caller separately declares ANSI support; a
+	// pseudo-TTY would make zot start its keyboard-driven alternate-screen UI.
+	args := []string{"exec"}
 	for _, key := range sortedKeys(env) {
 		args = append(args, "--env", key+"="+env[key])
 	}

@@ -328,6 +328,7 @@ func TestApplyOverrides(t *testing.T) {
 			Backend:       "groq",
 			Model:         "glm-5.2",
 			MaxIterations: 12,
+			Color:         "always",
 		})
 
 		if cfg.DefaultBackend != "groq" {
@@ -340,6 +341,10 @@ func TestApplyOverrides(t *testing.T) {
 
 		if cfg.Agent.MaxIterations != 12 {
 			t.Errorf("max iterations = %d", cfg.Agent.MaxIterations)
+		}
+
+		if cfg.UI.Color != "always" {
+			t.Errorf("color = %q", cfg.UI.Color)
 		}
 	})
 

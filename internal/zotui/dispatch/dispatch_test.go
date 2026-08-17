@@ -62,6 +62,9 @@ func TestDispatchCleansUpWithLiveContextAfterCancellation(t *testing.T) {
 	if sandbox.env["ZOT_REPO"] != "openzot/openzot" {
 		t.Fatalf("repository environment = %v", sandbox.env)
 	}
+	if sandbox.env["ZOT_UI_COLOR"] != "always" {
+		t.Fatalf("browser terminal color capability was not declared: %v", sandbox.env)
+	}
 	if _, ok := sandbox.env["GH_TOKEN"]; ok {
 		t.Fatalf("an empty repository credential was injected: %v", sandbox.env)
 	}

@@ -69,6 +69,7 @@ func run() error {
 	taskFile := pflag.String("task-file", "", "read the durable objective from a file")
 	diffFlag := pflag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
 	plainFlag := pflag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
+	colorFlag := pflag.String("color", "", "colorize non-interactive output: auto, always, or never")
 	resume := pflag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
 	sessionDir := pflag.String("session-dir", "", "where session logs are written (default: "+config.DefaultSessionDir()+")")
 	noSession := pflag.Bool("no-session", false, "do not record a session log for this run")
@@ -154,6 +155,7 @@ func run() error {
 		MaxIterations: *maxIter,
 		Diff:          *diffFlag,
 		Plain:         *plainFlag,
+		Color:         *colorFlag,
 		Passed:        passed,
 	})
 
@@ -307,6 +309,7 @@ type overrides struct {
 	MaxIterations int
 	Diff          bool
 	Plain         bool
+	Color         string
 
 	// Passed names the flags actually given, so a boolean can tell "false
 	// because it was passed" from "false because it was never set". Without it
@@ -334,6 +337,9 @@ func applyOverrides(cfg *zot.Config, o overrides) {
 
 	if o.Passed["plain"] {
 		cfg.UI.Plain = o.Plain
+	}
+	if o.Color != "" {
+		cfg.UI.Color = o.Color
 	}
 }
 

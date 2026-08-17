@@ -263,6 +263,7 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		Workdir:       workdir,
 		ShowDiff:      cfg.UI.Diff,
 		Plain:         cfg.UI.Plain,
+		Color:         cfg.UI.Color,
 		MaxScrollback: cfg.UI.Scrollback,
 		MaxIterations: iterLimit,
 		MaxCalls:      cfg.Agent.MaxCalls,

@@ -31,9 +31,12 @@ type Meta struct {
 	Workdir string
 	// ShowDiff renders a syntax-highlighted diff panel under each edit/write.
 	ShowDiff bool
-	// Plain forces the unstyled streaming renderer even in a terminal. Plain mode
-	// is also selected automatically when stdout is not a TTY.
+	// Plain forces the unstyled streaming renderer even in a terminal. Without a
+	// TTY Zot also streams, with styling controlled independently by Color.
 	Plain bool
+	// Color controls ANSI styling for a non-interactive stream: auto, always, or
+	// never. It does not make the stream interactive or start the full-screen UI.
+	Color string
 
 	// Theme is the colour identity for the view. The zero value is zot's neutral
 	// DefaultTheme; an embedding application passes its own accent (see Theme).
@@ -71,10 +74,14 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 		meta.AppName = "zot"
 	}
 
-	// Without a usable terminal (or when forced), stream plain text instead of
-	// trying to start an alt-screen program that would fail or garble.
-	if meta.Plain || !isInteractive() {
+	// --plain is an explicit request for an unstyled transcript. Without a
+	// terminal, stream too, but keep ANSI styling when the consumer declared
+	// that it supports color (a browser terminal is the main example).
+	if meta.Plain {
 		return runPlain(ctx, client, meta, opts)
+	}
+	if !isInteractive() {
+		return runStream(ctx, client, meta, opts, streamColorEnabled(meta.Color))
 	}
 
 	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)

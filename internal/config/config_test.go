@@ -783,6 +783,26 @@ func TestScrollbackEnvOverrideAndValidation(t *testing.T) {
 	}
 }
 
+// Stream color is a capability declaration, so containers must be able to set
+// it through the same scalar environment layer as the rest of ui.*.
+func TestUIColorEnvOverrideAndValidation(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("ZAI_API_KEY", "sk-zai")
+	t.Setenv("ZOT_UI_COLOR", "always")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.UI.Color != "always" {
+		t.Errorf("ZOT_UI_COLOR not applied: %q", cfg.UI.Color)
+	}
+	if err := validConfig(func(c *Config) { c.UI.Color = "sometimes" }).Validate(); err == nil {
+		t.Error("an unknown ui.color mode must fail validation")
+	}
+}
+
 // ui.stats selects header fields; an unknown field name is a typo worth catching
 // at load rather than silently dropping the field.
 func TestUIStatsAreValidated(t *testing.T) {

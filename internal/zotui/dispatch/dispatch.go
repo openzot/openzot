@@ -53,7 +53,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, execution Execution) (*Result
 		defer cancel()
 		_ = sandbox.Destroy(cleanupCtx)
 	}()
-	env := map[string]string{"ZOT_REPO": execution.Repository}
+	// The command center consumes an append-only ANSI stream. Declaring color
+	// support is deliberately separate from allocating a TTY: a TTY would make
+	// zot start its keyboard-driven alternate-screen viewer.
+	env := map[string]string{"ZOT_REPO": execution.Repository, "ZOT_UI_COLOR": "always"}
 	if token.Value != "" {
 		env["GH_TOKEN"] = token.Value
 	}
