@@ -182,17 +182,20 @@
 
   class ZotInstanceCard extends HTMLElement {
     set configuration(value) {
+      const signature = JSON.stringify(value);
+      if (signature === this._signature) return;
+      this._signature = signature;
       this._configuration = value;
       this.render();
     }
 
     connectedCallback() {
-      this.render();
+      if (!this.firstElementChild) this.render();
     }
 
     render() {
       if (!this._configuration) return;
-      const { instance, index, active, state, stateLabel } = this._configuration;
+      const { instance, active, state, stateLabel } = this._configuration;
       const activeRun = instance.runs.find((run) =>
         ["running", "paused"].includes(run.state),
       );
@@ -202,7 +205,7 @@
         : instance.schedule?.short || "manual";
       const scope = `${instance.environment} / ${instance.backend} / ${instance.model}`;
       this.innerHTML = `
-        <button class="instance-card${active ? " active" : ""}" data-instance="${index}" aria-pressed="${active}">
+        <button class="instance-card${active ? " active" : ""}" data-instance="${escapeHTML(instance.id)}" aria-pressed="${active}">
           <div class="card-row"><span>${escapeHTML(instance.id)}</span><span class="status ${escapeHTML(state)}">${escapeHTML(stateLabel)}</span></div>
           <div class="instance-name">${escapeHTML(instance.name.toUpperCase())}</div>
           <div class="instance-meta"><span>${escapeHTML(recordLabel)}</span><span>${escapeHTML(progressLabel)}</span></div>
@@ -213,19 +216,22 @@
 
   class ZotRunRow extends HTMLElement {
     set configuration(value) {
+      const signature = JSON.stringify(value);
+      if (signature === this._signature) return;
+      this._signature = signature;
       this._configuration = value;
       this.render();
     }
 
     connectedCallback() {
-      this.render();
+      if (!this.firstElementChild) this.render();
     }
 
     render() {
       if (!this._configuration) return;
-      const { run, index, active, stateLabel } = this._configuration;
+      const { run, active, stateLabel } = this._configuration;
       this.innerHTML = `
-        <button class="run-row${active ? " active" : ""}" data-run="${index}" aria-pressed="${active}">
+        <button class="run-row${active ? " active" : ""}" data-run="${escapeHTML(run.id)}" aria-pressed="${active}">
           <div class="card-row"><span class="run-id">${escapeHTML(run.id)}</span><span class="status ${escapeHTML(run.state)}">${escapeHTML(stateLabel)}</span></div>
           <div class="run-task">${escapeHTML(run.task)}</div>
           <div class="run-info"><span>iteration ${escapeHTML(run.iteration)}</span><span>${escapeHTML(run.elapsed)}</span></div>

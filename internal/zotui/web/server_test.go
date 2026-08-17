@@ -43,6 +43,25 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("Software Factory")) || bytes.Contains(body, []byte("const outputSets")) {
 		t.Fatalf("web app status=%d body=%q", response.StatusCode, body[:min(len(body), 200)])
 	}
+	// A released zotui binary must render without reaching a public CDN.
+	if bytes.Contains(body, []byte("https://")) ||
+		!bytes.Contains(body, []byte(`/vendor/fonts/fonts.css`)) ||
+		!bytes.Contains(body, []byte(`/vendor/wterm/terminal.css`)) {
+		t.Fatalf("web app does not use only bundled dependencies: %q", body[:min(len(body), 500)])
+	}
+	for _, asset := range []string{
+		"/vendor/fonts/fonts.css",
+		"/vendor/fonts/dotgothic16-latin-400-normal.woff2",
+		"/vendor/wterm/dom/index.js",
+		"/vendor/wterm/core/wasm-inline.js",
+	} {
+		response = serve(handler, http.MethodGet, asset, "")
+		assetBody, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || len(assetBody) == 0 {
+			t.Fatalf("bundled asset %s status=%d bytes=%d", asset, response.StatusCode, len(assetBody))
+		}
+	}
 	response = serve(handler, http.MethodGet, "/operations/instances.html", "")
 	if response.StatusCode != http.StatusNotFound {
 		t.Fatalf("mockup path remains public: status=%d", response.StatusCode)

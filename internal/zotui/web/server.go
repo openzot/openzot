@@ -40,6 +40,7 @@ func New(a *app.App) http.Handler {
 	mux.Handle("GET /global.css", static)
 	mux.Handle("GET /components.js", static)
 	mux.Handle("GET /app.js", static)
+	mux.Handle("GET /vendor/", static)
 	return mux
 }
 

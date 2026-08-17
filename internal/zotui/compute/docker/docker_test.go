@@ -90,6 +90,11 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 		t.Fatalf("Exec = code %d, output %q, err %v", code, output.String(), err)
 	}
 	execCall := strings.Join(runner.calls[3].args, " ")
+	// Worker stdout must be a TTY so zot emits its real ANSI terminal view for
+	// wterm instead of silently falling back to the unstyled pipe renderer.
+	if got := runner.calls[3].args; len(got) < 2 || got[0] != "exec" || got[1] != "--tty" {
+		t.Fatalf("docker exec did not allocate a TTY: %v", got)
+	}
 	if !strings.Contains(execCall, "--env ZOT_REPO=openzot/openzot") || !strings.HasSuffix(execCall, "zot repair the tests") {
 		t.Fatalf("docker exec = %s", execCall)
 	}

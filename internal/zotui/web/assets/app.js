@@ -6,6 +6,12 @@ let selectedRun = 0;
 let editingID = "";
 let schedule = { cron: "", timezone: "", runtimeMinutes: 0 };
 let poll;
+let outputRequest = 0;
+let outputRunID = "";
+let renderedOutput = null;
+let terminal;
+let terminalFallback = true;
+let followOutput = true;
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -43,11 +49,85 @@ function scheduleText(value) {
   return `${value.cron} · ${value.timezone} · ${value.runtimeMinutes}m runtime`;
 }
 
+function clearTerminal() {
+  followOutput = true;
+  const viewport = $("#terminal");
+  viewport.scrollTop = 0;
+  if (terminalFallback) viewport.textContent = "";
+  else if (terminal) terminal.write("\x1bc\x1b[3J\x1b[2J\x1b[H");
+}
+
+function writeTerminal(text, precedingText = "") {
+  if (!text) return;
+  const viewport = $("#terminal");
+  if (terminalFallback) {
+    viewport.textContent += text.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r/g, "");
+  } else if (terminal) {
+    terminal.write(text.replace(/\n/g, (_, index) => {
+      const previous = index > 0 ? text[index - 1] : precedingText.at(-1);
+      return previous === "\r" ? "\n" : "\r\n";
+    }));
+  }
+  if (followOutput) {
+    requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
+  }
+}
+
+function replaceTerminal(text) {
+  clearTerminal();
+  writeTerminal(text);
+}
+
+async function initTerminal() {
+  const viewport = $("#terminal");
+  viewport.dataset.renderer = "loading-wterm";
+  try {
+    const { WTerm } = await import("/vendor/wterm/dom/index.js");
+    if (typeof WTerm !== "function") throw new Error("WTerm module unavailable");
+    terminal = new WTerm(viewport, { cols: 100, rows: 26, autoResize: true, cursorBlink: false, onData() {} });
+    await terminal.init();
+    if (!viewport.classList.contains("wterm") || !viewport.querySelector(".term-grid")) {
+      throw new Error("WTerm did not create its terminal grid");
+    }
+    terminalFallback = false;
+    viewport.dataset.renderer = "wterm";
+  } catch (error) {
+    terminalFallback = true;
+    viewport.className = "terminal fallback-terminal";
+    viewport.dataset.renderer = "text-fallback";
+    console.error("WTerm could not initialize; using emergency text rendering.", error);
+  }
+  viewport.addEventListener("wheel", () => { followOutput = false; }, { passive: true });
+  viewport.addEventListener("scroll", () => {
+    if (viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 18) followOutput = true;
+  }, { passive: true });
+}
+
+function reconcileChildren(list, selector, items, keyFor, create, update) {
+  const existing = new Map(
+    [...list.querySelectorAll(`:scope > ${selector}`)].map((node) => [node.dataset.key, node]),
+  );
+  items.forEach((item, index) => {
+    const key = keyFor(item);
+    let node = existing.get(key);
+    if (!node) {
+      node = create();
+      node.dataset.key = key;
+    }
+    update(node, item, index);
+    const position = list.children[index];
+    if (position !== node) list.insertBefore(node, position || null);
+    existing.delete(key);
+  });
+  existing.forEach((node) => node.remove());
+}
+
 async function refresh({ quiet = true } = {}) {
   try {
+    const nextState = await request("/api/state");
     const previousWorker = worker()?.id;
     const previousRun = run()?.id;
-    state = await request("/api/state");
+    state = nextState;
     if (previousWorker) {
       const index = state.workers.findIndex((item) => item.id === previousWorker);
       selectedWorker = index < 0 ? 0 : index;
@@ -77,29 +157,37 @@ function render() {
 
 function renderWorkers() {
   const list = $("#instance-list");
-  list.replaceChildren();
-  state.workers.forEach((item, index) => {
-    const record = activeRun(item);
-    const card = document.createElement("zot-instance-card");
-    card.configuration = {
-      instance: {
-        ...item,
-        backend: item.repo,
-        runs: item.runs.map((entry) => ({ ...entry, state: stateClass(entry.status), iteration: entry.iteration })),
-        schedule: { short: item.schedule?.cron || "manual" },
-      },
-      index,
-      active: index === selectedWorker,
-      state: stateClass(record?.status || "idle"),
-      stateLabel: stateLabel(record?.status || "idle"),
-    };
-    card.querySelector("button").addEventListener("click", () => {
-      selectedWorker = index;
-      selectedRun = 0;
-      render();
-    });
-    list.append(card);
-  });
+  reconcileChildren(
+    list,
+    "zot-instance-card",
+    state.workers,
+    (item) => item.id,
+    () => {
+      const card = document.createElement("zot-instance-card");
+      card.addEventListener("click", () => {
+        const index = state.workers.findIndex((item) => item.id === card.dataset.key);
+        if (index < 0) return;
+        selectedWorker = index;
+        selectedRun = 0;
+        render();
+      });
+      return card;
+    },
+    (card, item, index) => {
+      const record = activeRun(item);
+      card.configuration = {
+        instance: {
+          ...item,
+          backend: item.repo,
+          runs: item.runs.map((entry) => ({ ...entry, state: stateClass(entry.status), iteration: entry.iteration })),
+          schedule: { short: item.schedule?.cron || "manual" },
+        },
+        active: index === selectedWorker,
+        state: stateClass(record?.status || "idle"),
+        stateLabel: stateLabel(record?.status || "idle"),
+      };
+    },
+  );
   const allRuns = state.workers.flatMap((item) => item.runs);
   $("#active-count").textContent = String(allRuns.filter((item) => item.status === "running").length).padStart(2, "0");
   $("#paused-count").textContent = String(allRuns.filter((item) => item.status === "paused").length).padStart(2, "0");
@@ -109,23 +197,38 @@ function renderWorkers() {
 function renderRuns() {
   const item = worker();
   const list = $("#run-list");
-  list.replaceChildren();
   $("#run-list-count").textContent = `${item?.runs.length || 0} records`;
   if (!item?.runs.length) {
-    list.innerHTML = `<div class="run-empty"><strong>${item?.schedule?.cron ? "Schedule armed" : "Worker not launched"}</strong><span>${item?.schedule?.cron ? scheduleText(item.schedule) : "Launch the worker to begin its mission."}</span></div>`;
+    const empty = `<div class="run-empty"><strong>${item?.schedule?.cron ? "Schedule armed" : "Worker not launched"}</strong><span>${item?.schedule?.cron ? scheduleText(item.schedule) : "Launch the worker to begin its mission."}</span></div>`;
+    if (list.innerHTML !== empty) list.innerHTML = empty;
     return;
   }
-  item.runs.forEach((record, index) => {
-    const row = document.createElement("zot-run-row");
-    row.configuration = {
-      run: { ...record, state: stateClass(record.status), task: record.mission, elapsed: elapsed(record) },
-      index,
-      active: index === selectedRun,
-      stateLabel: stateLabel(record.status),
-    };
-    row.querySelector("button").addEventListener("click", () => { selectedRun = index; renderRuns(); renderTelemetry(); loadOutput(); });
-    list.append(row);
-  });
+  list.querySelector(".run-empty")?.remove();
+  reconcileChildren(
+    list,
+    "zot-run-row",
+    item.runs,
+    (record) => record.id,
+    () => {
+      const row = document.createElement("zot-run-row");
+      row.addEventListener("click", () => {
+        const index = worker()?.runs.findIndex((record) => record.id === row.dataset.key) ?? -1;
+        if (index < 0) return;
+        selectedRun = index;
+        renderRuns();
+        renderTelemetry();
+        loadOutput();
+      });
+      return row;
+    },
+    (row, record, index) => {
+      row.configuration = {
+        run: { ...record, state: stateClass(record.status), task: record.mission, elapsed: elapsed(record) },
+        active: index === selectedRun,
+        stateLabel: stateLabel(record.status),
+      };
+    },
+  );
 }
 
 function renderHeader() {
@@ -159,18 +262,36 @@ function renderTelemetry() {
 
 async function loadOutput() {
   const record = run();
+  const requestID = ++outputRequest;
   $("#output-run-id").textContent = record?.id || "NO RUN SELECTED";
   $("#tail-state").textContent = record?.status === "running" ? "LIVE TAIL" : "RUN RECORD";
   if (!record) {
-    $("#terminal").textContent = "Select or start a run to inspect its output.";
+    outputRunID = "";
+    renderedOutput = null;
+    replaceTerminal("Select or start a run to inspect its output.");
     return;
+  }
+  const changedRun = outputRunID !== record.id;
+  if (changedRun) {
+    outputRunID = record.id;
+    renderedOutput = null;
+    replaceTerminal(record.status === "running" ? "Waiting for live worker output…" : "Loading run output…");
   }
   try {
     const output = await request(`/api/runs/${encodeURIComponent(record.id)}/output`);
-    $("#terminal").textContent = output || record.error || "Run has not emitted output yet.";
-    $("#terminal").scrollTop = $("#terminal").scrollHeight;
+    if (requestID !== outputRequest || run()?.id !== record.id) return;
+    const nextOutput = output || record.error || (record.status === "running" ? "Waiting for live worker output…" : "Run did not emit output.");
+    if (nextOutput === renderedOutput) return;
+    if (typeof renderedOutput === "string" && nextOutput.startsWith(renderedOutput)) {
+      writeTerminal(nextOutput.slice(renderedOutput.length), renderedOutput);
+    } else {
+      replaceTerminal(nextOutput);
+    }
+    renderedOutput = nextOutput;
   } catch (error) {
-    $("#terminal").textContent = error.message;
+    if (requestID !== outputRequest || run()?.id !== record.id) return;
+    if (error.message !== renderedOutput) replaceTerminal(error.message);
+    renderedOutput = error.message;
   }
 }
 
@@ -309,9 +430,13 @@ async function saveWorker(event) {
 async function startRun() {
   if (!worker()) return;
   try {
-    await request(`/api/workers/${worker().id}/runs`, { method: "POST" });
-    selectedRun = 0;
+    const created = await request(`/api/workers/${worker().id}/runs`, { method: "POST" });
     await refresh({ quiet: false });
+    const index = worker()?.runs.findIndex((record) => record.id === created.id) ?? -1;
+    if (index >= 0) {
+      selectedRun = index;
+      render();
+    }
   } catch (error) { showToast("LAUNCH FAILED", error.message); }
 }
 
@@ -411,6 +536,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") { if ($("#schedule-dialog").open) $("#schedule-dialog").close(); else if ($("#create-dialog").open) $("#create-dialog").close(); }
 });
 
+await initTerminal();
 await refresh({ quiet: false });
 poll = setInterval(() => refresh(), 1500);
 addEventListener("beforeunload", () => clearInterval(poll));

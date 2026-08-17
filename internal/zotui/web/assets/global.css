@@ -836,6 +836,14 @@ body::before {
 .terminal * {
   font-family: inherit !important;
 }
+.terminal.wterm .term-cursor,
+.terminal.wterm.focused .term-cursor,
+.terminal.wterm.focused.cursor-blink .term-cursor {
+  color: inherit;
+  outline: none;
+  background: transparent;
+  animation: none;
+}
 .fallback-terminal {
   margin: 0;
   white-space: pre-wrap;
