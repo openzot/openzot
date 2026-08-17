@@ -11,15 +11,15 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/openzot/openzot/internal/zotui/runner"
-	"github.com/openzot/openzot/internal/zotui/source"
+	"github.com/openzot/openzot/internal/zotui/compute"
+	"github.com/openzot/openzot/internal/zotui/repo"
 )
 
 // Job is a unit of work: a task for zot to perform on a repository (from a named
-// source), run on a named environment with a chosen model.
+// repo connection), run on a named environment with a chosen model.
 type Job struct {
-	Source      string // which repository provider the repo lives in
-	Repository  string // owner/name within the source
+	Repo        string // which configured repo connection the repository uses
+	Repository  string // owner/name within the connection
 	Task        string
 	Environment string // which environment to dispatch onto
 	Model       string // which model zot reasons with (a configured model name)
@@ -29,15 +29,15 @@ type Job struct {
 // caller (which holds the loaded config), so this package stays free of
 // config-shape details.
 type Resolver interface {
-	// Resolve returns the runner and the spec (image, env vars, model config) the
+	// Resolve returns compute and the spec (image, env vars, model config) the
 	// job's sandbox should boot with.
-	Resolve(j Job) (runner.Runner, runner.Spec, error)
+	Resolve(j Job) (compute.Provider, compute.Spec, error)
 }
 
 // Dispatcher runs jobs.
 type Dispatcher struct {
-	Source   source.Source // mints per-job repo credentials
-	Resolver Resolver      // resolves a job to its runner + spec
+	Repo     repo.Provider // mints per-job repository credentials
+	Resolver Resolver      // resolves a job to compute + a spec
 	Output   io.Writer     // where the run's output is streamed
 }
 
@@ -49,20 +49,20 @@ type Result struct {
 
 // Dispatch runs a job end to end.
 func (d *Dispatcher) Dispatch(ctx context.Context, j Job) (*Result, error) {
-	// 1. Resolve the job -> runner + spec (base image, env vars, model config).
-	rn, spec, err := d.Resolver.Resolve(j)
+	// 1. Resolve the job -> compute + spec (base image, env vars, model config).
+	provider, spec, err := d.Resolver.Resolve(j)
 	if err != nil {
 		return nil, fmt.Errorf("resolve job: %w", err)
 	}
 
 	// 2. Mint a short-lived, repo-scoped GitHub token for this job.
-	token, err := d.Source.MintToken(ctx, []string{j.Repository})
+	token, err := d.Repo.MintToken(ctx, []string{j.Repository})
 	if err != nil {
 		return nil, fmt.Errorf("mint credentials: %w", err)
 	}
 
 	// 3. Boot the sandbox from the environment's spec.
-	sb, err := rn.Create(ctx, spec)
+	sb, err := provider.Create(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox: %w", err)
 	}

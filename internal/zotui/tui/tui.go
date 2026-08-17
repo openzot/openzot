@@ -63,7 +63,7 @@ type model struct {
 	table table.Model
 	jobs  []store.Job
 
-	inputs  []textinput.Model // source, repository, environment, model, task
+	inputs  []textinput.Model // repo, repository, environment, model, task
 	focus   int
 	formErr string
 
@@ -160,7 +160,7 @@ func (m model) cancel(id string) tea.Cmd {
 func (m model) submit() tea.Cmd {
 	a := m.app
 	p := app.ScheduleParams{
-		Source:      strings.TrimSpace(m.inputs[0].Value()),
+		Repo:        strings.TrimSpace(m.inputs[0].Value()),
 		Repository:  strings.TrimSpace(m.inputs[1].Value()),
 		Environment: strings.TrimSpace(m.inputs[2].Value()),
 		Model:       strings.TrimSpace(m.inputs[3].Value()),
@@ -266,7 +266,7 @@ func (m *model) startCreate() {
 	m.formErr = ""
 	m.focus = 0
 	placeholders := []string{
-		strings.Join(m.app.Sources(), " | "),
+		strings.Join(m.app.Repos(), " | "),
 		"owner/name",
 		strings.Join(m.app.Environments(), " | "),
 		strings.Join(m.app.Models(), " | ") + "  (blank = environment default)",
@@ -387,7 +387,7 @@ func (m model) detailBody() string {
 
 	lines := []string{
 		kv("id", shortID(j.ID)),
-		kv("source", j.Source),
+		kv("repo", j.Repo),
 		kv("repository", j.Repository),
 		kv("environment", j.Environment),
 		kv("model", j.Model),
@@ -403,7 +403,7 @@ func (m model) detailBody() string {
 }
 
 func (m model) createBody() string {
-	names := []string{"source", "repository", "environment", "model", "task"}
+	names := []string{"repo", "repository", "environment", "model", "task"}
 	var b strings.Builder
 	for i, in := range m.inputs {
 		b.WriteString(keyLabel.Render(names[i]) + "\n" + in.View() + "\n\n")
@@ -436,7 +436,7 @@ func kvStatus(s store.Status) string {
 func rows(jobs []store.Job) []table.Row {
 	out := make([]table.Row, 0, len(jobs))
 	for _, j := range jobs {
-		out = append(out, table.Row{shortID(j.ID), j.Source + "/" + j.Repository, string(j.Status)})
+		out = append(out, table.Row{shortID(j.ID), j.Repo + "/" + j.Repository, string(j.Status)})
 	}
 	return out
 }

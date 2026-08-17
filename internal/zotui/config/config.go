@@ -1,7 +1,6 @@
-// Package config defines the zotui configuration: the repository provider (git,
-// which mints per-job credentials and offers the repositories to choose from), the
-// compute runners, the models zot reasons with, the environments that bind a
-// runner to a base image and env vars, and the store that tracks scheduled jobs.
+// Package config defines the zotui configuration: the repository connections,
+// compute providers, models, environments that bind compute to an image and env
+// vars, and the store that tracks scheduled jobs.
 //
 // Both the TUI and the future web interface load this same file - there is one
 // config and one loader, so the two faces can never drift. Jobs are NOT in the
@@ -9,6 +8,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,19 +19,20 @@ import (
 
 // Config is the whole zotui configuration.
 type Config struct {
-	// Sources are the repository providers a job's code can come from, keyed by
+	// Repos are the repository connections a job's code can come from, keyed by
 	// name. Several connect at once - multiple GitHub orgs, GitHub and GitLab
-	// together, self-hosted instances. A job names which source it targets.
-	Sources map[string]Source `yaml:"sources"`
+	// together, self-hosted instances. A job names which repo connection it uses.
+	Repos map[string]Repo `yaml:"repos"`
 
-	// Runners are the compute providers, keyed by a name an environment references.
-	Runners map[string]Runner `yaml:"runners"`
+	// Compute holds the providers that create or expose remote computers, keyed by
+	// a name an environment references.
+	Compute map[string]Compute `yaml:"compute"`
 
 	// Models are the LLM configs zot reasons with, keyed by a name an environment
 	// or a job references. Each carries the provider credential.
 	Models map[string]Model `yaml:"models"`
 
-	// Environments bind a runner to a base image and env vars - the blueprint a
+	// Environments bind compute to a base image and env vars - the blueprint a
 	// job's sandbox is created from.
 	Environments map[string]Environment `yaml:"environments"`
 
@@ -39,14 +40,14 @@ type Config struct {
 	Store StoreConfig `yaml:"store"`
 }
 
-// Source is one repository provider: its type, the credentials to reach it, and an
-// optional per-source lockdown. Type selects the implementation; the fields it
+// Repo is one repository connection: its type, the credentials to reach it, and an
+// optional per-repo lockdown. Type selects the implementation; the fields it
 // reads depend on the type (github uses the App fields, gitlab the base_url/token).
 //
-// Repositories is an OPTIONAL lockdown for THIS source: empty discovers every
-// repository the source exposes; listing narrows to exactly those (owner/name
-// within the source). It can only restrict the source's reach, never widen it.
-type Source struct {
+// Repositories is an OPTIONAL lockdown for THIS repo connection: empty discovers
+// every repository it exposes; listing narrows to exactly those (owner/name
+// within the connection). It can only restrict reach, never widen it.
+type Repo struct {
 	Type string `yaml:"type"` // github, gitlab
 
 	// github: a GitHub App installation
@@ -58,11 +59,11 @@ type Source struct {
 	BaseURL string `yaml:"base_url"`
 	Token   string `yaml:"token"` // inline or $VAR
 
-	Repositories []string `yaml:"repositories"` // optional per-source lockdown; empty = discover
+	Repositories []string `yaml:"repositories"` // optional per-repo lockdown; empty = discover
 }
 
-// Runner is a compute provider: its type and the credentials to reach it.
-type Runner struct {
+// Compute is a provider of remote computers: its type and credentials.
+type Compute struct {
 	Type      string `yaml:"type"`       // cloudflare, vercel, ssh, ...
 	AccountID string `yaml:"account_id"` // provider-specific
 	APIToken  string `yaml:"api_token"`
@@ -79,17 +80,17 @@ type Model struct {
 	BaseURL  string `yaml:"base_url"` // optional gateway / custom endpoint
 }
 
-// Environment binds a runner to a base image and a set of environment variables -
+// Environment binds compute to a base image and a set of environment variables -
 // the reusable blueprint a job's sandbox is created from: define once, spawn many
 // ephemeral sandboxes. Model is the default model for jobs on this environment; a
 // job can override it at dispatch.
 //
 // Repositories is an OPTIONAL per-environment lockdown: when set, only these
-// repositories may run on this environment, additional to any per-source lockdown.
-// Entries are source-qualified as "source/owner/repo", since an environment can
-// span sources.
+// repositories may run on this environment, additional to any per-repo lockdown.
+// Entries start with the configured repo name ("repo/owner/name"), since an
+// environment can span repo connections.
 type Environment struct {
-	Runner       string            `yaml:"runner"`       // references a key in Runners
+	Compute      string            `yaml:"compute"`      // references a key in Compute
 	Model        string            `yaml:"model"`        // default model (references Models)
 	Image        string            `yaml:"image"`        // base image: toolchain + zot
 	Env          map[string]string `yaml:"env"`          // environment variables
@@ -111,7 +112,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	var c Config
-	if err := yaml.Unmarshal(data, &c); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
@@ -123,15 +126,15 @@ func Load(path string) (*Config, error) {
 // a leading ~ in the store path.
 func (c *Config) expand() {
 	c.Store.DSN = expandHome(os.ExpandEnv(c.Store.DSN))
-	for name, s := range c.Sources {
+	for name, s := range c.Repos {
 		s.PrivateKey = os.ExpandEnv(s.PrivateKey)
 		s.Token = os.ExpandEnv(s.Token)
-		c.Sources[name] = s
+		c.Repos[name] = s
 	}
-	for name, r := range c.Runners {
+	for name, r := range c.Compute {
 		r.AccountID = os.ExpandEnv(r.AccountID)
 		r.APIToken = os.ExpandEnv(r.APIToken)
-		c.Runners[name] = r
+		c.Compute[name] = r
 	}
 	for name, m := range c.Models {
 		m.APIKey = os.ExpandEnv(m.APIKey)

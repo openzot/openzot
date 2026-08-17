@@ -6,6 +6,7 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ### Changed
 
+- **Breaking (`zotui` config): repository connections are now `repos`, compute providers are `compute`, and an environment references `compute`.** The configuration now reads as the job path itself: repo + environment + model, with the environment binding compute to its image and variables. The old `sources`, `runners`, and `environments.*.runner` keys are removed rather than retained as aliases; unknown keys now fail during config loading instead of being silently ignored. Existing experimental zotui databases use the old `source` column and must be recreated.
 - **The CLI now uses GNU-style flags (`spf13/pflag`), matching rook and the rest of the ecosystem.** Long flags are double-dash (`--backend`, `--dir`), flags may appear **after** the positional task (`zot "do X" --plain` now works, where before the flag was folded into the task string), and `--help`'s flag list finally renders `--flag` to match the examples and the docs - the single-/double-dash mismatch the stdlib `flag` package produced is gone. **Breaking:** single-dash long flags (`-backend`) no longer parse - use `--backend`. zot has no short flags and every documented example already used `--`, so anything following the docs is unaffected.
 
 ## [0.9.1] - 2026-08-06

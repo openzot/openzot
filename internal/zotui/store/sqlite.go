@@ -65,9 +65,9 @@ func (s *sqlStore) Create(ctx context.Context, j Job) (string, error) {
 	now := unix(time.Now())
 
 	_, err := s.exec(`
-INSERT INTO jobs (id, source, repository, task, environment, model, status, exit_code, created_at, updated_at)
+INSERT INTO jobs (id, repo, repository, task, environment, model, status, exit_code, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, j.Source, j.Repository, j.Task, j.Environment, j.Model, string(j.Status), nil, now, now)
+		id, j.Repo, j.Repository, j.Task, j.Environment, j.Model, string(j.Status), nil, now, now)
 	if err != nil {
 		return "", err
 	}
@@ -77,7 +77,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // Get returns a job by id.
 func (s *sqlStore) Get(ctx context.Context, id string) (*Job, error) {
 	row := s.queryRow(`
-SELECT id, source, repository, task, environment, model, status, exit_code, created_at, updated_at
+SELECT id, repo, repository, task, environment, model, status, exit_code, created_at, updated_at
 FROM jobs WHERE id = ?`, id)
 
 	j, err := scanJob(row.Scan)
@@ -93,7 +93,7 @@ FROM jobs WHERE id = ?`, id)
 // List returns jobs, newest first.
 func (s *sqlStore) List(ctx context.Context) ([]Job, error) {
 	rows, err := s.query(`
-SELECT id, source, repository, task, environment, model, status, exit_code, created_at, updated_at
+SELECT id, repo, repository, task, environment, model, status, exit_code, created_at, updated_at
 FROM jobs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func scanJob(scan func(dest ...any) error) (Job, error) {
 		exit             sql.NullInt64
 		created, updated int64
 	)
-	if err := scan(&j.ID, &j.Source, &j.Repository, &j.Task, &j.Environment, &j.Model, &status, &exit, &created, &updated); err != nil {
+	if err := scan(&j.ID, &j.Repo, &j.Repository, &j.Task, &j.Environment, &j.Model, &status, &exit, &created, &updated); err != nil {
 		return Job{}, err
 	}
 	j.Status = Status(status)

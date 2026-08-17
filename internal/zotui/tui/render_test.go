@@ -24,8 +24,8 @@ func TestListFrameRenders(t *testing.T) {
 
 	now := time.Now()
 	loaded, _ := m.Update(jobsMsg([]store.Job{
-		{ID: "job_abc123def456", Source: "acme", Repository: "acme-corp/api", Environment: "go-ubuntu", Model: "glm", Status: store.StatusRunning, CreatedAt: now, UpdatedAt: now},
-		{ID: "job_ff00 aa11", Source: "labs", Repository: "labs/tool", Environment: "go-ubuntu", Model: "sonnet", Status: store.StatusFailed, CreatedAt: now, UpdatedAt: now},
+		{ID: "job_abc123def456", Repo: "acme", Repository: "acme-corp/api", Environment: "go-ubuntu", Model: "glm", Status: store.StatusRunning, CreatedAt: now, UpdatedAt: now},
+		{ID: "job_ff00 aa11", Repo: "labs", Repository: "labs/tool", Environment: "go-ubuntu", Model: "sonnet", Status: store.StatusFailed, CreatedAt: now, UpdatedAt: now},
 	}))
 	m = loaded.(model)
 

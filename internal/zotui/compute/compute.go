@@ -1,10 +1,10 @@
-// Package runner abstracts a compute integration - the thing that turns a
-// resolved environment into a running sandbox.
+// Package compute abstracts the providers that turn a resolved environment into
+// a running remote computer.
 //
 // Cloudflare is the first driver. Vercel and registered computers (bring-your-own
-// over SSH) are the same two interfaces: a Runner that creates sandboxes, and a
-// Sandbox you can exec in and tear down.
-package runner
+// over SSH) satisfy the same two interfaces: a Provider that creates sandboxes,
+// and a Sandbox that can execute commands and be torn down.
+package compute
 
 import (
 	"context"
@@ -28,8 +28,8 @@ type ModelSpec struct {
 	BaseURL  string
 }
 
-// Runner provisions ephemeral sandboxes for one provider.
-type Runner interface {
+// Provider creates ephemeral computers for one configured compute service.
+type Provider interface {
 	// Type is the provider name (cloudflare, vercel, ssh, ...).
 	Type() string
 

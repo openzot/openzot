@@ -13,14 +13,14 @@ import (
 
 func testConfig() *config.Config {
 	return &config.Config{
-		Sources: map[string]config.Source{
-			// a per-source lockdown lets authorization pass offline (no key needed)
+		Repos: map[string]config.Repo{
+			// a per-repo lockdown lets authorization pass offline (no key needed)
 			"acme": {Type: "github", Repositories: []string{"acme/api"}},
 		},
-		Runners: map[string]config.Runner{"cf": {Type: "cloudflare"}},
+		Compute: map[string]config.Compute{"cf": {Type: "cloudflare"}},
 		Models:  map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2"}},
 		Environments: map[string]config.Environment{
-			"go": {Runner: "cf", Model: "glm", Image: "img"},
+			"go": {Compute: "cf", Model: "glm", Image: "img"},
 		},
 	}
 }
@@ -40,12 +40,12 @@ func TestAppScheduleAuthorizeCancel(t *testing.T) {
 	ctx := context.Background()
 
 	// choices the create form offers
-	if got := a.Sources(); len(got) != 1 || got[0] != "acme" {
-		t.Errorf("Sources() = %v", got)
+	if got := a.Repos(); len(got) != 1 || got[0] != "acme" {
+		t.Errorf("Repos() = %v", got)
 	}
 
 	// schedule a permitted job; the model defaults from the environment
-	id, err := a.Schedule(ctx, app.ScheduleParams{Source: "acme", Repository: "acme/api", Environment: "go", Task: "do it"})
+	id, err := a.Schedule(ctx, app.ScheduleParams{Repo: "acme", Repository: "acme/api", Environment: "go", Task: "do it"})
 	if err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
@@ -56,17 +56,20 @@ func TestAppScheduleAuthorizeCancel(t *testing.T) {
 	if len(jobs) != 1 || jobs[0].ID != id {
 		t.Fatalf("expected the scheduled job, got %+v", jobs)
 	}
+	if jobs[0].Repo != "acme" {
+		t.Errorf("repo = %q, want acme", jobs[0].Repo)
+	}
 	if jobs[0].Model != "glm" {
 		t.Errorf("model = %q, want the environment default glm", jobs[0].Model)
 	}
 
-	// a repo outside the source lockdown is rejected before anything is recorded
-	if _, err := a.Schedule(ctx, app.ScheduleParams{Source: "acme", Repository: "acme/other", Environment: "go", Task: "x"}); err == nil {
+	// a repository outside the repo lockdown is rejected before anything is recorded
+	if _, err := a.Schedule(ctx, app.ScheduleParams{Repo: "acme", Repository: "acme/other", Environment: "go", Task: "x"}); err == nil {
 		t.Error("expected the lockdown to reject an unlisted repo")
 	}
 
 	// cancel a scheduled job (created directly so it is not racing the dispatch)
-	cid, err := st.Create(ctx, store.Job{Source: "acme", Repository: "acme/api", Task: "t", Environment: "go", Model: "glm", Status: store.StatusScheduled})
+	cid, err := st.Create(ctx, store.Job{Repo: "acme", Repository: "acme/api", Task: "t", Environment: "go", Model: "glm", Status: store.StatusScheduled})
 	if err != nil {
 		t.Fatal(err)
 	}

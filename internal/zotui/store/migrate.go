@@ -26,7 +26,7 @@ type Migration struct {
 var baselineSchema = []string{
 	`CREATE TABLE IF NOT EXISTS jobs (
 	id          TEXT PRIMARY KEY,
-	source      TEXT NOT NULL,
+	repo        TEXT NOT NULL,
 	repository  TEXT NOT NULL,
 	task        TEXT NOT NULL,
 	environment TEXT NOT NULL,

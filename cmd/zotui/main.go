@@ -5,11 +5,11 @@
 //
 // The only other command is `zotui config`, which opens the config in $EDITOR
 // (seeding it from an embedded template on first run). The config file locates the
-// repository sources, compute runners, models and environments; override its path
+// repos, compute, models and environments; override its path
 // with $ZOTUI_CONFIG.
 //
 // This is an early scaffold: the config, store, scheduling flow and the TUI are in
-// place; the GitHub token exchange and the Cloudflare runner are stubbed, so a
+// place; the GitHub token exchange and Cloudflare compute are stubbed, so a
 // dispatched job currently fails fast at those seams.
 package main
 

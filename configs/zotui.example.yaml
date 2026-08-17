@@ -7,12 +7,13 @@
 #
 # The TUI and the (future) web interface both read THIS file. One config, two faces.
 
-# Repository providers - where jobs get their code and how zotui mints per-job
-# credentials. A map, so several connect at once: multiple GitHub orgs, GitHub and
-# GitLab together, self-hosted instances. `type` picks the implementation; a job
-# names which source it targets (--source). Each source has an OPTIONAL lockdown -
-# omit to discover every repository it exposes, or list some to restrict to those.
-sources:
+# Repos are the repository connections jobs get their code from and how zotui
+# mints per-job credentials. A map, so several connect at once: multiple GitHub
+# orgs, GitHub and GitLab together, self-hosted instances. `type` picks the
+# implementation; a job names which repo connection it targets. Each repo has an
+# OPTIONAL lockdown - omit to discover every repository it exposes, or list some
+# to restrict to those.
+repos:
   acme:
     type: github
     app_id: 123456
@@ -20,7 +21,7 @@ sources:
     # PEM private key, inline or a $VAR reference. Held only on the host - never
     # sent to a sandbox. zotui mints a short-lived, repo-scoped token per job.
     private_key: $ACME_GITHUB_APP_KEY
-    # repositories:            # optional per-source lockdown (owner/name)
+    # repositories:            # optional per-repo lockdown (owner/name)
     #   - acme-corp/api
 
   labs:
@@ -28,9 +29,9 @@ sources:
     base_url: https://gitlab.example.com
     token: $LABS_GITLAB_TOKEN
 
-# Runners are compute providers - where sandboxes come from. Today: cloudflare.
+# Compute is where remote computers and sandboxes come from. Today: cloudflare.
 # Later: vercel, and your own machines over ssh.
-runners:
+compute:
   cf:
     type: cloudflare
     account_id: $CLOUDFLARE_ACCOUNT_ID
@@ -38,7 +39,7 @@ runners:
 
 # Models zot reasons with. Each names the provider, the model, and the credential
 # to reach it - held on the host and injected into a job's sandbox at dispatch. An
-# environment picks a default; a job can override it with --model at runtime.
+# environment picks a default; a job can override it when it is scheduled.
 models:
   glm:
     provider: zai
@@ -49,18 +50,18 @@ models:
     model: claude-5-sonnet
     api_key: $ANTHROPIC_API_KEY
 
-# Environments bind a runner to a base image and env vars - the reusable blueprint
+# Environments bind compute to a base image and env vars - the reusable blueprint
 # a job's sandbox is created from: define once, spawn many ephemeral sandboxes.
-# `model` is the default model for jobs here; --model overrides it per run.
+# `model` is the default model for jobs here; a scheduled job may override it.
 environments:
   go-ubuntu:
-    runner: cf
+    compute: cf
     model: glm
     image: ghcr.io/openzot/openzot-toolchain:latest # base image: toolchain + the zot binary
     env:
       GOFLAGS: -mod=mod
     # Optional per-environment lockdown: restrict this environment to specific
-    # repositories, source-qualified as "source/owner/repo". Omit to allow any.
+    # repositories, qualified as "repo/owner/name". Omit to allow any.
     # repositories:
     #   - acme/acme-corp/api
 

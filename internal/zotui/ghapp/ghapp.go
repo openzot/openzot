@@ -20,17 +20,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/openzot/openzot/internal/zotui/source"
+	"github.com/openzot/openzot/internal/zotui/repo"
 )
 
-// App is a configured GitHub App installation. It implements source.Source.
+// App is a configured GitHub App installation. It implements repo.Provider.
 type App struct {
 	AppID          int64
 	InstallationID int64
 	key            *rsa.PrivateKey
 }
 
-var _ source.Source = (*App)(nil)
+var _ repo.Provider = (*App)(nil)
 
 // New parses the App's PEM private key (PKCS#1 or PKCS#8) and returns an App.
 func New(appID, installationID int64, pemKey string) (*App, error) {
@@ -72,7 +72,7 @@ func parseRSA(der []byte) (*rsa.PrivateKey, error) {
 // the App, then POST it to /app/installations/{InstallationID}/access_tokens with
 // {"repositories": repos, "permissions": {contents: write, pull_requests: write}}
 // and return the {token, expires_at} the API issues.
-func (a *App) MintToken(ctx context.Context, repos []string) (*source.Token, error) {
+func (a *App) MintToken(ctx context.Context, repos []string) (*repo.Token, error) {
 	if _, err := a.assertion(time.Now()); err != nil {
 		return nil, err
 	}

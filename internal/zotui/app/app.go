@@ -11,12 +11,12 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/openzot/openzot/internal/zotui/compute"
+	"github.com/openzot/openzot/internal/zotui/compute/cloudflare"
 	"github.com/openzot/openzot/internal/zotui/config"
 	"github.com/openzot/openzot/internal/zotui/ghapp"
 	"github.com/openzot/openzot/internal/zotui/job"
-	"github.com/openzot/openzot/internal/zotui/runner"
-	"github.com/openzot/openzot/internal/zotui/runner/cloudflare"
-	"github.com/openzot/openzot/internal/zotui/source"
+	"github.com/openzot/openzot/internal/zotui/repo"
 	"github.com/openzot/openzot/internal/zotui/store"
 )
 
@@ -25,18 +25,18 @@ type App struct {
 	cfg   *config.Config
 	store store.Store
 
-	mu       sync.Mutex
-	srcCache map[string]source.Source
+	mu        sync.Mutex
+	repoCache map[string]repo.Provider
 }
 
 // New returns an App over a loaded config and an open store.
 func New(cfg *config.Config, st store.Store) *App {
-	return &App{cfg: cfg, store: st, srcCache: map[string]source.Source{}}
+	return &App{cfg: cfg, store: st, repoCache: map[string]repo.Provider{}}
 }
 
 // --- choices the create form offers -----------------------------------------
 
-func (a *App) Sources() []string      { return sortedKeys(a.cfg.Sources) }
+func (a *App) Repos() []string        { return sortedKeys(a.cfg.Repos) }
 func (a *App) Environments() []string { return sortedKeys(a.cfg.Environments) }
 func (a *App) Models() []string       { return sortedKeys(a.cfg.Models) }
 
@@ -61,7 +61,7 @@ func (a *App) Cancel(ctx context.Context, id string) error {
 	case store.StatusSettled, store.StatusFailed, store.StatusCancelled:
 		return fmt.Errorf("job is already %s", j.Status)
 	}
-	// TODO: signal the runner to tear the sandbox down. For now, record the intent;
+	// TODO: signal compute to tear the sandbox down. For now, record the intent;
 	// a running dispatch checks this status and stops updating.
 	return a.store.SetStatus(ctx, id, store.StatusCancelled, nil)
 }
@@ -70,7 +70,7 @@ func (a *App) Cancel(ctx context.Context, id string) error {
 
 // ScheduleParams is a new-job request from the command center.
 type ScheduleParams struct {
-	Source      string
+	Repo        string
 	Repository  string
 	Environment string
 	Model       string // optional; empty uses the environment default
@@ -90,7 +90,7 @@ func (a *App) Schedule(ctx context.Context, p ScheduleParams) (string, error) {
 	}
 
 	id, err := a.store.Create(ctx, store.Job{
-		Source:      j.Source,
+		Repo:        j.Repo,
 		Repository:  j.Repository,
 		Task:        j.Task,
 		Environment: j.Environment,
@@ -113,13 +113,13 @@ func (a *App) dispatch(ctx context.Context, id string, j job.Job) {
 	}
 	_ = a.store.SetStatus(ctx, id, store.StatusRunning, nil)
 
-	src, err := a.sourceFor(j.Source)
+	rp, err := a.repoFor(j.Repo)
 	if err != nil {
 		a.settle(ctx, id, store.StatusFailed, nil)
 		return
 	}
 
-	d := &job.Dispatcher{Source: src, Resolver: a, Output: io.Discard}
+	d := &job.Dispatcher{Repo: rp, Resolver: a, Output: io.Discard}
 	res, derr := d.Dispatch(ctx, j)
 
 	status, code := store.StatusSettled, (*int)(nil)
@@ -154,8 +154,8 @@ func (a *App) buildJob(p ScheduleParams) (job.Job, error) {
 	if p.Task == "" {
 		return job.Job{}, fmt.Errorf("a task is required")
 	}
-	if _, ok := a.cfg.Sources[p.Source]; !ok {
-		return job.Job{}, fmt.Errorf("unknown source %q", p.Source)
+	if _, ok := a.cfg.Repos[p.Repo]; !ok {
+		return job.Job{}, fmt.Errorf("unknown repo %q", p.Repo)
 	}
 	if p.Repository == "" {
 		return job.Job{}, fmt.Errorf("a repository is required")
@@ -174,99 +174,99 @@ func (a *App) buildJob(p ScheduleParams) (job.Job, error) {
 	if _, ok := a.cfg.Models[model]; !ok {
 		return job.Job{}, fmt.Errorf("unknown model %q", model)
 	}
-	return job.Job{Source: p.Source, Repository: p.Repository, Task: p.Task, Environment: p.Environment, Model: model}, nil
+	return job.Job{Repo: p.Repo, Repository: p.Repository, Task: p.Task, Environment: p.Environment, Model: model}, nil
 }
 
-// authorize applies the environment and per-source lockdowns, then discovery.
+// authorize applies the environment and per-repo lockdowns, then discovery.
 func (a *App) authorize(ctx context.Context, j job.Job) error {
-	qualified := j.Source + "/" + j.Repository
+	qualified := j.Repo + "/" + j.Repository
 
 	if envLock := a.cfg.Environments[j.Environment].Repositories; len(envLock) > 0 {
 		if !slices.Contains(envLock, qualified) {
 			return fmt.Errorf("repository %q is not allowed on environment %q", qualified, j.Environment)
 		}
 	}
-	if srcLock := a.cfg.Sources[j.Source].Repositories; len(srcLock) > 0 {
-		if !slices.Contains(srcLock, j.Repository) {
-			return fmt.Errorf("repository %q is not in source %q's lockdown", j.Repository, j.Source)
+	if repoLock := a.cfg.Repos[j.Repo].Repositories; len(repoLock) > 0 {
+		if !slices.Contains(repoLock, j.Repository) {
+			return fmt.Errorf("repository %q is not in repo %q's lockdown", j.Repository, j.Repo)
 		}
 		return nil
 	}
 
-	src, err := a.sourceFor(j.Source)
+	rp, err := a.repoFor(j.Repo)
 	if err != nil {
 		return err
 	}
-	repos, err := src.ListRepositories(ctx)
+	repos, err := rp.ListRepositories(ctx)
 	if err != nil {
 		return fmt.Errorf("discover repositories: %w", err)
 	}
 	if !slices.Contains(repos, j.Repository) {
-		return fmt.Errorf("repository %q is not available from source %q", j.Repository, j.Source)
+		return fmt.Errorf("repository %q is not available from repo %q", j.Repository, j.Repo)
 	}
 	return nil
 }
 
-// Resolve implements job.Resolver: it turns a job into its runner and spec.
-func (a *App) Resolve(j job.Job) (runner.Runner, runner.Spec, error) {
+// Resolve implements job.Resolver: it turns a job into compute and a spec.
+func (a *App) Resolve(j job.Job) (compute.Provider, compute.Spec, error) {
 	env, ok := a.cfg.Environments[j.Environment]
 	if !ok {
-		return nil, runner.Spec{}, fmt.Errorf("unknown environment %q", j.Environment)
+		return nil, compute.Spec{}, fmt.Errorf("unknown environment %q", j.Environment)
 	}
-	rn, ok := a.cfg.Runners[env.Runner]
+	provider, ok := a.cfg.Compute[env.Compute]
 	if !ok {
-		return nil, runner.Spec{}, fmt.Errorf("environment %q references unknown runner %q", j.Environment, env.Runner)
+		return nil, compute.Spec{}, fmt.Errorf("environment %q references unknown compute %q", j.Environment, env.Compute)
 	}
 	m, ok := a.cfg.Models[j.Model]
 	if !ok {
-		return nil, runner.Spec{}, fmt.Errorf("unknown model %q", j.Model)
+		return nil, compute.Spec{}, fmt.Errorf("unknown model %q", j.Model)
 	}
 
-	var drv runner.Runner
-	switch rn.Type {
+	var drv compute.Provider
+	switch provider.Type {
 	case "cloudflare":
-		drv = cloudflare.New(rn.AccountID, rn.APIToken)
+		drv = cloudflare.New(provider.AccountID, provider.APIToken)
 	default:
-		return nil, runner.Spec{}, fmt.Errorf("runner type %q not supported yet", rn.Type)
+		return nil, compute.Spec{}, fmt.Errorf("compute type %q not supported yet", provider.Type)
 	}
 
-	spec := runner.Spec{
+	spec := compute.Spec{
 		Image: env.Image,
 		Env:   env.Env,
-		Model: runner.ModelSpec{Provider: m.Provider, Model: m.Model, APIKey: m.APIKey, BaseURL: m.BaseURL},
+		Model: compute.ModelSpec{Provider: m.Provider, Model: m.Model, APIKey: m.APIKey, BaseURL: m.BaseURL},
 	}
 	return drv, spec, nil
 }
 
-// sourceFor builds (and caches) the repository provider for a source name.
-func (a *App) sourceFor(name string) (source.Source, error) {
+// repoFor builds (and caches) the provider for a configured repo name.
+func (a *App) repoFor(name string) (repo.Provider, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if s, ok := a.srcCache[name]; ok {
-		return s, nil
+	if rp, ok := a.repoCache[name]; ok {
+		return rp, nil
 	}
-	sc, ok := a.cfg.Sources[name]
+	rc, ok := a.cfg.Repos[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown source %q", name)
+		return nil, fmt.Errorf("unknown repo %q", name)
 	}
-	s, err := newSource(sc)
+	rp, err := newRepo(rc)
 	if err != nil {
 		return nil, err
 	}
-	a.srcCache[name] = s
-	return s, nil
+	a.repoCache[name] = rp
+	return rp, nil
 }
 
-// newSource builds one repository provider from its config.
-func newSource(s config.Source) (source.Source, error) {
-	switch s.Type {
+// newRepo builds one repository provider from its config.
+func newRepo(r config.Repo) (repo.Provider, error) {
+	switch r.Type {
 	case "", "github":
-		return ghapp.New(s.AppID, s.InstallationID, s.PrivateKey)
+		return ghapp.New(r.AppID, r.InstallationID, r.PrivateKey)
 	case "gitlab":
-		return nil, fmt.Errorf("gitlab source not implemented yet")
+		return nil, fmt.Errorf("gitlab repo not implemented yet")
 	default:
-		return nil, fmt.Errorf("unsupported source type %q", s.Type)
+		return nil, fmt.Errorf("unsupported repo type %q", r.Type)
 	}
 }
 

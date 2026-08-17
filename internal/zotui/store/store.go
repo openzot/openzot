@@ -35,7 +35,7 @@ const (
 // Job is a scheduled unit of work and its tracked progress.
 type Job struct {
 	ID          string
-	Source      string
+	Repo        string
 	Repository  string
 	Task        string
 	Environment string
