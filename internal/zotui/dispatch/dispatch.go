@@ -44,6 +44,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, execution Execution) (*Result
 	if err != nil {
 		return nil, fmt.Errorf("mint credentials: %w", err)
 	}
+	if token.Value != "" {
+		spec.Source.Password = token.Value
+	}
 	sandbox, err := provider.Create(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox: %w", err)

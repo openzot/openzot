@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,5 +175,45 @@ func TestLocalRepoResolvesDockerCompute(t *testing.T) {
 	cfg.Repos["checkout"] = config.Repo{Type: "local", Repositories: []string{"openzot/openzot"}}
 	if _, err := a.CreateWorker(context.Background(), app.WorkerParams{Name: "tester", Repo: "checkout", Repository: "openzot/openzot", Environment: "dev", Mission: "run tests"}); err == nil {
 		t.Fatal("local worker accepted a missing checkout path")
+	}
+}
+
+func TestGitHubRepoResolvesVercelComputeAndGitSource(t *testing.T) {
+	cfg := &config.Config{
+		Repos: map[string]config.Repo{"github": {Type: "github"}},
+		Compute: map[string]config.Compute{"remote": {
+			Type: "vercel", Token: "sandbox-token", TeamID: "team_123", ProjectID: "prj_123", Timeout: "2h",
+		}},
+		Models: map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2", APIKey: "model-secret"}},
+		Environments: map[string]config.Environment{"remote": {
+			Compute: "remote", Model: "glm", Image: "zot-runtime:latest",
+		}},
+	}
+
+	provider, spec, err := app.New(cfg, nil).Resolve(dispatch.Execution{
+		Repo: "github", Repository: "openzot/openzot", Environment: "remote", Model: "glm", MaxIterations: 17,
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if provider.Type() != "vercel" || spec.Source.URL != "https://github.com/openzot/openzot.git" || spec.Source.Username != "x-access-token" || spec.Source.Directory != "openzot" {
+		t.Fatalf("resolved provider/source = %s, %+v", provider.Type(), spec.Source)
+	}
+}
+
+func TestWorkerRejectsLocalRepoOnVercelCompute(t *testing.T) {
+	cfg := &config.Config{
+		Repos:   map[string]config.Repo{"checkout": {Type: "local", Path: "/workspace", Repositories: []string{"openzot/openzot"}}},
+		Compute: map[string]config.Compute{"remote": {Type: "vercel"}},
+		Models:  map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2"}},
+		Environments: map[string]config.Environment{"remote": {
+			Compute: "remote", Model: "glm", Image: "zot-runtime:latest",
+		}},
+	}
+	_, err := app.New(cfg, openStore(t)).CreateWorker(context.Background(), app.WorkerParams{
+		Name: "remote", Repo: "checkout", Repository: "openzot/openzot", Environment: "remote", Mission: "test",
+	})
+	if err == nil || !strings.Contains(err.Error(), "needs a remote repo connection") {
+		t.Fatalf("CreateWorker error = %v", err)
 	}
 }

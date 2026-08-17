@@ -51,6 +51,8 @@ available inside new worker containers.
 `make dev-ui` and `make dev-image` also work outside the container when a Docker
 daemon is available. The local SQLite database is kept under the ignored
 `.local/` directory unless `ZOTUI_STORE_DSN` overrides it.
+See [zotui-configuration.md](zotui-configuration.md) for complete local Docker
+and Vercel Sandbox configurations, model credentials, and repository setup.
 
 To bake a configuration - model, backend, even the provider key - _into_ the
 binary so it needs nothing at the destination, build with `-tags portable`. The

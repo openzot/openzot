@@ -13,10 +13,12 @@ import (
 	"github.com/openzot/openzot/internal/zotui/compute"
 	"github.com/openzot/openzot/internal/zotui/compute/cloudflare"
 	dockercompute "github.com/openzot/openzot/internal/zotui/compute/docker"
+	vercelcompute "github.com/openzot/openzot/internal/zotui/compute/vercel"
 	"github.com/openzot/openzot/internal/zotui/config"
 	"github.com/openzot/openzot/internal/zotui/dispatch"
 	"github.com/openzot/openzot/internal/zotui/ghapp"
 	"github.com/openzot/openzot/internal/zotui/repo"
+	githubrepo "github.com/openzot/openzot/internal/zotui/repo/github"
 	localrepo "github.com/openzot/openzot/internal/zotui/repo/local"
 	"github.com/openzot/openzot/internal/zotui/store"
 )
@@ -282,6 +284,13 @@ func (a *App) buildWorker(p WorkerParams) (store.Worker, error) {
 	if !ok {
 		return store.Worker{}, fmt.Errorf("unknown environment %q", p.Environment)
 	}
+	computeConfig, ok := a.cfg.Compute[env.Compute]
+	if !ok {
+		return store.Worker{}, fmt.Errorf("environment %q references unknown compute %q", p.Environment, env.Compute)
+	}
+	if rc.Type == "local" && computeConfig.Type != "docker" {
+		return store.Worker{}, fmt.Errorf("local repo %q requires docker compute; %s compute needs a remote repo connection", p.Repo, computeConfig.Type)
+	}
 	if p.Model == "" {
 		p.Model = env.Model
 	}
@@ -348,14 +357,24 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 		driver = cloudflare.New(provider.AccountID, provider.APIToken)
 	case "docker":
 		driver = dockercompute.New()
+	case "vercel":
+		driver = vercelcompute.New(provider.Token, provider.TeamID, provider.ProjectID, provider.Timeout, provider.BaseURL)
 	default:
 		return nil, compute.Spec{}, fmt.Errorf("compute type %q not supported yet", provider.Type)
 	}
 	var mounts []compute.Mount
+	var source compute.Source
 	if rc := a.cfg.Repos[execution.Repo]; rc.Type == "local" {
 		mounts = []compute.Mount{{Source: rc.Path, Target: "/workspace"}}
+	} else if rc.Type == "" || rc.Type == "github" {
+		parts := strings.Split(execution.Repository, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, compute.Spec{}, fmt.Errorf("GitHub repository %q must be owner/name", execution.Repository)
+		}
+		source = compute.Source{URL: "https://github.com/" + execution.Repository + ".git",
+			Username: "x-access-token", Directory: parts[1]}
 	}
-	return driver, compute.Spec{Image: env.Image, Env: env.Env, Mounts: mounts, MaxIterations: execution.MaxIterations,
+	return driver, compute.Spec{Image: env.Image, Env: env.Env, Mounts: mounts, Source: source, MaxIterations: execution.MaxIterations,
 		Model: compute.ModelSpec{Provider: m.Provider, Model: m.Model, APIKey: m.APIKey, BaseURL: m.BaseURL}}, nil
 }
 
@@ -379,6 +398,9 @@ func (a *App) repoFor(name string) (repo.Provider, error) {
 func newRepo(r config.Repo) (repo.Provider, error) {
 	switch r.Type {
 	case "", "github":
+		if r.AppID == 0 && r.InstallationID == 0 && strings.TrimSpace(r.PrivateKey) == "" {
+			return githubrepo.New(r.Repositories)
+		}
 		return ghapp.New(r.AppID, r.InstallationID, r.PrivateKey)
 	case "gitlab":
 		return nil, fmt.Errorf("gitlab repo not implemented yet")

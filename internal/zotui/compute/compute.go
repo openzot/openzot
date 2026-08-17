@@ -7,6 +7,7 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 )
 
@@ -16,6 +17,7 @@ type Spec struct {
 	Image         string
 	Env           map[string]string
 	Mounts        []Mount
+	Source        Source
 	Model         ModelSpec
 	MaxIterations int
 }
@@ -27,6 +29,15 @@ type Mount struct {
 	ReadOnly bool
 }
 
+// Source is a remote Git checkout a compute provider can place in the sandbox.
+// Password is populated only after the repo provider mints a per-run token.
+type Source struct {
+	URL       string
+	Username  string
+	Password  string
+	Directory string
+}
+
 // ModelSpec is the resolved LLM config injected into the sandbox for zot: the
 // provider, the model name, and the credential to reach it.
 type ModelSpec struct {
@@ -34,6 +45,18 @@ type ModelSpec struct {
 	Model    string
 	APIKey   string
 	BaseURL  string
+}
+
+// EncodeZotConfig builds the private runtime configuration installed in every
+// sandbox. Compute drivers write it with owner-only permissions.
+func EncodeZotConfig(spec Spec) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"default_backend": "worker",
+		"agent":           map[string]any{"model": spec.Model.Model, "max_iterations": spec.MaxIterations},
+		"backends": map[string]any{"worker": map[string]string{
+			"provider": spec.Model.Provider, "base_url": spec.Model.BaseURL, "api_key": spec.Model.APIKey,
+		}},
+	})
 }
 
 // Provider creates ephemeral computers for one configured compute service.

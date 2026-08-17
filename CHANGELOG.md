@@ -7,6 +7,7 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 ### Added
 
 - **Local Docker compute for zotui.** A `local` repo mounts an existing checkout into an ephemeral container supplied by `compute.type: docker`; zotui streams the run output and removes the container even after cancellation. `make dev-image` builds the worker image used by the development environment.
+- **Vercel Sandbox compute for zotui.** `compute.type: vercel` creates a non-persistent Vercel Sandbox from a project VCR image, checks out the selected remote Git repository using any credential minted by its repo connection, installs zot's model configuration privately, streams raw ANSI output, and stops the sandbox after the run. An explicitly listed public GitHub repo can be used without App credentials for a credential-free smoke test.
 - **A repository development container for Go and zotui work.** It pins the project toolchain, runs as a non-root developer, provides Docker-in-Docker, persists Go caches, Docker data, and zotui state in named volumes, forwards the command-center port, builds the local worker image, and includes a credential-free fixture configuration. `make dev-ui` provides the same local workflow outside the container.
 
 ### Changed

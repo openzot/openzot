@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -100,7 +99,7 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 		return nil, commandError("start", code, runErr, output.String())
 	}
 
-	data, err := zotConfig(spec)
+	data, err := compute.EncodeZotConfig(spec)
 	if err != nil {
 		s.cleanup()
 		return nil, fmt.Errorf("encode zot config: %w", err)
@@ -173,16 +172,6 @@ func validateSpec(spec compute.Spec) error {
 		}
 	}
 	return nil
-}
-
-func zotConfig(spec compute.Spec) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"default_backend": "worker",
-		"agent":           map[string]any{"model": spec.Model.Model, "max_iterations": spec.MaxIterations},
-		"backends": map[string]any{"worker": map[string]string{
-			"provider": spec.Model.Provider, "base_url": spec.Model.BaseURL, "api_key": spec.Model.APIKey,
-		}},
-	})
 }
 
 func containerName() (string, error) {

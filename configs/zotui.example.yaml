@@ -3,6 +3,7 @@
 # zotui is the browser command center over the zot engine. You define reusable
 # workers, start or schedule runs on remote environments, and inspect their output.
 # Workers and run history are durable, so closing the browser loses no state.
+# Full setup guide: docs/zotui-configuration.md
 
 # Repos are the repository connections workers get their code from and how zotui
 # mints per-run credentials. A map, so several connect at once: multiple GitHub
@@ -11,6 +12,13 @@
 # OPTIONAL lockdown - omit to discover every repository it exposes, or list some
 # to restrict to those.
 repos:
+  # A fixed list of public GitHub repositories needs no credential. This is the
+  # simplest remote connection for testing Vercel Sandbox compute.
+  public:
+    type: github
+    repositories:
+      - openzot/openzot
+
   acme:
     type: github
     app_id: 123456
@@ -35,10 +43,20 @@ repos:
   #     - openzot/openzot
 
 # Compute is where computers and sandboxes come from. Docker provides local
-# ephemeral compute; cloudflare is the remote provider seam.
+# ephemeral compute. Vercel boots an ephemeral Vercel Sandbox from an image in
+# the project's Vercel Container Registry and checks out a remote repo into it.
 compute:
   local:
     type: docker
+  vercel:
+    type: vercel
+    # A Vercel access token created in Account Settings. The team and project
+    # IDs are shown in the project's Settings page.
+    token: $VERCEL_TOKEN
+    team_id: $VERCEL_TEAM_ID
+    project_id: $VERCEL_PROJECT_ID
+    # Defaults to the Hobby-plan maximum. Pro/Enterprise can use up to 24h.
+    timeout: 45m
   cf:
     type: cloudflare
     account_id: $CLOUDFLARE_ACCOUNT_ID
@@ -67,6 +85,14 @@ environments:
   #   image: openzot/zot:dev
   #   repositories:
   #     - development/openzot/openzot
+  # vercel-development:
+  #   compute: vercel
+  #   model: glm
+  #   # Custom images must be pushed to this project's Vercel Container Registry.
+  #   # The image must contain the zot binary and the required development tools.
+  #   image: zot-runtime:latest
+  #   repositories:
+  #     - public/openzot/openzot
   go-ubuntu:
     compute: cf
     model: glm

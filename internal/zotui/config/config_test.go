@@ -41,6 +41,9 @@ func TestEmbeddedExampleLoads(t *testing.T) {
 func TestLoadReposComputeAndEnvironment(t *testing.T) {
 	t.Setenv("TEST_REPO_KEY", "repo-secret")
 	t.Setenv("TEST_COMPUTE_TOKEN", "compute-secret")
+	t.Setenv("TEST_VERCEL_TOKEN", "vercel-secret")
+	t.Setenv("TEST_VERCEL_TEAM", "team_123")
+	t.Setenv("TEST_VERCEL_PROJECT", "prj_123")
 	t.Setenv("TEST_MODEL_KEY", "model-secret")
 
 	path := writeConfig(t, `
@@ -53,6 +56,12 @@ compute:
     type: cloudflare
     account_id: account
     api_token: $TEST_COMPUTE_TOKEN
+  vercel:
+    type: vercel
+    token: $TEST_VERCEL_TOKEN
+    team_id: $TEST_VERCEL_TEAM
+    project_id: $TEST_VERCEL_PROJECT
+    timeout: 2h
 models:
   glm:
     provider: zai
@@ -80,6 +89,9 @@ store:
 	}
 	if cfg.Compute["cf"].APIToken != "compute-secret" {
 		t.Error("compute credential was not resolved")
+	}
+	if got := cfg.Compute["vercel"]; got.Token != "vercel-secret" || got.TeamID != "team_123" || got.ProjectID != "prj_123" || got.Timeout != "2h" {
+		t.Errorf("vercel compute config was not resolved: %+v", got)
 	}
 	if cfg.Models["glm"].APIKey != "model-secret" {
 		t.Error("model credential was not resolved")

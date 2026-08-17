@@ -41,7 +41,9 @@ type Config struct {
 
 // Repo is one repository connection: its type, the credentials to reach it, and an
 // optional per-repo lockdown. Type selects the implementation; the fields it
-// reads depend on the type (github uses the App fields, gitlab the base_url/token).
+// reads depend on the type (github optionally uses the App fields, gitlab the
+// base_url/token). A github connection without App credentials is public-only
+// and must list its repositories explicitly.
 //
 // Repositories is an OPTIONAL lockdown for THIS repo connection: empty discovers
 // every repository it exposes; listing narrows to exactly those (owner/name
@@ -67,7 +69,11 @@ type Compute struct {
 	Type      string `yaml:"type"`       // cloudflare, docker, vercel, ssh, ...
 	AccountID string `yaml:"account_id"` // provider-specific
 	APIToken  string `yaml:"api_token"`
-	BaseURL   string `yaml:"base_url"` // optional endpoint override
+	Token     string `yaml:"token"`      // vercel access token, inline or $VAR
+	TeamID    string `yaml:"team_id"`    // vercel team ID
+	ProjectID string `yaml:"project_id"` // vercel project ID
+	Timeout   string `yaml:"timeout"`    // vercel sandbox lifetime (default 45m)
+	BaseURL   string `yaml:"base_url"`   // optional endpoint override
 }
 
 // Model is an LLM configuration zot reasons with: the provider, the model name,
@@ -135,6 +141,11 @@ func (c *Config) expand() {
 	for name, r := range c.Compute {
 		r.AccountID = os.ExpandEnv(r.AccountID)
 		r.APIToken = os.ExpandEnv(r.APIToken)
+		r.Token = os.ExpandEnv(r.Token)
+		r.TeamID = os.ExpandEnv(r.TeamID)
+		r.ProjectID = os.ExpandEnv(r.ProjectID)
+		r.Timeout = os.ExpandEnv(r.Timeout)
+		r.BaseURL = os.ExpandEnv(r.BaseURL)
 		c.Compute[name] = r
 	}
 	for name, m := range c.Models {

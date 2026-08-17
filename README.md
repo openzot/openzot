@@ -165,6 +165,7 @@ upgrading.
 
 - [docs/backends.md](docs/backends.md) - providers, credentials, gateways, custom endpoints, the Responses API
 - [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENT.md` & skills
+- [docs/zotui-configuration.md](docs/zotui-configuration.md) - zotui repos, compute, models, environments, Vercel Sandbox, and local Docker setup
 - [docs/development.md](docs/development.md) - building from source, release vs developer builds, the codebase map
 - [docs/portable-config.md](docs/portable-config.md) - baking the configuration into the binary
 - [docs/docker.md](docs/docker.md) - running the container image
