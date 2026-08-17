@@ -38,13 +38,20 @@ func New(cfg *config.Config, st store.Store) *App {
 }
 
 type Choices struct {
-	Repos        []string `json:"repos"`
-	Environments []string `json:"environments"`
-	Models       []string `json:"models"`
+	Repos        []string            `json:"repos"`
+	Repositories map[string][]string `json:"repositories"`
+	Environments []string            `json:"environments"`
+	Models       []string            `json:"models"`
 }
 
 func (a *App) Choices() Choices {
-	return Choices{Repos: sortedKeys(a.cfg.Repos), Environments: sortedKeys(a.cfg.Environments), Models: sortedKeys(a.cfg.Models)}
+	repositories := make(map[string][]string, len(a.cfg.Repos))
+	for name, configured := range a.cfg.Repos {
+		repositories[name] = slices.Clone(configured.Repositories)
+		sort.Strings(repositories[name])
+	}
+	return Choices{Repos: sortedKeys(a.cfg.Repos), Repositories: repositories,
+		Environments: sortedKeys(a.cfg.Environments), Models: sortedKeys(a.cfg.Models)}
 }
 
 type WorkerParams struct {

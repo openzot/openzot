@@ -31,6 +31,32 @@ func openStore(t *testing.T) store.Store {
 	return st
 }
 
+// Repository choices must follow their connection so the worker form cannot
+// silently accept only free-form text when configuration already names them.
+func TestChoicesGroupRepositoriesByConnection(t *testing.T) {
+	cfg := &config.Config{
+		Repos: map[string]config.Repo{
+			"second": {Repositories: []string{"zeta/api", "alpha/web"}},
+			"first":  {},
+		},
+	}
+	choices := app.New(cfg, nil).Choices()
+	if len(choices.Repos) != 2 || choices.Repos[0] != "first" || choices.Repos[1] != "second" {
+		t.Fatalf("repo connections = %v", choices.Repos)
+	}
+	if got := choices.Repositories["second"]; len(got) != 2 || got[0] != "alpha/web" || got[1] != "zeta/api" {
+		t.Fatalf("second repositories = %v", got)
+	}
+	if got, ok := choices.Repositories["first"]; !ok || len(got) != 0 {
+		t.Fatalf("connection without a fixed list = %v, present %v", got, ok)
+	}
+
+	choices.Repositories["second"][0] = "changed/outside"
+	if got := app.New(cfg, nil).Choices().Repositories["second"][0]; got != "alpha/web" {
+		t.Fatalf("choices exposed configuration state: %q", got)
+	}
+}
+
 func TestWorkerLifecycle(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)

@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 
-let state = { choices: { repos: [], environments: [], models: [] }, workers: [] };
+let state = { choices: { repos: [], repositories: {}, environments: [], models: [] }, workers: [] };
 let selectedWorker = 0;
 let selectedRun = 0;
 let editingID = "";
@@ -174,12 +174,58 @@ async function loadOutput() {
   }
 }
 
-function fillChoices() {
+function fillChoices(selectedRepo = "", selectedRepository = "") {
   $("#repo").innerHTML = state.choices.repos.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`).join("");
+  if (selectedRepo) $("#repo").value = selectedRepo;
+  fillRepositories(selectedRepository);
   $("#environment-grid").innerHTML = state.choices.environments.map((value, index) => `<button type="button" class="environment-option${index === 0 ? " active" : ""}" data-environment="${escapeAttribute(value)}"><span>CONFIGURED</span><strong>${escapeText(value.toUpperCase())}</strong><small>Reusable runtime<br/>from zotui config</small></button>`).join("");
   $("#model-grid").innerHTML = state.choices.models.map((value, index) => `<button type="button" class="choice${index === 0 ? " active" : ""}" data-model="${escapeAttribute(value)}" role="option" aria-selected="${index === 0}"><strong>${escapeText(value)}</strong><small>CONFIGURED MODEL</small></button>`).join("");
 	$("#environment-label").textContent = (state.choices.environments[0] || "NO ENVIRONMENT").toUpperCase();
   bindChoiceButtons();
+}
+
+function fillRepositories(preferred = "") {
+  const connection = $("#repo").value;
+  const repositories = state.choices.repositories?.[connection] || [];
+  const select = $("#repository");
+  const manual = $("#repository-manual");
+  const label = $("#repository-label");
+  const hint = $("#repository-hint");
+
+  if (repositories.length) {
+    const options = repositories.length > 1 ? ['<option value="">Select a repository…</option>'] : [];
+    options.push(...repositories.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`));
+    if (preferred && !repositories.includes(preferred)) {
+      options.push(`<option value="${escapeAttribute(preferred)}">${escapeText(preferred)} (current)</option>`);
+    }
+    select.innerHTML = options.join("");
+    select.hidden = false;
+    select.disabled = false;
+    manual.hidden = true;
+    manual.disabled = true;
+    manual.value = "";
+    label.htmlFor = "repository";
+    select.value = preferred || (repositories.length === 1 ? repositories[0] : "");
+    hint.textContent = repositories.length === 1
+      ? `Selected automatically from ${connection}.`
+      : `Choose one of ${repositories.length} repositories available through ${connection}.`;
+    return;
+  }
+
+  select.innerHTML = "";
+  select.hidden = true;
+  select.disabled = true;
+  manual.hidden = false;
+  manual.disabled = !connection;
+  manual.value = preferred;
+  label.htmlFor = "repository-manual";
+  hint.textContent = connection
+    ? `No fixed repository list is configured for ${connection}; enter owner/name.`
+    : "Choose a repo connection first.";
+}
+
+function repositoryValue() {
+  return $("#repository").hidden ? $("#repository-manual").value : $("#repository").value;
 }
 
 function bindChoiceButtons() {
@@ -212,7 +258,6 @@ function openCreate() {
   $("#dialog-title").textContent = "Create ZOT worker_";
   $("#create-submit").textContent = "Create worker";
   $("#instance-name").value = "";
-  $("#repository").value = "";
   $("#objective").value = "";
   $("#max-iterations").value = "20";
   $("#model").value = state.choices.models[0] || "";
@@ -225,13 +270,11 @@ function openEdit() {
   const item = worker();
   if (!item) return;
   editingID = item.id;
-  fillChoices();
+  fillChoices(item.repo, item.repository);
   $("#dialog-kicker").textContent = `Update ${item.id} · history retained`;
   $("#dialog-title").textContent = "Edit ZOT worker_";
   $("#create-submit").textContent = "Save worker";
   $("#instance-name").value = item.name;
-  $("#repo").value = item.repo;
-  $("#repository").value = item.repository;
   $("#objective").value = item.mission;
   $("#max-iterations").value = item.maxIterations;
   $("#model").value = item.model;
@@ -248,7 +291,7 @@ async function saveWorker(event) {
   const payload = {
     name: $("#instance-name").value,
     repo: $("#repo").value,
-    repository: $("#repository").value,
+    repository: repositoryValue(),
     environment,
     model: $("#model").value,
     mission: $("#objective").value,
@@ -334,6 +377,7 @@ function escapeAttribute(value) { return escapeText(value); }
 
 $("#new-instance").addEventListener("click", openCreate);
 $("#edit-worker").addEventListener("click", openEdit);
+$("#repo").addEventListener("change", () => fillRepositories());
 $("#create-form").addEventListener("submit", saveWorker);
 $("#dialog-close").addEventListener("click", () => $("#create-dialog").close());
 $("#dialog-cancel").addEventListener("click", () => $("#create-dialog").close());

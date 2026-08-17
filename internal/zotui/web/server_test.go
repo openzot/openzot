@@ -31,12 +31,23 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	}
 	handler := web.New(app.New(cfg, st))
 
-	response := serve(handler, http.MethodGet, "/operations/instances.html", "")
+	response := serve(handler, http.MethodGet, "/", "")
+	if response.StatusCode != http.StatusTemporaryRedirect || response.Header.Get("Location") != "/workers" {
+		t.Fatalf("root route status=%d location=%q", response.StatusCode, response.Header.Get("Location"))
+	}
+	response.Body.Close()
+
+	response = serve(handler, http.MethodGet, "/workers", "")
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("Software Factory")) || bytes.Contains(body, []byte("const outputSets")) {
 		t.Fatalf("web app status=%d body=%q", response.StatusCode, body[:min(len(body), 200)])
 	}
+	response = serve(handler, http.MethodGet, "/operations/instances.html", "")
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("mockup path remains public: status=%d", response.StatusCode)
+	}
+	response.Body.Close()
 
 	payload := `{"name":"builder","repo":"acme","repository":"acme/api","environment":"go","mission":"ship it","maxIterations":8,"schedule":{"cron":"","timezone":"UTC","runtimeMinutes":0}}`
 	response = serve(handler, http.MethodPost, "/api/workers", payload)
@@ -53,6 +64,15 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	stateBody := read(response)
 	if response.StatusCode != http.StatusOK || !strings.Contains(stateBody, `"name":"builder"`) || !strings.Contains(stateBody, `"repos":["acme"]`) || !strings.Contains(stateBody, `"runs":[]`) {
 		t.Fatalf("state status=%d body=%s", response.StatusCode, stateBody)
+	}
+	var statePayload struct {
+		Choices app.Choices `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(stateBody), &statePayload); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if got := statePayload.Choices.Repositories["acme"]; len(got) != 1 || got[0] != "acme/api" {
+		t.Fatalf("repository choices did not reach the browser: %v", got)
 	}
 
 	runID, err := st.CreateRun(context.Background(), store.Run{WorkerID: created["id"], Mission: "ship it", Model: "glm", MaxIterations: 8})

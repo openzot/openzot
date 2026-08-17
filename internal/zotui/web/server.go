@@ -24,13 +24,10 @@ type Server struct{ app *app.App }
 func New(a *app.App) http.Handler {
 	s := &Server{app: a}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		http.Redirect(w, r, "/operations/instances.html", http.StatusTemporaryRedirect)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/workers", http.StatusTemporaryRedirect)
 	})
+	mux.HandleFunc("GET /workers", s.appShell)
 	mux.HandleFunc("GET /api/state", s.state)
 	mux.HandleFunc("POST /api/workers", s.createWorker)
 	mux.HandleFunc("PUT /api/workers/{id}", s.updateWorker)
@@ -40,11 +37,21 @@ func New(a *app.App) http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/output", s.runOutput)
 	assets, _ := fs.Sub(files, "assets")
 	static := noCache(http.FileServerFS(assets))
-	mux.Handle("GET /operations/", static)
 	mux.Handle("GET /global.css", static)
 	mux.Handle("GET /components.js", static)
 	mux.Handle("GET /app.js", static)
 	return mux
+}
+
+func (s *Server) appShell(w http.ResponseWriter, _ *http.Request) {
+	page, err := files.ReadFile("assets/operations/instances.html")
+	if err != nil {
+		http.Error(w, "command center unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(page)
 }
 
 // Serve runs until ctx is cancelled, then drains outstanding HTTP requests.
