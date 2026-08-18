@@ -54,7 +54,7 @@ func stopFrame() string {
 // successFrame records a successful outcome, which is the only way a run ends
 // cleanly: settlement is unconditional.
 func successFrame(summary string) string {
-	return toolFrame("done_1", "_success", fmt.Sprintf(`{"summary":%q}`, summary))
+	return toolFrame("done_1", "success", fmt.Sprintf(`{"summary":%q}`, summary))
 }
 
 // toolFrame requests a tool call.
@@ -199,7 +199,7 @@ func TestExecuteWithToolsRunsATool(t *testing.T) {
 func TestSettleModeIgnoresProse(t *testing.T) {
 	server := sseServer(t,
 		[]string{textFrame("All done, the task is completed."), stopFrame()},
-		[]string{toolFrame("call_1", "_success", `{"summary":"actually finished"}`)},
+		[]string{toolFrame("call_1", "success", `{"summary":"actually finished"}`)},
 	)
 
 	defer server.Close()
@@ -434,7 +434,7 @@ func TestTerminalToolsAreAlwaysOffered(t *testing.T) {
 		seen[name] = true
 	}
 
-	for _, want := range []string{"_success", "_failure"} {
+	for _, want := range []string{"success", "failure"} {
 		if !seen[want] {
 			t.Errorf("%s was not offered to the model; offered: %v", want, offered)
 		}

@@ -96,7 +96,7 @@ func plainCall(id, name, arguments string) string {
 }
 
 func plainSuccess(summary string) string {
-	return plainCall("done", "_success", fmt.Sprintf(`{"summary":%q}`, summary))
+	return plainCall("done", "success", fmt.Sprintf(`{"summary":%q}`, summary))
 }
 
 // capture runs a function with stdout redirected, returning what it printed.

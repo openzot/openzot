@@ -164,7 +164,7 @@ type Agent struct {
 	// before it is forced to stop.
 	MaxIterations int `yaml:"max_iterations"`
 	// MaxSettles bounds how many times the agent is nudged to record an outcome
-	// (call _success or _failure) before the run is surfaced as unsettled. This
+	// (call success or failure) before the run is surfaced as unsettled. This
 	// is "how hard we push the model to finish properly". Zero uses the built-in
 	// default.
 	MaxSettles int `yaml:"max_settles"`

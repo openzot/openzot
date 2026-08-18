@@ -48,8 +48,8 @@ agent:
   # by default (see below); this is not.
   max_iterations: 1000000
 
-  # A run ends only when the agent records an outcome, by calling the _success or
-  # _failure tool - never because its prose sounds finished. max_settles is how
+  # A run ends only when the agent records an outcome, by calling the success or
+  # failure tool - never because its prose sounds finished. max_settles is how
   # many times the agent is nudged to do so before the run is surfaced as
   # unsettled: how hard zot pushes the model to finish properly. Default 20.
   # max_settles: 20

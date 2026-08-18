@@ -64,8 +64,8 @@ const (
 // Terminal tool names. In settle mode the model ends a run by calling one of
 // these, which is unambiguous in a way prose never is.
 const (
-	SuccessTool = "_success"
-	FailureTool = "_failure"
+	SuccessTool = "success"
+	FailureTool = "failure"
 )
 
 // StopReason explains why a run ended.

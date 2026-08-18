@@ -94,7 +94,7 @@ image, see [docs/development.md](docs/development.md) and
 The harness is zot's own, in the [`agent`](agent) package:
 
 - `agent.ExecuteWithTools` runs the model in a loop - it calls tools, sees the
-  results, and goes again - until it records an outcome (`_success` / `_failure`)
+  results, and goes again - until it records an outcome (`success` / `failure`)
   or a budget or guard stops it.
 - `agent.DefaultTools()` gives it the toolbox: `read`, `write`, `list` and
   `shell` for the work, plus `plan` and `progress` to structure and narrate it.

@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] - 2026-08-18
+
+### Fixed
+
+- **Lifecycle tool names now use one convention.** The terminal tools are `success` and `failure`, matching the unprefixed `plan` and `progress` names; mixing underscored and plain names caused models to call nonexistent `_progress` and `success` tools during otherwise successful runs.
+
 ## [0.11.0] - 2026-08-18
 
 ### Added

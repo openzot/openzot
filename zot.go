@@ -67,7 +67,7 @@ Operating rules:
 - Call "progress" as you complete steps.
 - Act, do not narrate. The deliverable is the changed working tree, not an explanation of it; there is no reader to address. Do not pause to summarise, interpret, or analyse tool output - keep working, and use "progress" for status.
 - Make reasonable assumptions instead of stopping. Do not ask for clarification.
-- The task is not finished until you record an outcome: call "_success" with a summary when the objective is met, or "_failure" with the reason when it genuinely cannot be. Do not simply stop.`
+- The task is not finished until you record an outcome: call "success" with a summary when the objective is met, or "failure" with the reason when it genuinely cannot be. Do not simply stop.`
 
 // taskHeading introduces the task inside the instructions. The task lives in the
 // system prompt rather than as a user message so it survives compaction: a user

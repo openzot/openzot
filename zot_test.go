@@ -154,7 +154,7 @@ func TestCredentialResolutionLayers(t *testing.T) {
 				w.Header().Set("Content-Type", "text/event-stream")
 
 				fmt.Fprintf(w, "data: %s\n\n",
-					`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`)
+					`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 				fmt.Fprint(w, "data: [DONE]\n\n")
 			}))
@@ -305,7 +305,7 @@ func TestRunEndToEnd(t *testing.T) {
 		frames := [][]string{
 			{`{"choices":[{"delta":{"content":"working on it"}}]}`,
 				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
-			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`},
+			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`},
 		}
 
 		index := turn
@@ -422,7 +422,7 @@ func stubProvider(t *testing.T) config.Config {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -735,8 +735,8 @@ func TestTaskGoesIntoTheInstructions(t *testing.T) {
 func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
 	real := map[string]bool{
 		// the terminal tools the loop injects in settle mode
-		"_success": true,
-		"_failure": true,
+		"success": true,
+		"failure": true,
 	}
 
 	for name := range agent.DefaultTools() {
@@ -758,7 +758,7 @@ func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
 	}
 
 	// and positively assert the tools the instructions promises are all present
-	for _, want := range []string{"plan", "progress", "read", "write", "list", "shell", "_success", "_failure"} {
+	for _, want := range []string{"plan", "progress", "read", "write", "list", "shell", "success", "failure"} {
 		if !real[want] {
 			t.Errorf("the instructions relies on %q but it is not a real tool", want)
 		}

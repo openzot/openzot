@@ -146,7 +146,7 @@ func TestRunAgentRelaysEveryEventAndThenDone(t *testing.T) {
 			`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
 		},
 		[]string{
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`,
 		},
 	)
 

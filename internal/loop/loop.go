@@ -535,7 +535,7 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		}
 
 		// The model produced content but did not act. In settle mode that is not an
-		// ending: nudge it toward _success / _failure, up to max_settles.
+		// ending: nudge it toward success / failure, up to maxSettles.
 
 		if e.settleMode() {
 			if budget.Settles >= e.maxSettles {
