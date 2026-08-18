@@ -219,7 +219,7 @@ Vercel documents access-token and OIDC authentication in its
 
 When `image` is omitted, Zotui omits the image selector entirely and Vercel uses
 its managed default image. Zotui does not send the legacy `runtime` property to
-the `/v3/sandboxes` endpoint. The managed environment provides a full shell,
+the `/v4/sandboxes` endpoint. The managed environment provides a full shell,
 Git, and curl without requiring this project to publish a container image;
 Zotui then uploads its embedded worker.
 

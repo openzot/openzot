@@ -32,18 +32,18 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 		}
 
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v3/sandboxes":
+		case r.Method == http.MethodPost && r.URL.Path == "/v4/sandboxes":
 			decodeJSON(t, r.Body, &createBody)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"sandbox":{"name":"zotui-test"},"session":{"id":"sess_123","cwd":"/vercel/sandbox"},"routes":[]}`)
+			_, _ = io.WriteString(w, `{"sandbox":{"name":"zotui-test"},"session":{"id":"sess_123","cwd":"/home/vercel/workspace"},"routes":[]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v2/sandboxes/sessions/sess_123/fs/write":
-			if got := r.Header.Get("x-cwd"); got != "/vercel/sandbox" {
+			if got := r.Header.Get("x-cwd"); got != "/" {
 				t.Errorf("config extraction cwd = %q", got)
 			}
 			installed := readTarFiles(t, r.Body)
-			installedConfig = installed[".zot-home/.config/zot/config.json"].data
-			installedWorker = installed[".zot-worker/zot"].data
-			installedWorkerMode = installed[".zot-worker/zot"].mode
+			installedConfig = installed[configArchive].data
+			installedWorker = installed[workerArchive].data
+			installedWorkerMode = installed[workerArchive].mode
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/v2/sandboxes/sessions/sess_123/cmd":
@@ -89,7 +89,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 		t.Fatalf("default sandbox sent a custom image: %#v", createBody)
 	}
 	if _, present := createBody["runtime"]; present {
-		t.Fatalf("v3 sandbox request sent unsupported runtime property: %#v", createBody)
+		t.Fatalf("v4 sandbox request sent unsupported runtime property: %#v", createBody)
 	}
 	if createBody["timeout"] != float64((45 * time.Minute).Milliseconds()) {
 		t.Fatalf("default timeout = %#v", createBody["timeout"])
@@ -99,7 +99,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 		t.Fatalf("source = %#v", source)
 	}
 	env, _ := createBody["env"].(map[string]any)
-	if env["GOFLAGS"] != "-mod=mod" || env["ZOT_CONFIG"] != "/vercel/sandbox/.zot-home/.config/zot/config.json" {
+	if env["GOFLAGS"] != "-mod=mod" || env["ZOT_CONFIG"] != configPath {
 		t.Fatalf("sandbox env = %#v", env)
 	}
 	var configBody struct {
@@ -127,7 +127,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 	if output.String() != "\x1b[32mworking\x1b[0m\nwarning\n" {
 		t.Fatalf("raw output = %q", output.String())
 	}
-	if commandBody["command"] != "/vercel/sandbox/.zot-worker/zot" || commandBody["cwd"] != "/vercel/sandbox/openzot" || commandBody["wait"] != true || commandBody["logs"] != true {
+	if commandBody["command"] != workerPath || commandBody["cwd"] != "/home/vercel/workspace/openzot" || commandBody["wait"] != true || commandBody["logs"] != true {
 		t.Fatalf("command body = %#v", commandBody)
 	}
 	if err := sandbox.Destroy(context.Background()); err != nil {
@@ -179,7 +179,7 @@ func TestCreateStopsSandboxWhenConfigurationUploadFails(t *testing.T) {
 	stopped := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v3/sandboxes":
+		case "/v4/sandboxes":
 			var createBody map[string]any
 			decodeJSON(t, r.Body, &createBody)
 			if createBody["image"] != "go-environment:latest" {
@@ -211,6 +211,33 @@ func TestCreateStopsSandboxWhenConfigurationUploadFails(t *testing.T) {
 	}
 	if !stopped {
 		t.Fatal("failed sandbox was not stopped")
+	}
+}
+
+func TestCreateRejectsMissingSessionCWDAndStopsSandbox(t *testing.T) {
+	stopped := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v4/sandboxes":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"sandbox":{"name":"zotui-test"},"session":{"id":"sess_no_cwd","cwd":""}}`)
+		case "/v2/sandboxes/sessions/sess_no_cwd/stop":
+			stopped = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	driver := newDriver("token", "team", "project", server.URL, server.Client())
+	_, err := driver.Create(context.Background(), validSpec())
+	if err == nil || !strings.Contains(err.Error(), "absolute session cwd") {
+		t.Fatalf("Create error = %v", err)
+	}
+	if !stopped {
+		t.Fatal("sandbox without a cwd was not stopped")
 	}
 }
 

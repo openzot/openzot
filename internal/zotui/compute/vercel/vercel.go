@@ -25,11 +25,11 @@ import (
 
 const (
 	defaultBaseURL = "https://vercel.com/api"
-	workspace      = "/vercel/sandbox"
-	configPath     = workspace + "/.zot-home/.config/zot/config.json"
-	configArchive  = ".zot-home/.config/zot/config.json"
-	workerPath     = workspace + "/.zot-worker/zot"
-	workerArchive  = ".zot-worker/zot"
+	configPath     = "/tmp/zot-home/.config/zot/config.json"
+	configArchive  = "tmp/zot-home/.config/zot/config.json"
+	workerPath     = "/tmp/zotui-worker/zot"
+	workerArchive  = "tmp/zotui-worker/zot"
+	extractRoot    = "/"
 	defaultTimeout = 45 * time.Minute
 )
 
@@ -78,7 +78,7 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 	}
 
 	env := cloneEnv(spec.Env)
-	env["HOME"] = workspace + "/.zot-home"
+	env["HOME"] = "/tmp/zot-home"
 	env["XDG_CACHE_HOME"] = env["HOME"] + "/.cache"
 	env["XDG_CONFIG_HOME"] = env["HOME"] + "/.config"
 	env["XDG_DATA_HOME"] = env["HOME"] + "/.local/share"
@@ -95,20 +95,22 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 		}
 	}
 	var created createResponse
-	if err := d.jsonRequest(ctx, http.MethodPost, "/v3/sandboxes", request, &created); err != nil {
+	if err := d.jsonRequest(ctx, http.MethodPost, "/v4/sandboxes", request, &created); err != nil {
 		return nil, fmt.Errorf("vercel: create sandbox: %w", err)
 	}
 	if created.Sandbox.Name == "" || created.Session.ID == "" {
 		return nil, errors.New("vercel: create sandbox returned no sandbox name or session ID")
 	}
-	if created.Session.CWD == "" {
-		created.Session.CWD = workspace
+	s := &sandbox{driver: d, name: created.Sandbox.Name, sessionID: created.Session.ID}
+	if !path.IsAbs(created.Session.CWD) {
+		s.cleanup()
+		return nil, errors.New("vercel: create sandbox returned no absolute session cwd")
 	}
 	cwd := created.Session.CWD
 	if spec.Source.Directory != "" {
 		cwd = path.Join(cwd, spec.Source.Directory)
 	}
-	s := &sandbox{driver: d, name: created.Sandbox.Name, sessionID: created.Session.ID, cwd: cwd}
+	s.cwd = cwd
 
 	config, err := compute.EncodeZotConfig(spec)
 	if err != nil {
@@ -224,7 +226,7 @@ func (s *sandbox) installPayload(ctx context.Context, config, worker []byte) err
 
 	path := "/v2/sandboxes/sessions/" + url.PathEscape(s.sessionID) + "/fs/write"
 	response, err := s.driver.request(ctx, http.MethodPost, path, &archive, map[string]string{
-		"Content-Type": "application/gzip", "x-cwd": workspace,
+		"Content-Type": "application/gzip", "x-cwd": extractRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("vercel: install runtime payload: %w", err)
