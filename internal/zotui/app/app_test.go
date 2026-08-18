@@ -191,14 +191,14 @@ func TestLocalRepoResolvesDockerCompute(t *testing.T) {
 		Providers: map[string]config.Provider{"zai": {APIKey: "secret", Models: map[string]config.Model{
 			"local": {Model: "glm"},
 		}}},
-		Environments: map[string]config.Environment{"dev": {Compute: "development", Provider: "zai", Model: "local", Image: "golang:1.26.5-bookworm"}},
+		Environments: map[string]config.Environment{"dev": {Compute: "development", Provider: "zai", Model: "local", Image: "golang:1.26.6-bookworm"}},
 	}
 	a := app.New(cfg, openStore(t))
 	provider, spec, err := a.Resolve(dispatch.Execution{Repo: "checkout", Repository: "openzot/openzot", Environment: "dev", Model: "local", MaxIterations: 27})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if provider.Type() != "docker" || spec.Image != "golang:1.26.5-bookworm" || spec.MaxIterations != 27 {
+	if provider.Type() != "docker" || spec.Image != "golang:1.26.6-bookworm" || spec.MaxIterations != 27 {
 		t.Fatalf("resolved compute = %s, %+v", provider.Type(), spec)
 	}
 	if spec.Source.LocalPath != "/workspaces/openzot" || spec.Source.URL != "" {

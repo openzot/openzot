@@ -25,6 +25,8 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- **Release builds now require Go 1.26.6.** The original 0.11.0 artifacts used Go 1.26.5, whose standard library has six vulnerabilities reachable from Zot; the corrected release is rebuilt with the patched toolchain.
+- **Automatic releases now wait for CI to pass on the exact commit being tagged.** The release workflow independently verifies that successful CI run before publishing, so a version bump cannot publish binaries or a container from a commit that failed its vulnerability, test, coverage, or build gates.
 - **The zotui worker form now presents repositories from the selected code source.** A sole configured repository is selected automatically, multiple repositories are offered as a dropdown, and connections without a fixed list retain an explicitly explained `owner/name` field instead of making every repository look like unvalidated free text.
 - **The browser command center now has a product route at `/workers`.** `/` redirects there, while the mockup artifact path `/operations/instances.html` is no longer public.
 - **New zotui workers now inherit zot's 1,000,000-iteration default.** The browser, application validation, and persistence path no longer carry conflicting 20-iteration scaffold fallbacks.

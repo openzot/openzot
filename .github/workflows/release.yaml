@@ -13,6 +13,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 permissions:
+  actions: read
   contents: write
   packages: write
 
@@ -24,6 +25,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify CI passed for tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT="$(git rev-parse HEAD)"
+          PASSED="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yaml/runs" \
+            -f head_sha="${COMMIT}" \
+            -f event=push \
+            -f status=completed \
+            --jq 'any(.workflow_runs[]; .conclusion == "success")')"
+          if [ "${PASSED}" != "true" ]; then
+            echo "::error::commit ${COMMIT} has no successful completed CI push run"
+            exit 1
+          fi
 
       - name: Validate tag, VERSION and CHANGELOG
         run: |

@@ -221,7 +221,7 @@ example, a Go environment can use the upstream Go image directly:
 ```yaml
 environments:
   go-development:
-    image: golang:1.26.5-bookworm
+    image: golang:1.26.6-bookworm
 ```
 
 The command center transfers the matching Linux Zot executable into each new

@@ -87,7 +87,7 @@ environments:
   #   provider: zai
   #   model: glm-5.2
   #   # Optional Docker override; Zotui installs Zot at run time.
-  #   # image: golang:1.26.5-bookworm
+  #   # image: golang:1.26.6-bookworm
   #   repositories:
   #     - development/openzot/openzot
   # vercel-development:

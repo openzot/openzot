@@ -183,7 +183,7 @@ environments:
     compute: development
     provider: vercel
     model: gateway
-    image: golang:1.26.5-bookworm
+    image: golang:1.26.6-bookworm
 ```
 
 `make dev-ui` builds and embeds release-mode Linux worker binaries automatically.
@@ -359,7 +359,7 @@ environments:
     compute: development
     provider: vercel
     model: gateway
-    image: golang:1.26.5-bookworm
+    image: golang:1.26.6-bookworm
     env:
       GOFLAGS: -mod=mod
     repositories:

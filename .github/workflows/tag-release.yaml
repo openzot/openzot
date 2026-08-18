@@ -1,18 +1,24 @@
-# Auto-tag when merging to main.
+# Auto-tag a main commit after its CI workflow succeeds.
 #
-# Reads the version from the VERSION file and, if the matching tag does not
-# already exist, creates and pushes it, then dispatches the Release workflow
-# (which builds and publishes the binaries). The dispatch is required because
-# tags pushed with GITHUB_TOKEN do not trigger other workflows.
+# Reads the version from the tested commit and, if the matching tag does not
+# already exist, creates and pushes it, then dispatches the Release workflow.
+# The dispatch is required because tags pushed with GITHUB_TOKEN do not trigger
+# other workflows.
 name: Tag Release
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
 
 jobs:
   tag:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,6 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           lfs: true
 
