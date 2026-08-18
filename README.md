@@ -47,6 +47,8 @@ the worker its mission, then launch runs on demand or on a schedule and follow
 their output and history from the browser. Workers can run in disposable local
 Docker containers or on configured remote compute.
 
+https://github.com/user-attachments/assets/304b4f32-c634-4936-a1ec-66bdd792bd66
+
 zotui keeps the same autonomy boundary: it dispatches and observes complete
 runs; it does not turn zot into a chat-driven coding agent. See
 [Configuring zotui](docs/zotui-configuration.md) for setup and deployment.
