@@ -103,6 +103,7 @@ jobs:
           for cmd in zot zotui; do
             echo "Building ${cmd}..."
             go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/${cmd}${EXT}" "./cmd/${cmd}"
+            test -s "${OUTDIR}/${cmd}${EXT}"
           done
 
           cp configs/zot.example.yaml "${OUTDIR}/zot.example.yaml"

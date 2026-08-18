@@ -160,12 +160,15 @@ jobs:
             exit 1
           fi
 
-          # The standalone image needs a usable POSIX shell and writable
+          # The image ships both commands, plus a usable POSIX shell and writable
           # workspace as the unprivileged image user. Zotui environments are
           # separate images into which the server deploys its worker binary.
           docker run --rm --entrypoint sh openzot/zot:ci -c '
             set -eu
             test "$(id -u)" = "10001"
+            test -x /usr/local/bin/zot
+            test -x /usr/local/bin/zotui
+            zotui config path | grep -q "/home/zot/.config/zotui/config.yaml"
             ! command -v git >/dev/null
             ! command -v rg >/dev/null
             test -f /usr/local/share/zot/zot.example.yaml

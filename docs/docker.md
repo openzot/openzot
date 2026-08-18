@@ -22,14 +22,14 @@ docker pull ghcr.io/openzot/openzot:latest
 | Registry | `ghcr.io/openzot/openzot` |
 | Tags | `vX.Y.Z`, `X.Y.Z`, `X.Y`, and `latest` for stable releases. Prereleases (`v0.5.0-beta.1`) publish only their exact tags and never move `latest`. |
 | Platforms | `linux/amd64`, `linux/arm64` |
-| Entrypoint | `zot` - arguments after the image name are zot's own |
+| Commands | `zot` and `zotui`; the default entrypoint is `zot` |
 | Base | `alpine:3.22` plus TLS roots and timezone data |
 
-The published image is deliberately the pure runtime: the Zot executable and a
-POSIX shell, without Git, ripgrep, compilers, or language toolchains. It is useful
-for a mounted workspace whose task needs no extra executable. Zotui does not
-require this image: it deploys its embedded Zot worker into whichever toolchain
-image an environment selects.
+The published image is deliberately the pure runtime: the Zot and Zotui
+executables and a POSIX shell, without Git, ripgrep, compilers, or language
+toolchains. It is useful for a mounted workspace whose task needs no extra
+executable, or as a Zotui command center using remote compute. Zotui deploys its
+embedded Zot worker into whichever toolchain image an environment selects.
 
 ### Layout
 
@@ -39,10 +39,31 @@ image an environment selects.
 | `/home/zot/.config/zot/config.yaml` | Config file, pointed at by `ZOT_CONFIG`. Absent by default - zot runs on defaults plus env vars. |
 | `/usr/local/share/zot/zot.example.yaml` | The documented example config, for copying out. |
 | `/usr/local/bin/zot` | The binary. |
+| `/usr/local/bin/zotui` | The browser command-center binary. |
 
 `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
 `XDG_RUNTIME_DIR` are all set under `/home/zot`. The image user is `zot`
 (uid/gid 10001).
+
+## Running Zotui
+
+Select `zotui` as the entrypoint, publish port 8080, and persist its config and
+state directories:
+
+```bash
+docker run --rm \
+  --entrypoint zotui \
+  --publish 8080:8080 \
+  --env-file ./zotui.env \
+  --volume "$HOME/.config/zotui":/home/zot/.config/zotui \
+  --volume zotui-state:/home/zot/.local/state/zotui \
+  ghcr.io/openzot/openzot:latest
+```
+
+The image sets `ZOTUI_ADDR=0.0.0.0:8080`. Its lean runtime does not include a
+Docker client, so use a configured remote compute environment when running
+Zotui from this image. Local Docker compute remains intended for a host install
+or a purpose-built deployment that supplies Docker explicitly.
 
 ## Running a task
 

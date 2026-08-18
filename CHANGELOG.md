@@ -6,6 +6,7 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ### Fixed
 
+- **Every release format now ships both commands.** Platform archives already bundle `zot` and `zotui`; the published container image now does too, with `zot` remaining the default entrypoint and CI asserting that both executables are present.
 - **Lifecycle tool names now use one convention.** The terminal tools are `success` and `failure`, matching the unprefixed `plan` and `progress` names; mixing underscored and plain names caused models to call nonexistent `_progress` and `success` tools during otherwise successful runs.
 
 ## [0.11.0] - 2026-08-18
