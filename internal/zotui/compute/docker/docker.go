@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	workspace  = "/workspace"
-	configPath = "/tmp/zot.yaml"
-	workerPath = "/tmp/zotui-worker/zot"
+	workspace    = "/workspace"
+	configPath   = "/tmp/zot.yaml"
+	workerPath   = "/tmp/zotui-worker/zot"
+	defaultImage = "mcr.microsoft.com/devcontainers/base:bookworm"
 )
 
 type commandRunner interface {
@@ -92,7 +93,11 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 		}
 		args = append(args, "--mount", value)
 	}
-	args = append(args, "--entrypoint", "sh", spec.Image, "-c",
+	image := strings.TrimSpace(spec.Image)
+	if image == "" {
+		image = defaultImage
+	}
+	args = append(args, "--entrypoint", "sh", image, "-c",
 		`mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME"; trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $!; done`)
 
 	var output bytes.Buffer
@@ -172,9 +177,6 @@ func (s *sandbox) cleanup() {
 }
 
 func validateSpec(spec compute.Spec) error {
-	if strings.TrimSpace(spec.Image) == "" {
-		return fmt.Errorf("docker: image is required")
-	}
 	if strings.TrimSpace(spec.Model.Provider) == "" || strings.TrimSpace(spec.Model.Model) == "" {
 		return fmt.Errorf("docker: model provider and name are required")
 	}

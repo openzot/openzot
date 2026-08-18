@@ -35,8 +35,8 @@ type Config struct {
 	// worker form.
 	Providers map[string]Provider `yaml:"providers"`
 
-	// Environments bind compute to a base image and env vars - the blueprint a
-	// run's sandbox is created from.
+	// Environments bind compute to runtime settings - the blueprint a run's
+	// sandbox is created from. Image is an optional compute-specific override.
 	Environments map[string]Environment `yaml:"environments"`
 
 	// Store selects where workers, runs, and output are persisted.
@@ -96,10 +96,9 @@ type Model struct {
 	Model string `yaml:"model"`
 }
 
-// Environment binds compute to a base image and a set of environment variables -
-// the reusable blueprint a run's sandbox is created from: define once, spawn many
-// ephemeral sandboxes. Model is the default model for workers on this environment;
-// a worker can override it.
+// Environment binds compute to runtime settings - the reusable blueprint a run's
+// sandbox is created from: define once, spawn many ephemeral sandboxes. Model is
+// the default model for workers on this environment; a worker can override it.
 //
 // Repositories is an OPTIONAL per-environment lockdown: when set, only these
 // repositories may run on this environment, additional to any per-repo lockdown.
@@ -109,7 +108,7 @@ type Environment struct {
 	Compute      string            `yaml:"compute"`      // references a key in Compute
 	Provider     string            `yaml:"provider"`     // default inference connection
 	Model        string            `yaml:"model"`        // default model for Provider
-	Image        string            `yaml:"image"`        // environment tools; zotui deploys Zot
+	Image        string            `yaml:"image"`        // optional compute-specific override; omit for standard runtime
 	Env          map[string]string `yaml:"env"`          // environment variables
 	Repositories []string          `yaml:"repositories"` // optional per-env lockdown
 }

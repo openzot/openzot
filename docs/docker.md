@@ -213,9 +213,10 @@ USER zot
 Pin the base tag rather than tracking `latest`, so an agent's behaviour does not
 change under a build you did not intend.
 
-Zotui environments work differently: start from the image that already has the
-project's tools, and do not add Zot to it. For example, a Go environment can use
-the upstream Go image directly:
+Zotui environments work differently. With no `image`, Zotui starts its small,
+version-pinned standard environment containing a shell, Git, and curl, then
+deploys Zot into it. Set `image` when a project needs a different toolchain; for
+example, a Go environment can use the upstream Go image directly:
 
 ```yaml
 environments:

@@ -43,8 +43,8 @@ repos:
   #     - openzot/openzot
 
 # Compute is where computers and sandboxes come from. Docker provides local
-# ephemeral compute. Vercel boots an ephemeral Vercel Sandbox from an image in
-# the project's Vercel Container Registry and checks out a remote repo into it.
+# ephemeral compute. Vercel boots an ephemeral Vercel Sandbox and checks out a
+# remote repo into it.
 compute:
   local:
     type: docker
@@ -79,32 +79,33 @@ providers:
       sonnet:
         model: claude-5-sonnet
 
-# Environments bind compute to a base image and env vars - the reusable blueprint
-# a run's sandbox is created from: define once, spawn many ephemeral sandboxes.
+# Environments bind compute to runtime settings - the reusable blueprint a run's
+# sandbox is created from: define once, spawn many ephemeral sandboxes. Omit
+# `image` for Zotui's standard environment, or set it as a compute-specific
+# custom-image override.
 # `provider` and `model` are the defaults for workers on this environment.
 environments:
   # local-development:
   #   compute: local
   #   provider: zai
   #   model: glm-5.2
-  #   # Environment image: toolchain only. Zotui installs Zot at run time.
-  #   image: golang:1.26.5-bookworm
+  #   # Optional Docker override; Zotui installs Zot at run time.
+  #   # image: golang:1.26.5-bookworm
   #   repositories:
   #     - development/openzot/openzot
   # vercel-development:
   #   compute: vercel
   #   provider: zai
   #   model: glm-5.2
-  #   # Custom toolchain images must be pushed to this project's Vercel Container
-  #   # Registry. Zotui installs its embedded Zot worker after creating the sandbox.
-  #   image: go-environment:latest
+  #   # Optional Vercel override; it must be in this project's Vercel Container
+  #   # Registry. With no image, Zotui uses Vercel's standard built-in runtime.
+  #   # image: go-environment:latest
   #   repositories:
   #     - public/openzot/openzot
   go-ubuntu:
     compute: cf
     provider: zai
     model: glm-5.2
-    image: ghcr.io/acme/go-environment:latest # environment tools; Zot is deployed by zotui
     env:
       GOFLAGS: -mod=mod
     # Optional per-environment lockdown: restrict this environment to specific

@@ -171,8 +171,10 @@ compute:
     type: docker
 ```
 
-An environment image supplies the project toolchain; Zotui supplies Zot. For
-example, local Go development can use the upstream image directly:
+When `image` is omitted, Docker uses Zotui's standard, version-pinned Microsoft
+Dev Containers base. It is intentionally small and includes a shell, Git, and
+curl. Zotui supplies Zot separately. Set `image` only when the project needs a
+different toolchain; for example:
 
 ```yaml
 environments:
@@ -213,10 +215,16 @@ the Hobby-plan maximum; use a longer value only when the Vercel plan permits it.
 Vercel documents access-token and OIDC authentication in its
 [Sandbox guide](https://vercel.com/docs/sandbox).
 
-#### The environment image
+#### Standard runtime and optional custom image
 
-Vercel Sandbox custom images come from the project-scoped Vercel Container
-Registry (VCR). The image must contain:
+When `image` is omitted, Zotui requests Vercel's built-in `node24` runtime. That
+runtime provides a full shell, Git, and curl without requiring this project to
+publish a container image. Zotui then uploads its embedded worker.
+
+An explicit `image` is an override. Vercel Sandbox custom images must come from
+the project-scoped Vercel Container Registry (VCR), so an arbitrary Docker Hub,
+GHCR, or MCR reference cannot be shared with Docker compute. A custom image must
+contain:
 
 - Git and a shell;
 - the language toolchains and utilities the worker is expected to use.
@@ -361,7 +369,9 @@ environments:
 - `provider` references a key under `providers`.
 - `model` is the default built-in or custom model for that provider; the worker
   may select another provider/model pair.
-- `image` must exist in the selected compute provider.
+- `image` is optional. Omit it for Zotui's standard environment; set it to an
+  image understood by the selected compute provider when a custom toolchain is
+  needed (a Docker registry reference for Docker, or a VCR image for Vercel).
 - `env` becomes the sandbox's baseline environment.
 - `repositories` is an optional allowlist. Each entry is
   `repo-connection/owner/name`, not just `owner/name`.
@@ -415,7 +425,6 @@ environments:
     compute: development
     provider: vercel
     model: gateway
-    image: golang:1.26.5-bookworm
     env:
       GOFLAGS: -mod=mod
     repositories:
@@ -466,7 +475,6 @@ environments:
     compute: vercel
     provider: vercel
     model: gateway
-    image: go-environment:latest
     repositories:
       - public/openzot/openzot
 
@@ -494,11 +502,13 @@ names.
 A local checkout cannot be mounted into a remote sandbox. Select a Docker
 environment or configure a remote GitHub repo connection.
 
-### Vercel reports an unknown image
+### Vercel reports an unknown or invalid image
 
-Confirm that the image was pushed to the same Vercel project named by
+Remove `image` to use Zotui's standard Vercel runtime. If a custom toolchain is
+intentional, confirm that it was pushed to the same Vercel project named by
 `project_id`, then check the project's Images view for the repository and tag.
-Use the fully-qualified VCR path temporarily if the short name is ambiguous.
+Vercel does not accept an arbitrary external registry reference here. Use the
+fully-qualified VCR path temporarily if the short name is ambiguous.
 
 ### A run stops around its configured timeout
 

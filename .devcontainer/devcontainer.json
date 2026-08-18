@@ -1,13 +1,10 @@
 {
   "name": "openzot",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "..",
-    "args": {
-      "GO_VERSION": "1.26.5"
-    }
-  },
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
   "features": {
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.26.5"
+    },
     "ghcr.io/devcontainers/features/docker-in-docker:4": {},
     "ghcr.io/devcontainers/features/git-lfs:1": {}
   },

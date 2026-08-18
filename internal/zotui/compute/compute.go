@@ -24,8 +24,8 @@ type Spec struct {
 }
 
 // Worker is the Zot executable the command center deploys into a sandbox.
-// Environment images provide tools and dependencies; they do not need to carry
-// a particular Zot release themselves.
+// Sandbox environments provide tools and dependencies; they do not need to
+// carry a particular Zot release themselves.
 type Worker struct {
 	Platform string
 	Data     []byte

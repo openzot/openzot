@@ -21,7 +21,6 @@ environments:
     compute: development
     provider: zai
     model: glm-5.2
-    image: golang:1.26.5-bookworm
     env:
       GOFLAGS: -mod=mod
     repositories:

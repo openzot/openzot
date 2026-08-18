@@ -31,6 +31,7 @@ const (
 	workerPath     = workspace + "/.zot-worker/zot"
 	workerArchive  = ".zot-worker/zot"
 	defaultTimeout = 45 * time.Minute
+	defaultRuntime = "node24"
 )
 
 // Driver creates ephemeral Vercel Sandbox sessions.
@@ -85,7 +86,11 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 	env["XDG_STATE_HOME"] = env["HOME"] + "/.local/state"
 	env["ZOT_CONFIG"] = configPath
 
-	request := createRequest{Name: name, ProjectID: d.projectID, Image: spec.Image,
+	runtime := ""
+	if strings.TrimSpace(spec.Image) == "" {
+		runtime = defaultRuntime
+	}
+	request := createRequest{Name: name, ProjectID: d.projectID, Image: strings.TrimSpace(spec.Image), Runtime: runtime,
 		Persistent: false, Timeout: d.timeout.Milliseconds(), Env: env}
 	if spec.Source.URL != "" {
 		request.Source = &gitSource{Type: "git", URL: spec.Source.URL, Depth: 1}
@@ -138,9 +143,6 @@ func (d *Driver) validate(spec compute.Spec) error {
 	if d.timeout <= 0 {
 		return errors.New("vercel: timeout must be a positive duration")
 	}
-	if strings.TrimSpace(spec.Image) == "" {
-		return errors.New("vercel: image is required")
-	}
 	if strings.TrimSpace(spec.Model.Provider) == "" || strings.TrimSpace(spec.Model.Model) == "" {
 		return errors.New("vercel: model provider and name are required")
 	}
@@ -166,7 +168,8 @@ func (d *Driver) validate(spec compute.Spec) error {
 type createRequest struct {
 	Name       string            `json:"name"`
 	ProjectID  string            `json:"projectId"`
-	Image      string            `json:"image"`
+	Image      string            `json:"image,omitempty"`
+	Runtime    string            `json:"runtime,omitempty"`
 	Persistent bool              `json:"persistent"`
 	Timeout    int64             `json:"timeout"`
 	Env        map[string]string `json:"env"`

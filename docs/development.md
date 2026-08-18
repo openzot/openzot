@@ -22,12 +22,15 @@ and `make cross GOOS=… GOARCH=…` are also available.
 
 ## Development container
 
-The repository includes a standard [Dev Container](https://containers.dev/)
-under [`.devcontainer/`](../.devcontainer/). Open the checkout in a compatible
-editor and choose **Reopen in Container**. It provides the pinned Go toolchain,
-Git plus the official Git LFS Dev Container Feature, Make, ripgrep, SQLite, and
-Docker-in-Docker. Go's build and module caches, Docker data, and zotui's SQLite
-state live in named volumes, so rebuilding the container does not throw them away.
+The repository uses Microsoft's prebuilt
+[Dev Container](https://containers.dev/) `base:bookworm` image directly from
+[`.devcontainer/`](../.devcontainer/), the same default base used by local ZotUI
+workers. There is no project-specific development Dockerfile to publish. Open
+the checkout in a compatible editor and choose **Reopen in Container**. Standard
+features add the pinned Go toolchain, Git LFS, and Docker-in-Docker; the base
+provides Git and curl. Go's build and module caches, Docker data, and zotui's
+SQLite state live in named volumes, so rebuilding the container does not throw
+them away.
 
 Once the container is ready:
 

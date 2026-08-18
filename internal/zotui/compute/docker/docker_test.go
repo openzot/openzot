@@ -48,7 +48,6 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 	runner := &fakeRunner{responses: []response{{}, {}, {}, {}, {code: 7, output: "worker failed\n"}, {}}}
 	driver := newDriver(runner)
 	sandbox, err := driver.Create(context.Background(), compute.Spec{
-		Image:         "golang:1.26.5-bookworm",
 		Env:           map[string]string{"GOFLAGS": "-mod=mod"},
 		Mounts:        []compute.Mount{{Source: "/src/openzot", Target: "/workspace"}},
 		Worker:        compute.Worker{Platform: "linux/amd64", Data: []byte("deployed-zot-binary")},
@@ -62,7 +61,7 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 		t.Fatalf("Type = %q", driver.Type())
 	}
 	create := strings.Join(runner.calls[0].args, " ")
-	for _, want := range []string{"create --name zotui-", "--workdir /workspace", "--env GOFLAGS=-mod=mod", "--mount type=bind,source=/src/openzot,target=/workspace", "--entrypoint sh golang:1.26.5-bookworm"} {
+	for _, want := range []string{"create --name zotui-", "--workdir /workspace", "--env GOFLAGS=-mod=mod", "--mount type=bind,source=/src/openzot,target=/workspace", "--entrypoint sh " + defaultImage} {
 		if !strings.Contains(create, want) {
 			t.Errorf("docker create does not contain %q: %s", want, create)
 		}
@@ -123,6 +122,9 @@ func TestCreateCleansUpAfterStartFailure(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot start") {
 		t.Fatalf("Create error = %v", err)
+	}
+	if !slices.Contains(runner.calls[0].args, "image") || slices.Contains(runner.calls[0].args, defaultImage) {
+		t.Fatalf("custom image did not override default: %v", runner.calls[0].args)
 	}
 	if got := runner.calls[len(runner.calls)-1].args; got[0] != "rm" || got[1] != "--force" {
 		t.Fatalf("failed container was not cleaned up: %v", got)

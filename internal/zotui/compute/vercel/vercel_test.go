@@ -65,8 +65,7 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 
 	driver := newDriver("sandbox-token", "team_123", "prj_123", server.URL, server.Client())
 	sandbox, err := driver.Create(context.Background(), compute.Spec{
-		Image: "go-environment:latest",
-		Env:   map[string]string{"GOFLAGS": "-mod=mod"},
+		Env: map[string]string{"GOFLAGS": "-mod=mod"},
 		Source: compute.Source{
 			URL:       "https://github.com/openzot/openzot.git",
 			Username:  "x-access-token",
@@ -83,8 +82,11 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 	if driver.Type() != "vercel" {
 		t.Fatalf("Type = %q", driver.Type())
 	}
-	if createBody["projectId"] != "prj_123" || createBody["image"] != "go-environment:latest" || createBody["persistent"] != false {
+	if createBody["projectId"] != "prj_123" || createBody["runtime"] != defaultRuntime || createBody["persistent"] != false {
 		t.Fatalf("create body = %#v", createBody)
+	}
+	if _, present := createBody["image"]; present {
+		t.Fatalf("default sandbox sent a custom image: %#v", createBody)
 	}
 	if createBody["timeout"] != float64((45 * time.Minute).Milliseconds()) {
 		t.Fatalf("default timeout = %#v", createBody["timeout"])
@@ -175,6 +177,14 @@ func TestCreateStopsSandboxWhenConfigurationUploadFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v3/sandboxes":
+			var createBody map[string]any
+			decodeJSON(t, r.Body, &createBody)
+			if createBody["image"] != "go-environment:latest" {
+				t.Errorf("custom image = %#v", createBody)
+			}
+			if _, present := createBody["runtime"]; present {
+				t.Errorf("custom image also sent a runtime: %#v", createBody)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"sandbox":{"name":"zotui-test"},"session":{"id":"sess_failed","cwd":"/vercel/sandbox"}}`)
 		case "/v2/sandboxes/sessions/sess_failed/fs/write":
