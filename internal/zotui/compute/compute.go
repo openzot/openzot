@@ -65,7 +65,7 @@ func EncodeZotConfig(spec Spec) ([]byte, error) {
 
 // Provider creates ephemeral computers for one configured compute service.
 type Provider interface {
-	// Type is the provider name (docker, cloudflare, vercel, ssh, ...).
+	// Type is the provider name (docker, vercel, ...).
 	Type() string
 	// Platform is the operating system and architecture workers run on.
 	Platform() string

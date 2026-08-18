@@ -42,9 +42,9 @@ func TestSchedulerStartsOncePerMinute(t *testing.T) {
 	defer st.Close()
 	cfg := &config.Config{
 		Repos:        map[string]config.Repo{"acme": {Repositories: []string{"acme/api"}}},
-		Compute:      map[string]config.Compute{"cf": {Type: "cloudflare"}},
+		Compute:      map[string]config.Compute{"test": {Type: "unsupported"}},
 		Providers:    map[string]config.Provider{"zai": {Models: map[string]config.Model{"glm": {}}}},
-		Environments: map[string]config.Environment{"go": {Compute: "cf", Provider: "zai", Model: "glm"}},
+		Environments: map[string]config.Environment{"go": {Compute: "test", Provider: "zai", Model: "glm"}},
 	}
 	a := New(cfg, st)
 	workerID, err := a.CreateWorker(context.Background(), WorkerParams{Name: "scheduled", Repo: "acme",

@@ -25,9 +25,9 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	defer st.Close()
 	cfg := &config.Config{
 		Repos:        map[string]config.Repo{"acme": {Repositories: []string{"acme/api"}}},
-		Compute:      map[string]config.Compute{"cf": {Type: "cloudflare"}},
+		Compute:      map[string]config.Compute{"local": {Type: "docker"}},
 		Providers:    map[string]config.Provider{"zai": {Models: map[string]config.Model{"glm": {Model: "glm-5.2"}}}},
-		Environments: map[string]config.Environment{"go": {Compute: "cf", Provider: "zai", Model: "glm"}},
+		Environments: map[string]config.Environment{"go": {Compute: "local", Provider: "zai", Model: "glm"}},
 	}
 	handler := web.New(app.New(cfg, st))
 

@@ -58,10 +58,6 @@ compute:
     project_id: $VERCEL_PROJECT_ID
     # Defaults to the Hobby-plan maximum. Pro/Enterprise can use up to 24h.
     timeout: 45m
-  cf:
-    type: cloudflare
-    account_id: $CLOUDFLARE_ACCOUNT_ID
-    api_token: $CLOUDFLARE_API_TOKEN
 
 # Inference providers are reusable connections. The map key is also the Zot
 # driver unless `driver` says otherwise, which lets an alias such as `corporate`
@@ -104,7 +100,7 @@ environments:
   #   repositories:
   #     - public/openzot/openzot
   go-ubuntu:
-    compute: cf
+    compute: local
     provider: zai
     model: glm-5.2
     env:

@@ -100,7 +100,7 @@ For each run, Zotui creates a Git bundle containing the checkout's committed
 refs, copies the bundle into Docker, and clones it at `/workspace`. The host
 checkout is never mounted, and uncommitted or ignored host files are not copied.
 A local repo therefore works only with `type: docker` compute; Zotui rejects a
-remote Vercel or Cloudflare pairing when a worker is created.
+remote Vercel pairing when a worker is created.
 
 ### Public GitHub repository
 
@@ -271,11 +271,6 @@ The Vercel driver creates a non-persistent sandbox, seeds the selected remote
 Git repository, installs Zot and its private configuration, runs from that
 repository directory, streams raw ANSI output to the browser, and stops the
 sandbox at the end. Local repository connections are Docker-only.
-
-### Cloudflare status
-
-`type: cloudflare` exists as a provider seam, but sandbox creation is still a
-stub. It is not yet a usable compute provider.
 
 ## Providers and models
 

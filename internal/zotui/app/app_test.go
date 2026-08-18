@@ -16,11 +16,11 @@ import (
 func testConfig() *config.Config {
 	return &config.Config{
 		Repos:   map[string]config.Repo{"acme": {Type: "github", Repositories: []string{"acme/api"}}},
-		Compute: map[string]config.Compute{"cf": {Type: "cloudflare"}},
+		Compute: map[string]config.Compute{"test": {Type: "unsupported"}},
 		Providers: map[string]config.Provider{"zai": {Models: map[string]config.Model{
 			"glm": {Model: "glm-5.2"},
 		}}},
-		Environments: map[string]config.Environment{"go": {Compute: "cf", Provider: "zai", Model: "glm", Image: "img"}},
+		Environments: map[string]config.Environment{"go": {Compute: "test", Provider: "zai", Model: "glm", Image: "img"}},
 	}
 }
 
@@ -130,7 +130,7 @@ func TestWorkerLifecycle(t *testing.T) {
 		}
 		if r.Status.Terminal() {
 			if r.Status != store.RunFailed || r.Error == "" {
-				t.Fatalf("stub dispatch should record its failure: %+v", r)
+				t.Fatalf("unsupported compute should record its failure: %+v", r)
 			}
 			break
 		}

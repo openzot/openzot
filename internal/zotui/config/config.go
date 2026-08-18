@@ -68,11 +68,9 @@ type Repo struct {
 	Repositories []string `yaml:"repositories"` // optional per-repo lockdown; empty = discover
 }
 
-// Compute is a provider of remote computers: its type and credentials.
+// Compute configures a provider of isolated execution environments.
 type Compute struct {
-	Type      string `yaml:"type"`       // cloudflare, docker, vercel, ssh, ...
-	AccountID string `yaml:"account_id"` // provider-specific
-	APIToken  string `yaml:"api_token"`
+	Type      string `yaml:"type"`       // docker, vercel, ...
 	Token     string `yaml:"token"`      // vercel access token, inline or $VAR
 	TeamID    string `yaml:"team_id"`    // vercel team ID
 	ProjectID string `yaml:"project_id"` // vercel project ID
@@ -152,8 +150,6 @@ func (c *Config) expand() {
 		c.Repos[name] = s
 	}
 	for name, r := range c.Compute {
-		r.AccountID = os.ExpandEnv(r.AccountID)
-		r.APIToken = os.ExpandEnv(r.APIToken)
 		r.Token = os.ExpandEnv(r.Token)
 		r.TeamID = os.ExpandEnv(r.TeamID)
 		r.ProjectID = os.ExpandEnv(r.ProjectID)
@@ -175,6 +171,13 @@ func (c *Config) validate() error {
 	for name := range c.Providers {
 		if len(c.ProviderModels(name)) == 0 {
 			return fmt.Errorf("provider %q has no custom models and driver %q has no built-in models", name, c.providerDriver(name))
+		}
+	}
+	for name, compute := range c.Compute {
+		switch compute.Type {
+		case "docker", "vercel":
+		default:
+			return fmt.Errorf("compute %q has unsupported type %q", name, compute.Type)
 		}
 	}
 	for name, environment := range c.Environments {

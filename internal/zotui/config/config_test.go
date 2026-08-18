@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openzot/openzot/configs"
@@ -43,7 +44,6 @@ func TestEmbeddedExampleLoads(t *testing.T) {
 // the top level, and an environment binds compute to its image, vars and model.
 func TestLoadReposComputeAndEnvironment(t *testing.T) {
 	t.Setenv("TEST_REPO_KEY", "repo-secret")
-	t.Setenv("TEST_COMPUTE_TOKEN", "compute-secret")
 	t.Setenv("TEST_VERCEL_TOKEN", "vercel-secret")
 	t.Setenv("TEST_VERCEL_TEAM", "team_123")
 	t.Setenv("TEST_VERCEL_PROJECT", "prj_123")
@@ -55,10 +55,8 @@ repos:
     type: github
     private_key: $TEST_REPO_KEY
 compute:
-  cf:
-    type: cloudflare
-    account_id: account
-    api_token: $TEST_COMPUTE_TOKEN
+  local:
+    type: docker
   vercel:
     type: vercel
     token: $TEST_VERCEL_TOKEN
@@ -75,7 +73,7 @@ providers:
         model: glm-5.2
 environments:
   go:
-    compute: cf
+    compute: local
     provider: corporate
     model: glm
     image: toolchain
@@ -94,9 +92,6 @@ store:
 	if cfg.Repos["acme"].PrivateKey != "repo-secret" {
 		t.Error("repo credential was not resolved")
 	}
-	if cfg.Compute["cf"].APIToken != "compute-secret" {
-		t.Error("compute credential was not resolved")
-	}
 	if got := cfg.Compute["vercel"]; got.Token != "vercel-secret" || got.TeamID != "team_123" || got.ProjectID != "prj_123" || got.Timeout != "2h" {
 		t.Errorf("vercel compute config was not resolved: %+v", got)
 	}
@@ -110,7 +105,7 @@ store:
 	if !ok || model != "glm-5.2" || provider.APIKey != "model-secret" {
 		t.Errorf("custom model did not resolve through its provider: provider=%+v model=%q ok=%v", provider, model, ok)
 	}
-	if env := cfg.Environments["go"]; env.Compute != "cf" || env.Provider != "corporate" || env.Image != "toolchain" || env.Env["GOFLAGS"] != "-mod=mod" {
+	if env := cfg.Environments["go"]; env.Compute != "local" || env.Provider != "corporate" || env.Image != "toolchain" || env.Env["GOFLAGS"] != "-mod=mod" {
 		t.Errorf("environment binding was not loaded: %+v", env)
 	}
 }
@@ -143,7 +138,7 @@ func TestLoadRejectsRemovedTerminology(t *testing.T) {
 `,
 		"runners": `runners:
   cf:
-    type: cloudflare
+    type: docker
 `,
 		"environment runner": `environments:
   go:
@@ -167,6 +162,21 @@ func TestLoadRejectsRemovedTerminology(t *testing.T) {
 				t.Fatalf("removed terminology %q was silently accepted", name)
 			}
 		})
+	}
+}
+
+// The removed Cloudflare seam must fail during configuration loading instead of
+// remaining visible until a worker attempts to run it.
+func TestLoadRejectsRemovedCloudflareCompute(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+compute:
+  cf:
+    type: cloudflare
+providers:
+  zai: {}
+`))
+	if err == nil || !strings.Contains(err.Error(), `compute "cf" has unsupported type "cloudflare"`) {
+		t.Fatalf("Cloudflare compute error = %v", err)
 	}
 }
 

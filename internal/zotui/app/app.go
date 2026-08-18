@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/openzot/openzot/internal/zotui/compute"
-	"github.com/openzot/openzot/internal/zotui/compute/cloudflare"
 	dockercompute "github.com/openzot/openzot/internal/zotui/compute/docker"
 	vercelcompute "github.com/openzot/openzot/internal/zotui/compute/vercel"
 	"github.com/openzot/openzot/internal/zotui/config"
@@ -446,8 +445,6 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 	}
 	var driver compute.Provider
 	switch provider.Type {
-	case "cloudflare":
-		driver = cloudflare.New(provider.AccountID, provider.APIToken)
 	case "docker":
 		driver = dockercompute.New()
 	case "vercel":
