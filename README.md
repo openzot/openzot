@@ -17,8 +17,8 @@ plans, edits, runs, and verifies until the work is done.
 zot is not another coding agent you sit with and steer prompt by prompt. Its
 reason to exist is **fully autonomous software work**: give it a goal, walk away,
 and come back to a finished result. It will sometimes fall short of that ideal,
-especially while it is 0.x, but the ideal is the design constraint. We will not
-build workflows or features that contradict it.
+especially while it is 0.x, but the ideal is the design constraint. We are not
+building workflows or features that contradict it.
 
 If what you want is an interactive coding agent, use
 [Codex](https://openai.com/codex/),
