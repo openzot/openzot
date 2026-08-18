@@ -39,8 +39,9 @@ make test
 make dev-ui
 ```
 
-Use `ZOTUI_CONFIG=/path/to/zotui.yaml make dev-ui` to select a Zotui config.
-`ZOT_CONFIG` belongs to the standalone `zot` command and is not read by Zotui.
+Use `ZOT_CONFIG=/path/to/zotui.yaml make dev-ui` to select the config for this
+development target. It takes precedence over the Dev Container's fixture path.
+When running the `zotui` executable directly, use `ZOTUI_CONFIG` instead.
 
 The second command serves the command center on port 8080, which the container
 forwards to the host. It uses `.devcontainer/zotui.dev.yaml`: a credential-free

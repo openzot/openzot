@@ -83,16 +83,12 @@ worker-assets:
 		mv "$$worker_asset.tmp" "$$worker_asset"; \
 	done
 
-# Uses the credential-free fixture by default. Override ZOTUI_CONFIG to exercise
-# a real provider configuration; the dev container sets the listen address so
-# its forwarded port is reachable from the host.
+# Uses the credential-free fixture by default. ZOT_CONFIG is the make target's
+# explicit config input and takes precedence over the Dev Container's ambient
+# ZOTUI_CONFIG; the latter remains Zotui's direct-process environment variable.
 dev-ui:
-	@if [ -n "$${ZOT_CONFIG:-}" ] && [ -z "$${ZOTUI_CONFIG:-}" ]; then \
-		echo "error: ZOT_CONFIG configures zot, not zotui; use ZOTUI_CONFIG=/path/to/zotui.yaml" >&2; \
-		exit 2; \
-	fi
 	@$(MAKE) --no-print-directory worker-assets
-	@ZOTUI_CONFIG="$${ZOTUI_CONFIG:-$(CURDIR)/.devcontainer/zotui.dev.yaml}" \
+	@ZOTUI_CONFIG="$${ZOT_CONFIG:-$${ZOTUI_CONFIG:-$(CURDIR)/.devcontainer/zotui.dev.yaml}}" \
 		ZOTUI_ADDR="$${ZOTUI_ADDR:-127.0.0.1:8080}" \
 		ZOTUI_REPO_PATH="$${ZOTUI_REPO_PATH:-$(CURDIR)}" \
 		ZOTUI_STORE_DSN="$${ZOTUI_STORE_DSN:-$(CURDIR)/.local/state/zotui.db}" \
