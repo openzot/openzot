@@ -7,6 +7,7 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 ### Fixed
 
 - **Every release format now ships both commands and configs.** Platform archives bundle `zot`, `zotui`, `zot.example.yaml`, and `zotui.example.yaml`; the published container image includes the same commands and example configs, with `zot` remaining the default entrypoint and CI asserting that all four are present.
+- **Development builds use the declared version and patched Go toolchain.** The Makefile takes its version from the authoritative `VERSION` file instead of describing the previous Git tag, and uses Go's automatic toolchain selection instead of inheriting `GOTOOLCHAIN=local` from an older container. The Dev Container exports the same toolchain setting for direct Go commands. `make dev-ui` now stops before building when only the standalone `ZOT_CONFIG` variable is supplied instead of `ZOTUI_CONFIG`, rather than ignoring the requested file and launching with another config.
 - **Lifecycle tool names now use one convention.** The terminal tools are `success` and `failure`, matching the unprefixed `plan` and `progress` names; mixing underscored and plain names caused models to call nonexistent `_progress` and `success` tools during otherwise successful runs.
 
 ## [0.11.0] - 2026-08-18

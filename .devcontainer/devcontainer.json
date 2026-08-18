@@ -11,6 +11,7 @@
   "workspaceFolder": "/workspaces/openzot",
   "remoteUser": "vscode",
   "containerEnv": {
+    "GOTOOLCHAIN": "auto",
     "ZOTUI_ADDR": "0.0.0.0:8080",
     "ZOTUI_CONFIG": "/workspaces/openzot/.devcontainer/zotui.dev.yaml",
     "ZOTUI_REPO_PATH": "/workspaces/openzot",

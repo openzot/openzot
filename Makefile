@@ -1,8 +1,15 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= v$(shell tr -d '[:space:]' < VERSION)
 LDFLAGS  = -s -w -X github.com/openzot/openzot/internal/version.Version=$(VERSION)
+
+# go.mod pins the minimum patched toolchain. Some official Go and development
+# images export GOTOOLCHAIN=local, which turns a stale patch release into a hard
+# failure instead of letting Go fetch the required toolchain. A command-line
+# override (for example `make test GOTOOLCHAIN=local`) still takes precedence.
+GOTOOLCHAIN = auto
+export GOTOOLCHAIN
 
 CMDS = zot zotui
 WORKER_ASSET_DIR = internal/zotui/worker/artifacts
@@ -79,7 +86,12 @@ worker-assets:
 # Uses the credential-free fixture by default. Override ZOTUI_CONFIG to exercise
 # a real provider configuration; the dev container sets the listen address so
 # its forwarded port is reachable from the host.
-dev-ui: worker-assets
+dev-ui:
+	@if [ -n "$${ZOT_CONFIG:-}" ] && [ -z "$${ZOTUI_CONFIG:-}" ]; then \
+		echo "error: ZOT_CONFIG configures zot, not zotui; use ZOTUI_CONFIG=/path/to/zotui.yaml" >&2; \
+		exit 2; \
+	fi
+	@$(MAKE) --no-print-directory worker-assets
 	@ZOTUI_CONFIG="$${ZOTUI_CONFIG:-$(CURDIR)/.devcontainer/zotui.dev.yaml}" \
 		ZOTUI_ADDR="$${ZOTUI_ADDR:-127.0.0.1:8080}" \
 		ZOTUI_REPO_PATH="$${ZOTUI_REPO_PATH:-$(CURDIR)}" \

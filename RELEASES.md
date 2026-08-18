@@ -62,8 +62,8 @@ The version is baked into the binary at build time via `-ldflags`:
 -X github.com/openzot/openzot/internal/version.Version=<version>
 ```
 
-The [`Makefile`](Makefile) derives the version from `git describe` for local
-builds; the release workflow uses the pushed tag. Built without ldflags (e.g.
+The [`Makefile`](Makefile) derives the version from the authoritative `VERSION`
+file for local builds; the release workflow uses the matching pushed tag. Built without ldflags (e.g.
 `go run`), the version is `dev` and the GitHub update check is skipped.
 
 Check the embedded version with:
