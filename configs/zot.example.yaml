@@ -41,7 +41,7 @@ agent:
   # Whatever you pick, make sure default_backend below actually serves it. A
   # model and a backend that cannot talk to each other fail as a provider error
   # rather than a configuration one, which is much harder to read.
-  model: 'glm-5.2'
+  model: "glm-5.2"
 
   # The one finite backstop on run length: the maximum number of plan/act/observe
   # cycles before the agent is forced to stop. Tool calls and time are unbounded
@@ -187,7 +187,7 @@ backends:
   # The Cloudflare AI Gateway is also a gateway, but its URL carries your account
   # and gateway ids, so there is no fixed endpoint - name the provider and give
   # the compat URL. The key is the downstream provider's.
-  # cloudflare:
+  cloudflare:
   #   provider: cloudflare
   #   base_url: 'https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat'
   #   api_key: '$OPENAI_API_KEY'
@@ -196,7 +196,7 @@ backends:
   # Anything else that speaks the OpenAI chat-completions API. A custom endpoint
   # must be https (unless loopback) and needs its own key: zot will not forward a
   # credential issued for one host to another.
-  # mygateway:
+  mygateway:
   #   provider: custom
   #   base_url: 'https://gateway.internal.example.com/v1'
   #   api_key: '$GATEWAY_KEY'
