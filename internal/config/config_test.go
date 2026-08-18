@@ -23,9 +23,9 @@ func writeConfig(t *testing.T, body string) string {
 // validConfig returns a minimal config that passes Validate, optionally tweaked.
 func validConfig(tweak func(*Config)) Config {
 	c := Config{
-		Agent:          Agent{Model: "m", MaxIterations: 1},
-		DefaultBackend: "openai",
-		Backends:       map[string]Backend{"openai": {APIKey: "x"}},
+		Agent:           Agent{Model: "m", MaxIterations: 1},
+		DefaultProvider: "openai",
+		Providers:       map[string]ProviderConfig{"openai": {APIKey: "x"}},
 	}
 	if tweak != nil {
 		tweak(&c)
@@ -41,14 +41,14 @@ func TestDefaults(t *testing.T) {
 	if c.Agent.MaxIterations <= 0 {
 		t.Error("expected a positive default max_iterations")
 	}
-	if c.DefaultBackend != "zai" {
-		t.Errorf("default backend = %q, want zai", c.DefaultBackend)
+	if c.DefaultProvider != "zai" {
+		t.Errorf("default provider = %q, want zai", c.DefaultProvider)
 	}
 }
 
-// The built-in backends are seeded for every provider zot knows, each reading
+// The built-in providers are seeded for every provider zot knows, each reading
 // its provider's conventional credential variable.
-func TestLoadSeedsBackends(t *testing.T) {
+func TestLoadSeedsProviders(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
@@ -60,8 +60,8 @@ func TestLoadSeedsBackends(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.DefaultBackend != "zai" {
-		t.Errorf("default backend = %q, want zai", cfg.DefaultBackend)
+	if cfg.DefaultProvider != "zai" {
+		t.Errorf("default provider = %q, want zai", cfg.DefaultProvider)
 	}
 
 	for name, want := range map[string]string{
@@ -69,33 +69,30 @@ func TestLoadSeedsBackends(t *testing.T) {
 		"anthropic": "sk-anthropic",
 		"groq":      "sk-groq",
 	} {
-		backend, ok := cfg.Backends[name]
+		provider, ok := cfg.Providers[name]
 
 		if !ok {
-			t.Fatalf("backend %q was not seeded", name)
+			t.Fatalf("provider %q was not seeded", name)
 		}
 
-		if got := BackendCredential(backend); got != want {
+		if got := ProviderCredential(provider); got != want {
 			t.Errorf("%s credential = %q, want %q", name, got, want)
 		}
 
-		if got := BackendProvider(name, backend); got != name {
-			t.Errorf("%s provider = %q, want %q", name, got, name)
+		if got := ProviderDriver(name, provider); got != name {
+			t.Errorf("%s driver = %q, want %q", name, got, name)
 		}
 	}
 
 	// a local provider needs no credential
-	if got := BackendCredential(cfg.Backends["ollama"]); got != "" {
+	if got := ProviderCredential(cfg.Providers["ollama"]); got != "" {
 		t.Errorf("ollama credential = %q, want none", got)
 	}
 }
 
-// The built-in backends are exactly the providers zot speaks to. Pinning the
-// whole set rather than spot-checking it catches an accidental addition and an
-// accidental removal with the same assertion - and does not need updating when
-// something is dropped, which is what a list of names-that-must-not-appear
-// would have required.
-func TestBuiltinBackendsAreExactlyTheProviders(t *testing.T) {
+// The shipped connections are pinned as a complete set. This catches an
+// accidental addition and an accidental removal with the same assertion.
+func TestBuiltinProvidersMatchTheShippedConnections(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
 
@@ -104,9 +101,9 @@ func TestBuiltinBackendsAreExactlyTheProviders(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	seeded := make([]string, 0, len(cfg.Backends))
+	seeded := make([]string, 0, len(cfg.Providers))
 
-	for name := range cfg.Backends {
+	for name := range cfg.Providers {
 		seeded = append(seeded, name)
 	}
 
@@ -119,15 +116,42 @@ func TestBuiltinBackendsAreExactlyTheProviders(t *testing.T) {
 	}
 
 	if !reflect.DeepEqual(seeded, want) {
-		t.Errorf("built-in backends:\n got %v\nwant %v", seeded, want)
+		t.Errorf("built-in providers:\n got %v\nwant %v", seeded, want)
 	}
 
-	// every one of them must be reachable: a name with no endpoint is a backend
-	// that fails at the first request rather than at configuration time
+	// Every one of them must select a driver: an unresolved connection would fail
+	// at the first request rather than at configuration time.
 	for _, name := range seeded {
-		if BackendProvider(name, cfg.Backends[name]) == "" {
-			t.Errorf("backend %q names no provider", name)
+		if ProviderDriver(name, cfg.Providers[name]) == "" {
+			t.Errorf("provider %q names no driver", name)
 		}
+	}
+}
+
+// Removed configuration vocabulary must fail loudly rather than being ignored
+// and silently sending a run to the default provider.
+func TestLoadRejectsRemovedConfigKeys(t *testing.T) {
+	tests := map[string]string{
+		"provider collection": `
+default_backend: openai
+backends:
+  openai:
+    api_key: sk-test
+	`,
+		"driver selector": `
+default_provider: corporate
+providers:
+  corporate:
+    provider: openai
+	`,
+	}
+
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Error("removed provider configuration keys must be rejected")
+			}
+		})
 	}
 }
 
@@ -140,11 +164,11 @@ func TestLoadEnvOverrides(t *testing.T) {
 	path := writeConfig(t, `
 agent:
   model: from-file
-default_backend: openai
+default_provider: openai
 `)
 	t.Setenv("ZOT_AGENT_MODEL", "gpt-4o")
 	t.Setenv("ZOT_AGENT_MAX_ITERATIONS", "12")
-	t.Setenv("ZOT_DEFAULT_BACKEND", "groq")
+	t.Setenv("ZOT_DEFAULT_PROVIDER", "groq")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -156,10 +180,10 @@ default_backend: openai
 	if cfg.Agent.MaxIterations != 12 {
 		t.Errorf("max_iterations = %d, want 12", cfg.Agent.MaxIterations)
 	}
-	if cfg.DefaultBackend != "groq" {
-		t.Errorf("default backend = %q, want groq (env overrides file)", cfg.DefaultBackend)
+	if cfg.DefaultProvider != "groq" {
+		t.Errorf("default provider = %q, want groq (env overrides file)", cfg.DefaultProvider)
 	}
-	if got := BackendCredential(cfg.Backends["groq"]); got != "sk-test" {
+	if got := ProviderCredential(cfg.Providers["groq"]); got != "sk-test" {
 		t.Errorf("groq credential = %q, want it from GROQ_API_KEY", got)
 	}
 }
@@ -176,8 +200,8 @@ func TestSecretEnvReference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("MY_PROVIDER_KEY", "sk-from-env")
 	path := writeConfig(t, `
-default_backend: openai
-backends:
+default_provider: openai
+providers:
   openai:
     api_key: '$MY_PROVIDER_KEY'
 `)
@@ -185,20 +209,20 @@ backends:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Backends["openai"].APIKey; got != "sk-from-env" {
+	if got := cfg.Providers["openai"].APIKey; got != "sk-from-env" {
 		t.Errorf("resolved secret = %q, want sk-from-env", got)
 	}
 }
 
-// A backend key and a per-model key may each be written as a $VAR, and both are
+// A provider key and a per-model key may each be written as a $VAR, and both are
 // resolved.
 func TestAuthorizationEnvReference(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GATEWAY_DEFAULT_KEY", "sk-gateway-default")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	path := writeConfig(t, `
-default_backend: mygateway
-backends:
+default_provider: mygateway
+providers:
   mygateway:
     api_key: '$GATEWAY_DEFAULT_KEY'
     models:
@@ -209,10 +233,10 @@ backends:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := cfg.Backends["mygateway"].APIKey; got != "sk-gateway-default" {
-		t.Errorf("backend key = %q, want sk-gateway-default", got)
+	if got := cfg.Providers["mygateway"].APIKey; got != "sk-gateway-default" {
+		t.Errorf("provider key = %q, want sk-gateway-default", got)
 	}
-	if got := cfg.Backends["mygateway"].Models["gpt-4"].APIKey; got != "sk-openai" {
+	if got := cfg.Providers["mygateway"].Models["gpt-4"].APIKey; got != "sk-openai" {
 		t.Errorf("model key = %q, want sk-openai", got)
 	}
 }
@@ -227,22 +251,47 @@ func TestValidate(t *testing.T) {
 	if err := validConfig(func(c *Config) { c.Agent.MaxIterations = 0 }).Validate(); err == nil {
 		t.Error("expected an error for non-positive max_iterations")
 	}
-	if err := validConfig(func(c *Config) { c.DefaultBackend = "nope" }).Validate(); err == nil {
-		t.Error("expected an error for an unknown default backend")
+	if err := validConfig(func(c *Config) { c.DefaultProvider = "nope" }).Validate(); err == nil {
+		t.Error("expected an error for an unknown default provider")
+	}
+	if err := validConfig(func(c *Config) {
+		c.Providers["openai"] = ProviderConfig{Models: map[string]ModelConfig{"allowed": {Model: "gpt-5.4"}}}
+	}).Validate(); err == nil {
+		t.Error("expected a custom provider model list to reject an unlisted model")
+	}
+	if err := validConfig(func(c *Config) {
+		c.Agent.Model = "allowed"
+		c.Providers["openai"] = ProviderConfig{Models: map[string]ModelConfig{"allowed": {Model: "gpt-5.4"}}}
+	}).Validate(); err != nil {
+		t.Errorf("custom provider model was rejected: %v", err)
+	}
+}
+
+func TestProviderModelsUsesCustomListOrCatalogue(t *testing.T) {
+	custom := ProviderConfig{Driver: "openai", Models: map[string]ModelConfig{
+		"small": {Model: "gpt-5.4-mini"},
+		"large": {Model: "gpt-5.4"},
+	}}
+	if got, want := ProviderModels("corporate", custom), []string{"large", "small"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("custom models = %v, want %v", got, want)
+	}
+	builtin := ProviderModels("corporate", ProviderConfig{Driver: "zai"})
+	if len(builtin) == 0 || !sort.StringsAreSorted(builtin) {
+		t.Fatalf("built-in ZAI models = %v", builtin)
 	}
 }
 
 // Scrubbing removes every resolved credential - Bearer secrets and provider
-// keys, backend-level and per-model - from the environment, while
+// keys, provider-level and per-model - from the environment, while
 // leaving unrelated variables intact.
-func TestScrubBackendSecrets(t *testing.T) {
+func TestScrubProviderSecrets(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZAI_API_KEY", "sk-zai")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("ZOT_TEST_UNRELATED", "keep-me")
 	path := writeConfig(t, `
-default_backend: mygateway
-backends:
+default_provider: mygateway
+providers:
   mygateway:
     api_key: $ZAI_API_KEY
     models:
@@ -253,7 +302,7 @@ backends:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	ScrubBackendSecrets(cfg)
+	ScrubProviderSecrets(cfg)
 
 	if _, ok := os.LookupEnv("ZAI_API_KEY"); ok {
 		t.Error("ZAI_API_KEY should be removed after scrub")
@@ -384,40 +433,40 @@ func TestEnvOverrideBooleans(t *testing.T) {
 	}
 }
 
-// A backend either names a provider zot can reach or brings its own endpoint.
+// A provider either selects a driver zot can reach or brings its own endpoint.
 // Neither means there is nowhere to send the request, and that is worth catching
 // at load rather than mid-run.
-func TestValidateRejectsAnUnreachableBackend(t *testing.T) {
+func TestValidateRejectsAnUnreachableProvider(t *testing.T) {
 	cfg := Defaults()
-	cfg.DefaultBackend = "mygateway"
+	cfg.DefaultProvider = "mygateway"
 
 	// a name nobody knows, and no endpoint
-	cfg.Backends = map[string]Backend{"mygateway": {}}
+	cfg.Providers = map[string]ProviderConfig{"mygateway": {}}
 
 	if err := cfg.Validate(); err == nil {
-		t.Error("a backend with no known provider and no base_url must be rejected")
+		t.Error("a provider with no known driver and no base_url must be rejected")
 	}
 
 	// an endpoint of its own is enough
-	cfg.Backends["mygateway"] = Backend{BaseURL: "https://gw.example.com/v1"}
+	cfg.Providers["mygateway"] = ProviderConfig{BaseURL: "https://gw.example.com/v1"}
 
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("a backend with its own endpoint is valid: %v", err)
+		t.Errorf("a provider with its own endpoint is valid: %v", err)
 	}
 
-	// or a provider zot knows
-	cfg.Backends["mygateway"] = Backend{Provider: "openai"}
+	// or a driver zot knows
+	cfg.Providers["mygateway"] = ProviderConfig{Driver: "openai"}
 
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("a backend naming a known provider is valid: %v", err)
+		t.Errorf("a provider naming a known driver is valid: %v", err)
 	}
 
-	// a backend named after a provider needs nothing at all
-	cfg.DefaultBackend = "groq"
-	cfg.Backends = map[string]Backend{"groq": {}}
+	// a provider named after a driver needs nothing at all
+	cfg.DefaultProvider = "groq"
+	cfg.Providers = map[string]ProviderConfig{"groq": {}}
 
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("a backend named after a provider is valid: %v", err)
+		t.Errorf("a provider named after a driver is valid: %v", err)
 	}
 }
 
@@ -429,21 +478,21 @@ func TestAnEnvReferenceIsExpanded(t *testing.T) {
 	t.Setenv("ZOT_TEST_PROVIDER_KEY", "sk-resolved")
 
 	tests := []struct {
-		name    string
-		backend Backend
+		name     string
+		provider ProviderConfig
 	}{
-		{name: "api_key", backend: Backend{APIKey: "$ZOT_TEST_PROVIDER_KEY"}},
-		{name: "braced", backend: Backend{APIKey: "${ZOT_TEST_PROVIDER_KEY}"}},
-		{name: "padded", backend: Backend{APIKey: "  $ZOT_TEST_PROVIDER_KEY  "}},
+		{name: "api_key", provider: ProviderConfig{APIKey: "$ZOT_TEST_PROVIDER_KEY"}},
+		{name: "braced", provider: ProviderConfig{APIKey: "${ZOT_TEST_PROVIDER_KEY}"}},
+		{name: "padded", provider: ProviderConfig{APIKey: "  $ZOT_TEST_PROVIDER_KEY  "}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cfg := Config{Backends: map[string]Backend{"mine": test.backend}}
+			cfg := Config{Providers: map[string]ProviderConfig{"mine": test.provider}}
 
-			resolveBackends(&cfg)
+			resolveProviders(&cfg)
 
-			if got := BackendCredential(cfg.Backends["mine"]); got != "sk-resolved" {
+			if got := ProviderCredential(cfg.Providers["mine"]); got != "sk-resolved" {
 				t.Errorf("credential = %q, want the expanded value", got)
 			}
 		})
@@ -455,13 +504,13 @@ func TestAnEnvReferenceIsExpanded(t *testing.T) {
 func TestAnUnsetEnvReferenceResolvesToNothing(t *testing.T) {
 	t.Setenv("ZOT_TEST_UNSET_KEY", "")
 
-	cfg := Config{Backends: map[string]Backend{
-		"mine": {Provider: "custom", APIKey: "$ZOT_TEST_UNSET_KEY"},
+	cfg := Config{Providers: map[string]ProviderConfig{
+		"mine": {Driver: "custom", APIKey: "$ZOT_TEST_UNSET_KEY"},
 	}}
 
-	resolveBackends(&cfg)
+	resolveProviders(&cfg)
 
-	if got := BackendCredential(cfg.Backends["mine"]); got != "" {
+	if got := ProviderCredential(cfg.Providers["mine"]); got != "" {
 		t.Errorf("credential = %q, want nothing", got)
 	}
 }
@@ -469,13 +518,13 @@ func TestAnUnsetEnvReferenceResolvesToNothing(t *testing.T) {
 // A literal key is left exactly as written - a provider key that happens to
 // contain a dollar sign is not a reference.
 func TestALiteralCredentialIsUntouched(t *testing.T) {
-	cfg := Config{Backends: map[string]Backend{
+	cfg := Config{Providers: map[string]ProviderConfig{
 		"mine": {APIKey: "sk-literal-with-$-inside"},
 	}}
 
-	resolveBackends(&cfg)
+	resolveProviders(&cfg)
 
-	if got := BackendCredential(cfg.Backends["mine"]); got != "sk-literal-with-$-inside" {
+	if got := ProviderCredential(cfg.Providers["mine"]); got != "sk-literal-with-$-inside" {
 		t.Errorf("credential = %q, want it untouched", got)
 	}
 }
@@ -485,19 +534,19 @@ func TestALiteralCredentialIsUntouched(t *testing.T) {
 func TestTheConventionalVariableIsOnlyAFallback(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-from-env")
 
-	cfg := Config{Backends: map[string]Backend{"openai": {}}}
+	cfg := Config{Providers: map[string]ProviderConfig{"openai": {}}}
 
-	resolveBackends(&cfg)
+	resolveProviders(&cfg)
 
-	if got := BackendCredential(cfg.Backends["openai"]); got != "sk-from-env" {
+	if got := ProviderCredential(cfg.Providers["openai"]); got != "sk-from-env" {
 		t.Errorf("credential = %q, want the conventional variable", got)
 	}
 
-	cfg = Config{Backends: map[string]Backend{"openai": {APIKey: "sk-from-config"}}}
+	cfg = Config{Providers: map[string]ProviderConfig{"openai": {APIKey: "sk-from-config"}}}
 
-	resolveBackends(&cfg)
+	resolveProviders(&cfg)
 
-	if got := BackendCredential(cfg.Backends["openai"]); got != "sk-from-config" {
+	if got := ProviderCredential(cfg.Providers["openai"]); got != "sk-from-config" {
 		t.Errorf("credential = %q, want the config to win", got)
 	}
 }
@@ -507,9 +556,9 @@ func TestTheConventionalVariableIsOnlyAFallback(t *testing.T) {
 func TestMaxTimeIsValidated(t *testing.T) {
 	base := func() Config {
 		return Config{
-			Agent:          Agent{Model: "m", MaxIterations: 10},
-			DefaultBackend: "openai",
-			Backends:       map[string]Backend{"openai": {APIKey: "k"}},
+			Agent:           Agent{Model: "m", MaxIterations: 10},
+			DefaultProvider: "openai",
+			Providers:       map[string]ProviderConfig{"openai": {APIKey: "k"}},
 		}
 	}
 
@@ -588,9 +637,9 @@ func TestEveryBudgetHasAnEnvOverride(t *testing.T) {
 func TestLimitCheckpointsAreValidated(t *testing.T) {
 	base := func(cp []int) Config {
 		return Config{
-			Agent:          Agent{Model: "m", MaxIterations: 10, LimitCheckpoints: cp},
-			DefaultBackend: "openai",
-			Backends:       map[string]Backend{"openai": {APIKey: "k"}},
+			Agent:           Agent{Model: "m", MaxIterations: 10, LimitCheckpoints: cp},
+			DefaultProvider: "openai",
+			Providers:       map[string]ProviderConfig{"openai": {APIKey: "k"}},
 		}
 	}
 
@@ -633,9 +682,9 @@ func TestPortableIsOffInAStandardBuild(t *testing.T) {
 func TestPortableOverlayOverridesOnlyWhatItSets(t *testing.T) {
 	// stand in for "the file and env already resolved this"
 	cfg := Config{
-		Agent:          Agent{Model: "from-env", MaxIterations: 42},
-		DefaultBackend: "openai",
-		Backends: map[string]Backend{
+		Agent:           Agent{Model: "from-env", MaxIterations: 42},
+		DefaultProvider: "openai",
+		Providers: map[string]ProviderConfig{
 			"openai": {APIKey: "sk-from-env"},
 		},
 	}
@@ -643,8 +692,8 @@ func TestPortableOverlayOverridesOnlyWhatItSets(t *testing.T) {
 	overlay := []byte(`
 agent:
   model: baked-model
-default_backend: zai
-backends:
+default_provider: zai
+providers:
   zai:
     api_key: sk-baked
 `)
@@ -657,19 +706,19 @@ backends:
 	if cfg.Agent.Model != "baked-model" {
 		t.Errorf("model = %q, want the baked value to win", cfg.Agent.Model)
 	}
-	if cfg.DefaultBackend != "zai" {
-		t.Errorf("default_backend = %q, want the baked value to win", cfg.DefaultBackend)
+	if cfg.DefaultProvider != "zai" {
+		t.Errorf("default_provider = %q, want the baked value to win", cfg.DefaultProvider)
 	}
-	if got := cfg.Backends["zai"].APIKey; got != "sk-baked" {
-		t.Errorf("baked backend key = %q, want sk-baked", got)
+	if got := cfg.Providers["zai"].APIKey; got != "sk-baked" {
+		t.Errorf("baked provider key = %q, want sk-baked", got)
 	}
 
 	// fields it did NOT set fall through untouched
 	if cfg.Agent.MaxIterations != 42 {
 		t.Errorf("max_iterations = %d, want the earlier layer (42) to survive an overlay that omits it", cfg.Agent.MaxIterations)
 	}
-	if got := cfg.Backends["openai"].APIKey; got != "sk-from-env" {
-		t.Errorf("a backend the overlay did not mention was lost: openai key = %q", got)
+	if got := cfg.Providers["openai"].APIKey; got != "sk-from-env" {
+		t.Errorf("a provider the overlay did not mention was lost: openai key = %q", got)
 	}
 }
 

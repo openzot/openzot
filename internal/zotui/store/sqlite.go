@@ -49,25 +49,25 @@ func (s *sqlStore) CreateWorker(ctx context.Context, w Worker) (string, error) {
 	}
 	now := unix(time.Now())
 	_, err := s.db.ExecContext(ctx, s.d.rebind(`INSERT INTO workers
-(id, name, repo, repository, environment, model, mission, max_iterations, schedule_cron, schedule_tz, runtime_minutes, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), w.ID, w.Name, w.Repo, w.Repository,
-		w.Environment, w.Model, w.Mission, w.MaxIterations, w.Schedule.Cron,
+(id, name, repo, repository, environment, provider, model, mission, max_iterations, schedule_cron, schedule_tz, runtime_minutes, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`), w.ID, w.Name, w.Repo, w.Repository,
+		w.Environment, w.Provider, w.Model, w.Mission, w.MaxIterations, w.Schedule.Cron,
 		w.Schedule.Timezone, w.Schedule.RuntimeMinutes, now, now)
 	return w.ID, err
 }
 
 func (s *sqlStore) UpdateWorker(ctx context.Context, w Worker) error {
 	res, err := s.db.ExecContext(ctx, s.d.rebind(`UPDATE workers SET
-name = ?, repo = ?, repository = ?, environment = ?, model = ?, mission = ?, max_iterations = ?,
+name = ?, repo = ?, repository = ?, environment = ?, provider = ?, model = ?, mission = ?, max_iterations = ?,
 schedule_cron = ?, schedule_tz = ?, runtime_minutes = ?, updated_at = ? WHERE id = ?`),
-		w.Name, w.Repo, w.Repository, w.Environment, w.Model, w.Mission, w.MaxIterations,
+		w.Name, w.Repo, w.Repository, w.Environment, w.Provider, w.Model, w.Mission, w.MaxIterations,
 		w.Schedule.Cron, w.Schedule.Timezone, w.Schedule.RuntimeMinutes, unix(time.Now()), w.ID)
 	return changed(res, err)
 }
 
 func (s *sqlStore) GetWorker(ctx context.Context, id string) (*Worker, error) {
 	w, err := scanWorker(s.db.QueryRowContext(ctx, s.d.rebind(`SELECT id, name, repo, repository,
-environment, model, mission, max_iterations, schedule_cron, schedule_tz, runtime_minutes, created_at, updated_at
+environment, provider, model, mission, max_iterations, schedule_cron, schedule_tz, runtime_minutes, created_at, updated_at
 FROM workers WHERE id = ?`), id).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -76,7 +76,7 @@ FROM workers WHERE id = ?`), id).Scan)
 }
 
 func (s *sqlStore) ListWorkers(ctx context.Context) ([]Worker, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, repo, repository, environment, model, mission,
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, repo, repository, environment, provider, model, mission,
 max_iterations, schedule_cron, schedule_tz, runtime_minutes, created_at, updated_at
 FROM workers ORDER BY created_at DESC`)
 	if err != nil {
@@ -108,9 +108,9 @@ func (s *sqlStore) CreateRun(ctx context.Context, r Run) (string, error) {
 	}
 	now := unix(time.Now())
 	_, err := s.db.ExecContext(ctx, s.d.rebind(`INSERT INTO runs
-(id, worker_id, status, mission, model, max_iterations, iteration, tool, action, exit_code, error, output,
-created_at, updated_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		r.ID, r.WorkerID, string(r.Status), r.Mission, r.Model, r.MaxIterations, r.Iteration,
+(id, worker_id, status, mission, provider, model, max_iterations, iteration, tool, action, exit_code, error, output,
+created_at, updated_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		r.ID, r.WorkerID, string(r.Status), r.Mission, r.Provider, r.Model, r.MaxIterations, r.Iteration,
 		r.Tool, r.Action, nullableInt(r.ExitCode), r.Error, "", now, now, nullableTime(r.StartedAt), nullableTime(r.FinishedAt))
 	return r.ID, err
 }
@@ -180,13 +180,13 @@ func (s *sqlStore) RunOutput(ctx context.Context, id string) (string, error) {
 	return output, err
 }
 
-const runSelect = `SELECT id, worker_id, status, mission, model, max_iterations, iteration, tool, action,
+const runSelect = `SELECT id, worker_id, status, mission, provider, model, max_iterations, iteration, tool, action,
 exit_code, error, created_at, updated_at, started_at, finished_at FROM runs`
 
 func scanWorker(scan func(...any) error) (Worker, error) {
 	var w Worker
 	var created, updated int64
-	err := scan(&w.ID, &w.Name, &w.Repo, &w.Repository, &w.Environment, &w.Model, &w.Mission,
+	err := scan(&w.ID, &w.Name, &w.Repo, &w.Repository, &w.Environment, &w.Provider, &w.Model, &w.Mission,
 		&w.MaxIterations, &w.Schedule.Cron, &w.Schedule.Timezone, &w.Schedule.RuntimeMinutes, &created, &updated)
 	w.CreatedAt, w.UpdatedAt = fromUnix(created), fromUnix(updated)
 	return w, err
@@ -197,7 +197,7 @@ func scanRun(scan func(...any) error) (Run, error) {
 	var status string
 	var exit, started, finished sql.NullInt64
 	var created, updated int64
-	err := scan(&r.ID, &r.WorkerID, &status, &r.Mission, &r.Model, &r.MaxIterations, &r.Iteration,
+	err := scan(&r.ID, &r.WorkerID, &status, &r.Mission, &r.Provider, &r.Model, &r.MaxIterations, &r.Iteration,
 		&r.Tool, &r.Action, &exit, &r.Error, &created, &updated, &started, &finished)
 	r.Status = RunStatus(status)
 	if exit.Valid {

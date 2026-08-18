@@ -18,14 +18,14 @@ func TestWorkersRunsAndOutputRoundTrip(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	want := store.Worker{Name: "builder", Repo: "gh", Repository: "acme/api", Environment: "go", Model: "glm",
+	want := store.Worker{Name: "builder", Repo: "gh", Repository: "acme/api", Environment: "go", Provider: "zai", Model: "glm",
 		Mission: "ship improvements", MaxIterations: 12, Schedule: store.Schedule{Cron: "0 * * * *", Timezone: "UTC", RuntimeMinutes: 30}}
 	id, err := st.CreateWorker(ctx, want)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.GetWorker(ctx, id)
-	if err != nil || got.Name != want.Name || got.Schedule != want.Schedule || got.CreatedAt.IsZero() {
+	if err != nil || got.Name != want.Name || got.Provider != want.Provider || got.Schedule != want.Schedule || got.CreatedAt.IsZero() {
 		t.Fatalf("worker round trip = %+v, %v", got, err)
 	}
 	got.Name = "renamed"
@@ -36,7 +36,7 @@ func TestWorkersRunsAndOutputRoundTrip(t *testing.T) {
 	if len(workers) != 1 || workers[0].Name != "renamed" {
 		t.Fatalf("workers = %+v", workers)
 	}
-	runID, err := st.CreateRun(ctx, store.Run{WorkerID: id, Mission: want.Mission, Model: want.Model, MaxIterations: 12})
+	runID, err := st.CreateRun(ctx, store.Run{WorkerID: id, Mission: want.Mission, Provider: want.Provider, Model: want.Model, MaxIterations: 12})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestWorkersRunsAndOutputRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := st.GetRun(ctx, runID)
-	if err != nil || r.Status != store.RunSucceeded || r.Iteration != 3 || r.Tool != "test" || r.StartedAt == nil || r.FinishedAt == nil {
+	if err != nil || r.Status != store.RunSucceeded || r.Provider != want.Provider || r.Iteration != 3 || r.Tool != "test" || r.StartedAt == nil || r.FinishedAt == nil {
 		t.Fatalf("run round trip = %+v, %v", r, err)
 	}
 	output, _ := st.RunOutput(ctx, runID)

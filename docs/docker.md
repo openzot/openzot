@@ -9,7 +9,7 @@ without zot having to implement a sandbox of its own.
 This document covers the published image. For the agent itself see the
 [README](../README.md); for flags and config see
 [configuration.md](configuration.md), and for providers
-[backends.md](backends.md).
+[providers.md](providers.md).
 
 ## The image
 
@@ -47,17 +47,17 @@ image an environment selects.
 ## Running a task
 
 zot talks straight to a model provider, so a run needs nothing but that
-provider's key. These examples use the default pair - the `zai` backend running
+provider's key. These examples use the default pair - the `zai` provider running
 `glm-5.2` - so they need no flags at all. For any other provider, pass the
-variable it reads along with `--backend` **and** `--model`, since the default
-model only means something on its own backend:
+variable it reads along with `--provider` **and** `--model`, since the default
+model only means something on its own provider:
 
 ```bash
 docker run --rm -it --env OPENAI_API_KEY --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --backend openai --model gpt-5.4-mini "…"
+  ghcr.io/openzot/openzot:latest --provider openai --model gpt-5.4-mini "…"
 ```
 
-See [backends.md](backends.md) for the full list.
+See [providers.md](providers.md) for the full list.
 
 ```bash
 docker run --rm -it \
@@ -96,7 +96,7 @@ needs existing source; the lean image does not include Git.
 
 ### Credentials
 
-The backend credential is an environment variable - never bake it into an image
+The provider credential is an environment variable - never bake it into an image
 or a config file you push anywhere:
 
 ```bash
@@ -115,7 +115,7 @@ commands. Pass credentials with `--env` or `--env-file`, where the value comes
 from your secret store. (A developer build, `make dev`, does read `.env`; see
 [release vs developer builds](development.md#release-vs-developer-builds).)
 
-After zot loads its configuration, configured backend credentials are removed
+After zot loads its configuration, configured provider credentials are removed
 from the environment inherited by agent shell commands, so the task itself
 cannot read the key that is paying for it.
 
@@ -141,7 +141,7 @@ docker run --rm -it \
 
 `ZOT_CONFIG` already points at `/home/zot/.config/zot/config.yaml`; a missing
 file there is not an error. Single settings are easier as environment
-variables - `ZOT_AGENT_MODEL`, `ZOT_AGENT_MAX_ITERATIONS`, `ZOT_DEFAULT_BACKEND`
+variables - `ZOT_AGENT_MODEL`, `ZOT_AGENT_MAX_ITERATIONS`, `ZOT_DEFAULT_PROVIDER`
 - and they override the file.
 
 ### Terminal or not
@@ -254,7 +254,7 @@ and smoke-tests the same Dockerfile on every code push. See
 
 - [README](../README.md) - what zot is
 - [configuration.md](configuration.md) - flags, config, sessions
-- [backends.md](backends.md) - providers and credentials
+- [providers.md](providers.md) - providers and credentials
 - [Pantalk deployment](https://github.com/pantalk/pantalk/blob/main/docs/deployment.md) -
   putting a containerised agent into chat
 - [MCPShim deployment](https://github.com/mcpshim/mcpshim/blob/main/docs/deployment.md) -

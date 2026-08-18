@@ -4,8 +4,8 @@ zotui is the browser command center for reusable zot workers. This guide covers
 the configuration graph, local Docker development, Vercel Sandbox compute,
 model credentials, storage, and the setup errors that are easiest to make.
 
-For zot's standalone model/backend configuration, see
-[backends.md](backends.md). The file described here is a separate **zotui**
+For zot's standalone model/provider configuration, see
+[providers.md](providers.md). The file described here is a separate **zotui**
 configuration.
 
 ## The configuration graph
@@ -14,16 +14,19 @@ A worker created in the browser combines four configured or user-supplied
 pieces:
 
 ```text
-repo + environment + model + mission = worker
+repo + environment + provider/model + mission = worker
                    |
-                   +-- environment = compute + image + env vars + default model
+                   +-- environment = compute + image + env vars + default provider/model
 ```
 
 - A **repo** says where source code comes from and how it is authorized.
 - **Compute** says where the disposable computer comes from.
-- A **model** says which inference provider and model zot uses.
+- A model **provider** holds one inference connection, its credentials, and an
+  optional custom model list.
+- A **model** is a visible choice supplied by that custom list or ZotUI's
+  built-in catalogue.
 - An **environment** binds compute to a worker image, environment variables,
-  and a default model.
+  and a default provider/model pair.
 - The **store** keeps workers, runs, status, and terminal output after the
   browser closes.
 
@@ -64,6 +67,16 @@ make dev-ui
 
 The command center is available at `http://localhost:8080/workers` by default.
 Set `ZOTUI_ADDR` to change the listen address.
+
+### Web authentication
+
+zotui does not authenticate requests to its web interface or API. Built-in web
+authentication is intentionally out of scope: deployments that expose zotui
+beyond the local machine are expected to place it behind a separate
+authentication proxy. Configure that proxy to protect every zotui route,
+including `/api/*`, and do not expose an unauthenticated zotui listener to an
+untrusted network. The default loopback listen address keeps the application
+local unless `ZOTUI_ADDR` is changed.
 
 ## Repositories
 
@@ -165,6 +178,7 @@ example, local Go development can use the upstream image directly:
 environments:
   go-development:
     compute: development
+    provider: vercel
     model: gateway
     image: golang:1.26.5-bookworm
 ```
@@ -247,48 +261,74 @@ sandbox at the end. Local host mounts are not supported.
 ### Cloudflare status
 
 `type: cloudflare` exists as a provider seam, but sandbox creation is still a
-stub. It is not yet a usable compute backend.
+stub. It is not yet a usable compute provider.
 
-## Models
+## Providers and models
 
-Models are named separately from compute so one environment can use different
-inference services without changing where code executes.
+Providers and models are named separately from compute so one environment can
+use different inference services without changing where code executes. They are
+also independent from standalone Zot's configuration: ZotUI reads only its own
+config file and writes a private per-run Zot config into each sandbox.
+
+At least one provider must be configured, and every ZotUI provider must resolve
+to at least one visible model because the worker form needs a finite list. For a
+catalogued provider, omit `models` to use its built-ins. Add `models` to replace
+those built-ins with a custom list.
 
 ### Direct provider
 
 ```yaml
-models:
-  glm:
-    provider: zai
-    model: glm-5.2
+providers:
+  zai:
     api_key: $ZAI_API_KEY
+    # No models block: show the built-in Z.AI catalogue.
 
-  sonnet:
-    provider: anthropic
-    model: claude-5-sonnet
+  anthropic:
     api_key: $ANTHROPIC_API_KEY
+    models:
+      sonnet:
+        model: claude-5-sonnet
 ```
 
-The key is held by zotui and written into the sandbox's private Zot
-configuration for that run. It is not baked into the worker image.
+The provider map key is the Zot driver by default. Set `driver` when the
+connection name is an alias, or when a custom endpoint uses another transport:
+
+```yaml
+providers:
+  corporate:
+    driver: openai
+    base_url: https://models.example.com/v1
+    api_key: $CORPORATE_MODEL_KEY
+    models:
+      fast:
+        model: gpt-5.4-mini
+```
+
+Provider keys and endpoints are held by ZotUI and written into the sandbox's
+private Zot configuration for that run. They are not baked into the worker
+image. The browser receives only provider names and model aliases. In the
+worker form, selecting a provider shows that provider's built-in or custom
+models. Custom map keys are the names shown in the UI; an omitted `model` uses
+the map key as the provider model ID.
 
 ### Vercel AI Gateway
 
 Vercel AI Gateway is a model provider, not Vercel Sandbox authentication:
 
 ```yaml
-models:
-  gateway:
-    provider: vercel
-    model: openai/gpt-5.4
+providers:
+  vercel:
     api_key: $AI_GATEWAY_API_KEY
+    models:
+      gateway:
+        model: openai/gpt-5.4
 ```
 
 Create this key from **Vercel Dashboard → AI Gateway → API Keys → Create Key**.
 The gateway exposes an OpenAI-compatible endpoint and uses creator-qualified
 model IDs such as `openai/gpt-5.4` or `anthropic/claude-sonnet-4.6`. See Vercel's
 [AI Gateway authentication guide](https://vercel.com/docs/ai-gateway/authentication-and-byok)
-and zot's [backend guide](backends.md#gateways-and-prefixed-models).
+and zot's [provider guide](providers.md#gateways-and-prefixed-models).
 
 These keys are not interchangeable:
 
@@ -308,6 +348,7 @@ An environment is the reusable runtime blueprint selected in the worker form:
 environments:
   go-development:
     compute: development
+    provider: vercel
     model: gateway
     image: golang:1.26.5-bookworm
     env:
@@ -317,8 +358,9 @@ environments:
 ```
 
 - `compute` references a key under `compute`.
-- `model` is the default and references a key under `models`; the worker may
-  select another configured model.
+- `provider` references a key under `providers`.
+- `model` is the default built-in or custom model for that provider; the worker
+  may select another provider/model pair.
 - `image` must exist in the selected compute provider.
 - `env` becomes the sandbox's baseline environment.
 - `repositories` is an optional allowlist. Each entry is
@@ -361,15 +403,17 @@ compute:
   development:
     type: docker
 
-models:
-  gateway:
-    provider: vercel
-    model: openai/gpt-5.4
+providers:
+  vercel:
     api_key: $AI_GATEWAY_API_KEY
+    models:
+      gateway:
+        model: openai/gpt-5.4
 
 environments:
   go-development:
     compute: development
+    provider: vercel
     model: gateway
     image: golang:1.26.5-bookworm
     env:
@@ -410,15 +454,17 @@ compute:
     project_id: $VERCEL_PROJECT_ID
     timeout: 45m
 
-models:
-  gateway:
-    provider: vercel
-    model: openai/gpt-5.4
+providers:
+  vercel:
     api_key: $AI_GATEWAY_API_KEY
+    models:
+      gateway:
+        model: openai/gpt-5.4
 
 environments:
   vercel-go:
     compute: vercel
+    provider: vercel
     model: gateway
     image: go-environment:latest
     repositories:
@@ -433,7 +479,7 @@ store:
 
 ### `provider: no API key configured`
 
-The selected model's `api_key` expanded to an empty string. Export the named
+The selected provider's `api_key` expanded to an empty string. Export the named
 variable in the same shell that starts zotui. A Vercel Sandbox token is not a
 model API key.
 

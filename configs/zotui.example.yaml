@@ -62,33 +62,39 @@ compute:
     account_id: $CLOUDFLARE_ACCOUNT_ID
     api_token: $CLOUDFLARE_API_TOKEN
 
-# Models zot reasons with. Each names the provider, the model, and the credential
-# to reach it - held on the host and injected into a run's sandbox. An environment
-# picks a default; a worker can override it.
-models:
-  glm:
-    provider: zai
-    model: glm-5.2
+# Inference providers are reusable connections. The map key is also the Zot
+# driver unless `driver` says otherwise, which lets an alias such as `corporate`
+# use the `openai` driver. Credentials stay on the host and are injected into a
+# run's sandbox.
+providers:
+  zai:
     api_key: $ZAI_API_KEY
-  sonnet:
-    provider: anthropic
-    model: claude-5-sonnet
+    # `models` is optional for built-in providers. When omitted, ZotUI shows
+    # Z.AI models from its built-in catalogue.
+  anthropic:
     api_key: $ANTHROPIC_API_KEY
+    # A custom list replaces the built-in list for this connection. Map keys are
+    # the names shown in the UI; `model` may alias the provider's real model ID.
+    models:
+      sonnet:
+        model: claude-5-sonnet
 
 # Environments bind compute to a base image and env vars - the reusable blueprint
 # a run's sandbox is created from: define once, spawn many ephemeral sandboxes.
-# `model` is the default model for workers on this environment.
+# `provider` and `model` are the defaults for workers on this environment.
 environments:
   # local-development:
   #   compute: local
-  #   model: glm
+  #   provider: zai
+  #   model: glm-5.2
   #   # Environment image: toolchain only. Zotui installs Zot at run time.
   #   image: golang:1.26.5-bookworm
   #   repositories:
   #     - development/openzot/openzot
   # vercel-development:
   #   compute: vercel
-  #   model: glm
+  #   provider: zai
+  #   model: glm-5.2
   #   # Custom toolchain images must be pushed to this project's Vercel Container
   #   # Registry. Zotui installs its embedded Zot worker after creating the sandbox.
   #   image: go-environment:latest
@@ -96,7 +102,8 @@ environments:
   #     - public/openzot/openzot
   go-ubuntu:
     compute: cf
-    model: glm
+    provider: zai
+    model: glm-5.2
     image: ghcr.io/acme/go-environment:latest # environment tools; Zot is deployed by zotui
     env:
       GOFLAGS: -mod=mod

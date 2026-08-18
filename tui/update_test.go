@@ -1022,7 +1022,7 @@ func TestMetaBarRendersConfiguredFieldsInOrder(t *testing.T) {
 
 	bar := m.metaBar()
 
-	if strings.Contains(bar, "backend") || strings.Contains(bar, "elapsed") {
+	if strings.Contains(bar, "provider") || strings.Contains(bar, "elapsed") {
 		t.Errorf("unconfigured fields must not show: %q", bar)
 	}
 

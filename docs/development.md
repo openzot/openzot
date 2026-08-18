@@ -55,7 +55,7 @@ database is kept under the ignored `.local/` directory unless
 See [zotui-configuration.md](zotui-configuration.md) for complete local Docker
 and Vercel Sandbox configurations, model credentials, and repository setup.
 
-To bake a configuration - model, backend, even the provider key - _into_ the
+To bake a configuration - model, provider, even the provider key - _into_ the
 binary so it needs nothing at the destination, build with `-tags portable`. The
 compiled-in config overrides the runtime file and environment, which is the
 point: nothing at the destination can redirect it. See

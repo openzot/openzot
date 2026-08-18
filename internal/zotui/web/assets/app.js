@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 
-let state = { choices: { repos: [], repositories: {}, environments: [], models: [], defaultMaxIterations: 1000000 }, workers: [] };
+let state = { choices: { repos: [], repositories: {}, environments: [], providers: [], models: {}, defaultMaxIterations: 1000000 }, workers: [] };
 let selectedWorker = 0;
 let selectedRun = 0;
 let editingID = "";
@@ -178,7 +178,6 @@ function renderWorkers() {
       card.configuration = {
         instance: {
           ...item,
-          backend: item.repo,
           runs: item.runs.map((entry) => ({ ...entry, state: stateClass(entry.status), iteration: entry.iteration })),
           schedule: { short: item.schedule?.cron || "manual" },
         },
@@ -238,7 +237,7 @@ function renderHeader() {
   $("#instance-id").textContent = item?.id || "—";
   $("#header-kicker").textContent = item ? `${item.repo} / ${item.repository}` : "Create a worker to begin";
   $("#environment-value").textContent = item?.environment || "—";
-  $("#backend-value").textContent = item ? scheduleText(item.schedule) : "—";
+  $("#schedule-value").textContent = item ? scheduleText(item.schedule) : "—";
   $("#objective-value").textContent = item?.mission || "—";
   $("#edit-worker").disabled = !item;
   $("#run-start").disabled = !item || Boolean(current);
@@ -295,14 +294,32 @@ async function loadOutput() {
   }
 }
 
-function fillChoices(selectedRepo = "", selectedRepository = "") {
+function fillChoices(selectedRepo = "", selectedRepository = "", preferredProvider = "", selectedModel = "") {
   $("#repo").innerHTML = state.choices.repos.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`).join("");
   if (selectedRepo) $("#repo").value = selectedRepo;
   fillRepositories(selectedRepository);
   $("#environment-grid").innerHTML = state.choices.environments.map((value, index) => `<button type="button" class="environment-option${index === 0 ? " active" : ""}" data-environment="${escapeAttribute(value)}"><span>CONFIGURED</span><strong>${escapeText(value.toUpperCase())}</strong><small>Reusable runtime<br/>from zotui config</small></button>`).join("");
-  $("#model-grid").innerHTML = state.choices.models.map((value, index) => `<button type="button" class="choice${index === 0 ? " active" : ""}" data-model="${escapeAttribute(value)}" role="option" aria-selected="${index === 0}"><strong>${escapeText(value)}</strong><small>CONFIGURED MODEL</small></button>`).join("");
-	$("#environment-label").textContent = (state.choices.environments[0] || "NO ENVIRONMENT").toUpperCase();
+  const selectedProvider = state.choices.providers.includes(preferredProvider)
+    ? preferredProvider
+    : (state.choices.providers.find((provider) => state.choices.models?.[provider]?.includes(selectedModel)) || state.choices.providers[0] || "");
+  $("#provider-grid").innerHTML = state.choices.providers.map((value) => {
+    const active = value === selectedProvider;
+    return `<button type="button" class="choice${active ? " active" : ""}" data-provider="${escapeAttribute(value)}" role="option" aria-selected="${active}"><strong>${escapeText(value)}</strong><small>CONFIGURED PROVIDER</small></button>`;
+  }).join("");
+  fillModels(selectedProvider, selectedModel);
+  $("#environment-label").textContent = (state.choices.environments[0] || "NO ENVIRONMENT").toUpperCase();
   bindChoiceButtons();
+}
+
+function fillModels(provider, preferred = "") {
+  const models = state.choices.models?.[provider] || [];
+  const selected = models.includes(preferred) ? preferred : (models[0] || "");
+  $("#model-grid").innerHTML = models.map((value) => {
+    const active = value === selected;
+    return `<button type="button" class="choice${active ? " active" : ""}" data-model="${escapeAttribute(value)}" role="option" aria-selected="${active}"><strong>${escapeText(value)}</strong><small>CONFIGURED MODEL</small></button>`;
+  }).join("");
+  $("#model").value = selected;
+  bindModelButtons();
 }
 
 function fillRepositories(preferred = "") {
@@ -354,6 +371,13 @@ function bindChoiceButtons() {
     document.querySelectorAll("[data-environment]").forEach((item) => item.classList.toggle("active", item === button));
     $("#environment-label").textContent = button.dataset.environment.toUpperCase();
   }));
+  document.querySelectorAll("[data-provider]").forEach((button) => button.addEventListener("click", () => {
+    choose("[data-provider]", "provider", button.dataset.provider);
+    fillModels(button.dataset.provider);
+  }));
+}
+
+function bindModelButtons() {
   document.querySelectorAll("[data-model]").forEach((button) => button.addEventListener("click", () => {
     document.querySelectorAll("[data-model]").forEach((item) => {
       item.classList.toggle("active", item === button);
@@ -381,7 +405,6 @@ function openCreate() {
   $("#instance-name").value = "";
   $("#objective").value = "";
   $("#max-iterations").value = String(state.choices.defaultMaxIterations ?? 1000000);
-  $("#model").value = state.choices.models[0] || "";
   schedule = { cron: "", timezone: "UTC", runtimeMinutes: 90 };
   updateScheduleSummary();
   $("#create-dialog").showModal();
@@ -391,16 +414,14 @@ function openEdit() {
   const item = worker();
   if (!item) return;
   editingID = item.id;
-  fillChoices(item.repo, item.repository);
+  fillChoices(item.repo, item.repository, item.provider, item.model);
   $("#dialog-kicker").textContent = `Update ${item.id} · history retained`;
   $("#dialog-title").textContent = "Edit ZOT worker_";
   $("#create-submit").textContent = "Save worker";
   $("#instance-name").value = item.name;
   $("#objective").value = item.mission;
   $("#max-iterations").value = item.maxIterations;
-  $("#model").value = item.model;
   choose("[data-environment]", "environment", item.environment);
-  choose("[data-model]", "model", item.model);
   schedule = { ...item.schedule };
   updateScheduleSummary();
   $("#create-dialog").showModal();
@@ -414,6 +435,7 @@ async function saveWorker(event) {
     repo: $("#repo").value,
     repository: repositoryValue(),
     environment,
+    provider: document.querySelector("[data-provider].active")?.dataset.provider,
     model: $("#model").value,
     mission: $("#objective").value,
     maxIterations: Number($("#max-iterations").value),

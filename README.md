@@ -49,7 +49,7 @@ curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${V
 mv "zot-${VERSION}-${OS}-${ARCH}/zot" ~/.local/bin/   # or any directory on your PATH
 ```
 
-zot defaults to the **`zai`** backend running **`glm-5.2`**. Export a key and
+zot defaults to the **`zai`** provider running **`glm-5.2`**. Export a key and
 give it a job:
 
 ```bash
@@ -57,9 +57,9 @@ export ZAI_API_KEY="…"
 zot "add input validation to the signup handler and a test"
 ```
 
-Any OpenAI-compatible provider works - `--backend anthropic --model
-claude-5-sonnet`, a local `--backend ollama`, gateways, or a custom endpoint; see
-[docs/backends.md](docs/backends.md). To build from source or run the container
+Any OpenAI-compatible provider works - `--provider anthropic --model
+claude-5-sonnet`, a local `--provider ollama`, gateways, or a custom endpoint; see
+[docs/providers.md](docs/providers.md). To build from source or run the container
 image, see [docs/development.md](docs/development.md) and
 [docs/docker.md](docs/docker.md).
 
@@ -144,7 +144,7 @@ filesystem sandbox**. Absolute paths and shell commands retain all permissions
 of the zot process. Point it at a scratch directory or a disposable git checkout
 you are happy for it to change - not your home directory.
 
-Configured backend credentials are resolved into zot's in-memory configuration
+Configured provider credentials are resolved into zot's in-memory configuration
 and then removed from the process environment before the agent starts, so its
 shell commands do not inherit those API keys. Other secrets already present in
 the environment or readable from disk remain accessible to those commands.
@@ -163,7 +163,7 @@ upgrading.
 
 ## Documentation
 
-- [docs/backends.md](docs/backends.md) - providers, credentials, gateways, custom endpoints, the Responses API
+- [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints, the Responses API
 - [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENT.md` & skills
 - [docs/zotui-configuration.md](docs/zotui-configuration.md) - zotui repos, compute, models, environments, Vercel Sandbox, and local Docker setup
 - [docs/development.md](docs/development.md) - building from source, release vs developer builds, the codebase map

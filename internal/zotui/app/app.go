@@ -56,7 +56,8 @@ type Choices struct {
 	Repos                []string            `json:"repos"`
 	Repositories         map[string][]string `json:"repositories"`
 	Environments         []string            `json:"environments"`
-	Models               []string            `json:"models"`
+	Providers            []string            `json:"providers"`
+	Models               map[string][]string `json:"models"`
 	DefaultMaxIterations int                 `json:"defaultMaxIterations"`
 }
 
@@ -69,8 +70,12 @@ func (a *App) Choices(ctx context.Context) (Choices, error) {
 		}
 		repositories[name] = discovered
 	}
+	models := make(map[string][]string, len(a.cfg.Providers))
+	for _, provider := range sortedKeys(a.cfg.Providers) {
+		models[provider] = a.cfg.ProviderModels(provider)
+	}
 	return Choices{Repos: sortedKeys(a.cfg.Repos), Repositories: repositories,
-		Environments: sortedKeys(a.cfg.Environments), Models: sortedKeys(a.cfg.Models),
+		Environments: sortedKeys(a.cfg.Environments), Providers: sortedKeys(a.cfg.Providers), Models: models,
 		DefaultMaxIterations: DefaultMaxIterations}, nil
 }
 
@@ -79,6 +84,7 @@ type WorkerParams struct {
 	Repo          string         `json:"repo"`
 	Repository    string         `json:"repository"`
 	Environment   string         `json:"environment"`
+	Provider      string         `json:"provider"`
 	Model         string         `json:"model"`
 	Mission       string         `json:"mission"`
 	MaxIterations int            `json:"maxIterations"`
@@ -145,8 +151,12 @@ func (a *App) StartRun(ctx context.Context, workerID string) (string, error) {
 	if err := a.authorize(ctx, workerExecution(*w)); err != nil {
 		return "", err
 	}
+	modelProvider := w.Provider
+	if modelProvider == "" {
+		modelProvider = a.cfg.Environments[w.Environment].Provider
+	}
 	id, err := a.store.CreateRun(ctx, store.Run{WorkerID: w.ID, Status: store.RunScheduled,
-		Mission: w.Mission, Model: w.Model, MaxIterations: w.MaxIterations})
+		Mission: w.Mission, Provider: modelProvider, Model: w.Model, MaxIterations: w.MaxIterations})
 	if err != nil {
 		return "", fmt.Errorf("start worker: %w", err)
 	}
@@ -305,11 +315,14 @@ func (a *App) buildWorker(p WorkerParams) (store.Worker, error) {
 	if rc.Type == "local" && computeConfig.Type != "docker" {
 		return store.Worker{}, fmt.Errorf("local repo %q requires docker compute; %s compute needs a remote repo connection", p.Repo, computeConfig.Type)
 	}
+	if p.Provider == "" {
+		p.Provider = env.Provider
+	}
 	if p.Model == "" {
 		p.Model = env.Model
 	}
-	if _, ok := a.cfg.Models[p.Model]; !ok {
-		return store.Worker{}, fmt.Errorf("unknown model %q", p.Model)
+	if _, _, ok := a.cfg.ResolveModel(p.Provider, p.Model); !ok {
+		return store.Worker{}, fmt.Errorf("unknown model %q for provider %q", p.Model, p.Provider)
 	}
 	if p.MaxIterations <= 0 {
 		p.MaxIterations = DefaultMaxIterations
@@ -318,13 +331,13 @@ func (a *App) buildWorker(p WorkerParams) (store.Worker, error) {
 		return store.Worker{}, err
 	}
 	return store.Worker{Name: strings.TrimSpace(p.Name), Repo: p.Repo, Repository: p.Repository,
-		Environment: p.Environment, Model: p.Model, Mission: strings.TrimSpace(p.Mission),
+		Environment: p.Environment, Provider: p.Provider, Model: p.Model, Mission: strings.TrimSpace(p.Mission),
 		MaxIterations: p.MaxIterations, Schedule: p.Schedule}, nil
 }
 
 func workerExecution(w store.Worker) dispatch.Execution {
 	return dispatch.Execution{Repo: w.Repo, Repository: w.Repository, Mission: w.Mission, Environment: w.Environment,
-		Model: w.Model, MaxIterations: w.MaxIterations}
+		Provider: w.Provider, Model: w.Model, MaxIterations: w.MaxIterations}
 }
 
 func (a *App) authorize(ctx context.Context, execution dispatch.Execution) error {
@@ -393,9 +406,16 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 	if !ok {
 		return nil, compute.Spec{}, fmt.Errorf("environment %q references unknown compute %q", execution.Environment, env.Compute)
 	}
-	m, ok := a.cfg.Models[execution.Model]
+	if execution.Provider == "" {
+		execution.Provider = env.Provider
+	}
+	modelProvider, modelID, ok := a.cfg.ResolveModel(execution.Provider, execution.Model)
 	if !ok {
-		return nil, compute.Spec{}, fmt.Errorf("unknown model %q", execution.Model)
+		return nil, compute.Spec{}, fmt.Errorf("unknown model %q for provider %q", execution.Model, execution.Provider)
+	}
+	modelDriver := modelProvider.Driver
+	if modelDriver == "" {
+		modelDriver = execution.Provider
 	}
 	var driver compute.Provider
 	switch provider.Type {
@@ -421,7 +441,7 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 			Username: "x-access-token", Directory: parts[1]}
 	}
 	return driver, compute.Spec{Image: env.Image, Platform: driver.Platform(), Env: env.Env, Mounts: mounts, Source: source, MaxIterations: execution.MaxIterations,
-		Model: compute.ModelSpec{Provider: m.Provider, Model: m.Model, APIKey: m.APIKey, BaseURL: m.BaseURL}}, nil
+		Model: compute.ModelSpec{Provider: modelDriver, Model: modelID, APIKey: modelProvider.APIKey, BaseURL: modelProvider.BaseURL}}, nil
 }
 
 func (a *App) repoFor(name string) (repo.Provider, error) {

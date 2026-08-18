@@ -61,8 +61,8 @@ func run() error {
 	}
 
 	configPath := pflag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := pflag.String("backend", "", "backend to run against: a provider such as zai (default), openai, anthropic, groq, ollama, or a backend named in the config")
-	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai backend serves)")
+	provider := pflag.String("provider", "", "model provider to run against: zai (default), openai, anthropic, groq, ollama, or a provider named in the config")
+	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai provider serves)")
 	dir := pflag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := pflag.Int("max-iterations", 0, "override the safety cap on agent iterations")
 	taskFlag := pflag.String("task", "", "the durable objective, placed in the system prompt so it survives a long run (overrides a positional task)")
@@ -93,7 +93,7 @@ func run() error {
 
 	// Load credentials from the directory the agent will work in. This must
 	// happen after --dir is parsed but before configuration resolves env-backed
-	// backend secrets - and only on a developer build.
+	// provider secrets - and only on a developer build.
 	loadEnv(*dir)
 
 	sessions := *sessionDir
@@ -150,7 +150,7 @@ func run() error {
 	pflag.Visit(func(f *pflag.Flag) { passed[f.Name] = true })
 
 	applyOverrides(&cfg, overrides{
-		Backend:       *backend,
+		Provider:      *provider,
 		Model:         *model,
 		MaxIterations: *maxIter,
 		Diff:          *diffFlag,
@@ -267,7 +267,7 @@ func loadEnv(dir string) {
 // viewer, not a chat client.
 // editConfig ensures the config file exists - seeding it from the embedded
 // template on first run - and opens it in the user's editor. This is the setup
-// path: configure the backend, model and provider key by editing the file.
+// path: configure the provider, model and key by editing the file.
 func editConfig() error {
 	path := config.DefaultConfigPath()
 
@@ -304,7 +304,7 @@ func editConfig() error {
 // overrides are the command-line values that take precedence over the config
 // file and the environment.
 type overrides struct {
-	Backend       string
+	Provider      string
 	Model         string
 	MaxIterations int
 	Diff          bool
@@ -319,8 +319,8 @@ type overrides struct {
 
 // applyOverrides layers command-line values over a loaded configuration.
 func applyOverrides(cfg *zot.Config, o overrides) {
-	if o.Backend != "" {
-		cfg.DefaultBackend = o.Backend
+	if o.Provider != "" {
+		cfg.DefaultProvider = o.Provider
 	}
 
 	if o.Model != "" {

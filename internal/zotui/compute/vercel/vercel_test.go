@@ -101,12 +101,13 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 		Agent struct {
 			MaxIterations int `json:"max_iterations"`
 		} `json:"agent"`
-		Backends map[string]map[string]string `json:"backends"`
+		Providers map[string]map[string]string `json:"providers"`
 	}
 	if err := json.Unmarshal(installedConfig, &configBody); err != nil {
 		t.Fatalf("installed config: %v", err)
 	}
-	if configBody.Agent.MaxIterations != 99 || configBody.Backends["worker"]["api_key"] != "model-secret" {
+	if configBody.Agent.MaxIterations != 99 || configBody.Providers["worker"]["driver"] != "zai" ||
+		configBody.Providers["worker"]["api_key"] != "model-secret" {
 		t.Fatalf("installed config = %+v", configBody)
 	}
 	if string(installedWorker) != "deployed-zot-binary" || installedWorkerMode != 0o755 {

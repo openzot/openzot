@@ -45,7 +45,7 @@
           <div>
             <div class="header-kicker" id="header-kicker">Autonomous software factory / product</div>
             <div class="header-title"><h1 id="instance-title">ZOT-PRODUCT</h1></div>
-            <div class="header-detail"><span>instance <b class="instance-id" id="instance-id">ZT-6F22</b></span><span>runtime <b id="environment-value">Remote builder · Linux amd64</b></span><span>schedule <b id="backend-value">Every 4 hours · Europe/London · 90m runtime</b></span><span>mission <b id="objective-value">Continuously turn repeated user demand into tested improvements and review-ready pull requests</b></span></div>
+            <div class="header-detail"><span>instance <b class="instance-id" id="instance-id">ZT-6F22</b></span><span>runtime <b id="environment-value">Remote builder · Linux amd64</b></span><span>schedule <b id="schedule-value">Every 4 hours · Europe/London · 90m runtime</b></span><span>mission <b id="objective-value">Continuously turn repeated user demand into tested improvements and review-ready pull requests</b></span></div>
           </div>
           <div class="actions"><button class="action" id="edit-worker">Edit worker</button><button class="action" id="run-pause">Pause run</button><button class="action" id="run-stop">Stop run</button><button class="action primary" id="run-start">Start new run</button></div>
         </header>
@@ -119,7 +119,8 @@
             <div class="field full"><label for="instance-name">Worker name</label><input id="instance-name" name="name" value="zot-product-builder" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required /></div>
             <div class="field"><label for="repo">Code source</label><select id="repo" name="repo" required></select><span class="field-hint">The account or local checkout that provides the code.</span></div>
             <div class="field"><label id="repository-label" for="repository">Repository</label><select id="repository" name="repository" required></select><input id="repository-manual" placeholder="owner/name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" hidden disabled required /><span class="field-hint" id="repository-hint"></span></div>
-            <div class="field full"><label id="model-label">Model</label><input id="model" name="model" type="hidden" value="glm-5.2"/><div class="model-grid" id="model-grid" role="listbox" aria-labelledby="model-label"></div></div>
+            <div class="field full"><label id="provider-label">Model provider</label><div class="provider-grid" id="provider-grid" role="listbox" aria-labelledby="provider-label"></div></div>
+            <div class="field full"><label id="model-label">Model</label><input id="model" name="model" type="hidden"/><div class="model-grid" id="model-grid" role="listbox" aria-labelledby="model-label"></div></div>
             <div class="field full"><label for="max-iterations">Iteration budget</label><input id="max-iterations" name="iterations" type="number" value="1000000" min="1" max="1000000" required /></div>
             <div class="field full"><label for="objective">Mission</label><textarea id="objective" name="objective" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required>Continuously identify high-confidence product opportunities from user demand, implement the strongest candidates, verify them, and create review-ready pull requests.</textarea><span class="field-hint">The worker generates and prioritizes its own work from this mission until paused or stopped.</span></div>
           </div>

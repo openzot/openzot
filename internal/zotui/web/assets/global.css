@@ -1376,13 +1376,11 @@ dialog[open] {
   font-size: var(--font-sm);
   line-height: 1.4;
 }
-.backend-grid,
+.provider-grid,
 .model-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 5px;
-}
-.model-grid {
   transform-origin: top;
 }
 .choice {
@@ -9057,9 +9055,6 @@ pion-schedule-dialog {
     font-size: var(--font-nav-narrow);
     letter-spacing: 0.05em;
   }
-}
-.backend-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 /* Footer telemetry is deliberately quieter than navigation and content. */
 :root {

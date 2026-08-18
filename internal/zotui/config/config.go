@@ -11,9 +11,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/openzot/openzot/internal/catalogue"
 )
 
 // Config is the whole zotui configuration.
@@ -27,9 +30,10 @@ type Config struct {
 	// a name an environment references.
 	Compute map[string]Compute `yaml:"compute"`
 
-	// Models are the LLM configs zot reasons with, keyed by a name an environment
-	// or worker references. Each carries the provider credential.
-	Models map[string]Model `yaml:"models"`
+	// Providers are the inference connections Zot can use. Each optionally
+	// supplies a custom model list; otherwise its built-in catalogue drives the
+	// worker form.
+	Providers map[string]Provider `yaml:"providers"`
 
 	// Environments bind compute to a base image and env vars - the blueprint a
 	// run's sandbox is created from.
@@ -76,14 +80,20 @@ type Compute struct {
 	BaseURL   string `yaml:"base_url"`   // optional endpoint override
 }
 
-// Model is an LLM configuration zot reasons with: the provider, the model name,
-// and the credential to reach it. The key is held on the host and injected into a
-// run's sandbox at dispatch - never baked into the image.
+// Provider is one inference connection. Driver selects Zot's transport; when it
+// is empty, the provider's map key is also the driver name. Credentials are held
+// on the host and injected into a run's sandbox at dispatch.
+type Provider struct {
+	Driver  string           `yaml:"driver"`   // zai, openai, anthropic, custom, ...
+	APIKey  string           `yaml:"api_key"`  // inline or $VAR
+	BaseURL string           `yaml:"base_url"` // optional gateway / custom endpoint
+	Models  map[string]Model `yaml:"models"`   // optional custom list; empty uses built-ins
+}
+
+// Model is one custom visible LLM choice. An empty Model uses the choice's map
+// key as the model ID sent to the provider.
 type Model struct {
-	Provider string `yaml:"provider"` // zai, openai, anthropic, ...
-	Model    string `yaml:"model"`    // the model name the provider knows
-	APIKey   string `yaml:"api_key"`  // inline or $VAR
-	BaseURL  string `yaml:"base_url"` // optional gateway / custom endpoint
+	Model string `yaml:"model"`
 }
 
 // Environment binds compute to a base image and a set of environment variables -
@@ -97,7 +107,8 @@ type Model struct {
 // environment can span repo connections.
 type Environment struct {
 	Compute      string            `yaml:"compute"`      // references a key in Compute
-	Model        string            `yaml:"model"`        // default model (references Models)
+	Provider     string            `yaml:"provider"`     // default inference connection
+	Model        string            `yaml:"model"`        // default model for Provider
 	Image        string            `yaml:"image"`        // environment tools; zotui deploys Zot
 	Env          map[string]string `yaml:"env"`          // environment variables
 	Repositories []string          `yaml:"repositories"` // optional per-env lockdown
@@ -125,6 +136,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	c.expand()
+	if err := c.validate(); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
 	return &c, nil
 }
 
@@ -148,10 +162,82 @@ func (c *Config) expand() {
 		r.BaseURL = os.ExpandEnv(r.BaseURL)
 		c.Compute[name] = r
 	}
-	for name, m := range c.Models {
-		m.APIKey = os.ExpandEnv(m.APIKey)
-		c.Models[name] = m
+	for name, p := range c.Providers {
+		p.APIKey = os.ExpandEnv(p.APIKey)
+		p.BaseURL = os.ExpandEnv(p.BaseURL)
+		c.Providers[name] = p
 	}
+}
+
+func (c *Config) validate() error {
+	if len(c.Providers) == 0 {
+		return fmt.Errorf("at least one model provider is required")
+	}
+	for name := range c.Providers {
+		if len(c.ProviderModels(name)) == 0 {
+			return fmt.Errorf("provider %q has no custom models and driver %q has no built-in models", name, c.providerDriver(name))
+		}
+	}
+	for name, environment := range c.Environments {
+		if _, ok := c.Compute[environment.Compute]; !ok {
+			return fmt.Errorf("environment %q references unknown compute %q", name, environment.Compute)
+		}
+		if _, ok := c.Providers[environment.Provider]; !ok {
+			return fmt.Errorf("environment %q references unknown provider %q", name, environment.Provider)
+		}
+		if _, _, ok := c.ResolveModel(environment.Provider, environment.Model); !ok {
+			return fmt.Errorf("environment %q references unknown model %q for provider %q", name, environment.Model, environment.Provider)
+		}
+	}
+	return nil
+}
+
+func (c *Config) providerDriver(name string) string {
+	if driver := c.Providers[name].Driver; driver != "" {
+		return driver
+	}
+	return name
+}
+
+// ProviderModels returns the sorted model names visible for a provider. A
+// custom list replaces the built-in catalogue; an omitted list uses the
+// provider's resolved driver.
+func (c *Config) ProviderModels(name string) []string {
+	provider, ok := c.Providers[name]
+	if !ok {
+		return nil
+	}
+	if len(provider.Models) == 0 {
+		return catalogue.NamesForProvider(c.providerDriver(name))
+	}
+	names := make([]string, 0, len(provider.Models))
+	for name := range provider.Models {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// ResolveModel resolves one visible model alias to the provider model ID.
+func (c *Config) ResolveModel(providerName, modelName string) (Provider, string, bool) {
+	provider, ok := c.Providers[providerName]
+	if !ok {
+		return Provider{}, "", false
+	}
+	if len(provider.Models) == 0 {
+		if !slices.Contains(catalogue.NamesForProvider(c.providerDriver(providerName)), modelName) {
+			return Provider{}, "", false
+		}
+		return provider, modelName, true
+	}
+	model, ok := provider.Models[modelName]
+	if !ok {
+		return Provider{}, "", false
+	}
+	if model.Model == "" {
+		model.Model = modelName
+	}
+	return provider, model.Model, true
 }
 
 // expandHome resolves a leading ~/ to the user's home directory.

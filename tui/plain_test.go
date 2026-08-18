@@ -148,7 +148,7 @@ func TestRunPlainTranscript(t *testing.T) {
 		[]string{plainSuccess("tests pass")},
 	)
 
-	meta := Meta{AppName: "zot", Task: "run the tests", Model: "test-model", Backend: "openai", Workdir: "/tmp/work"}
+	meta := Meta{AppName: "zot", Task: "run the tests", Model: "test-model", Provider: "openai", Workdir: "/tmp/work"}
 
 	options := agent.ExecuteWithToolsOptions{
 		Tools: agent.Tools{
@@ -171,7 +171,7 @@ func TestRunPlainTranscript(t *testing.T) {
 
 	for _, want := range []string{
 		"zot: run the tests",
-		"backend openai",
+		"provider openai",
 		"model test-model",
 		"iteration 1",
 		// the command itself, not a key=value dump
@@ -194,7 +194,7 @@ func TestRunPlainTranscript(t *testing.T) {
 func TestRunPlainReturnsAnErrorOnFailure(t *testing.T) {
 	client := plainServer(t, []string{plainToken("I give up."), plainStop()})
 
-	meta := Meta{Task: "impossible", Model: "m", Backend: "b", Workdir: "/w"}
+	meta := Meta{Task: "impossible", Model: "m", Provider: "b", Workdir: "/w"}
 
 	output, err := capture(t, func() error {
 		return runPlain(context.Background(), client, meta,
@@ -234,7 +234,7 @@ func TestRunPlainReportsToolErrors(t *testing.T) {
 
 	output, err := capture(t, func() error {
 		return runPlain(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w"}, options)
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"}, options)
 	})
 	if err != nil {
 		t.Fatalf("runPlain: %v", err)
@@ -267,7 +267,7 @@ func TestRunPlainSurfacesProviderFailures(t *testing.T) {
 
 	_, runErr := capture(t, func() error {
 		return runPlain(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w"},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
 			agent.ExecuteWithToolsOptions{})
 	})
 
@@ -296,7 +296,7 @@ func TestRunPlainShowsDiffsWhenAsked(t *testing.T) {
 
 	withDiff, err := capture(t, func() error {
 		return runPlain(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", ShowDiff: true}, options)
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", ShowDiff: true}, options)
 	})
 	if err != nil {
 		t.Fatalf("runPlain: %v", err)
@@ -313,7 +313,7 @@ func TestRunPlainShowsDiffsWhenAsked(t *testing.T) {
 func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	client := plainServer(t, []string{plainSuccess("finished")})
 
-	meta := Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Plain: true, Color: "always"}
+	meta := Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Plain: true, Color: "always"}
 
 	output, err := capture(t, func() error {
 		return Run(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
@@ -333,7 +333,7 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	// dispatch must land on the same path rather than trying an alt screen
 	output, err = capture(t, func() error {
 		return Run(context.Background(), plainServer(t, []string{plainSuccess("again")}),
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w"},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
 			agent.ExecuteWithToolsOptions{})
 	})
 	if err != nil {
@@ -354,7 +354,7 @@ func TestRunUsesAColoredStreamWithoutInteractiveControls(t *testing.T) {
 	client := plainServer(t, []string{plainSuccess("finished")})
 	output, err := capture(t, func() error {
 		return Run(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Color: "always"},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Color: "always"},
 			agent.ExecuteWithToolsOptions{})
 	})
 	if err != nil {
@@ -404,7 +404,7 @@ func TestRunPropagatesFailures(t *testing.T) {
 
 	_, err := capture(t, func() error {
 		return Run(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Plain: true},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Plain: true},
 			agent.ExecuteWithToolsOptions{MaxSettles: 1})
 	})
 

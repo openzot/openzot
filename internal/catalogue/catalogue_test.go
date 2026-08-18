@@ -191,6 +191,26 @@ func TestNamesIsSorted(t *testing.T) {
 	}
 }
 
+// Direct providers expose only their own catalogue section, while model
+// gateways expose the whole catalogue they can route.
+func TestNamesForProvider(t *testing.T) {
+	openai := NamesForProvider(" openai ")
+	if len(openai) == 0 {
+		t.Fatal("OpenAI has no built-in models")
+	}
+	for _, name := range openai {
+		if models[name].Provider != "openai" {
+			t.Fatalf("OpenAI list contains %q from %q", name, models[name].Provider)
+		}
+	}
+	if gateway := NamesForProvider("vercel"); len(gateway) != len(Names()) {
+		t.Fatalf("gateway models = %d, want whole catalogue (%d)", len(gateway), len(Names()))
+	}
+	if unknown := NamesForProvider("custom"); len(unknown) != 0 {
+		t.Fatalf("unknown provider models = %v", unknown)
+	}
+}
+
 // The budget has to leave room for the answer, or a full thread produces an
 // empty turn and the loop burns its continuations retrying it.
 // Every catalogued model must leave room to answer. A thread built right up to

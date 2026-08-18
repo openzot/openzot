@@ -1,15 +1,14 @@
-# Backends: connecting zot to a provider
+# Providers: connecting zot to inference
 
-zot talks straight to a model provider over the OpenAI-compatible chat-completions
-API - there is no gateway or account in between. A backend is a URL and a
-credential; zot ships with one for each common provider. Pick one per run with
-`--backend`, or set `default_backend` in config.
+A provider is a named inference connection: a driver, endpoint, and credential.
+It may reach a model service directly, a local server, or a gateway. Pick one per
+run with `--provider`, or set `default_provider` in config.
 
 For the agent itself - the run loop, tools, safety - see the [README](../README.md).
 
-## The built-in backends
+## The built-in providers
 
-| Backend      | Endpoint                          | Credential from      |
+| Provider     | Endpoint                          | Credential from      |
 | ------------ | --------------------------------- | -------------------- |
 | `openai`     | `https://api.openai.com/v1`       | `OPENAI_API_KEY`     |
 | `anthropic`  | `https://api.anthropic.com/v1`    | `ANTHROPIC_API_KEY`  |
@@ -28,30 +27,30 @@ For the agent itself - the run loop, tools, safety - see the [README](../README.
 
 ## Credentials
 
-Each built-in backend reads its provider's conventional variable, so switching
+Each built-in provider reads its conventional credential variable, so switching
 provider is a pair of flags:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-…"
-zot --backend anthropic --model claude-5-sonnet "…"
+zot --provider anthropic --model claude-5-sonnet "…"
 ```
 
-Give the model as well as the backend. The default model is `glm-5.2` and it
-only means something on `zai`; a backend and a model that cannot talk to each
+Give the model as well as the provider. The default model is `glm-5.2` and it
+only means something on `zai`; a provider and a model that cannot talk to each
 other fail as a provider error rather than a configuration one, which is much
 harder to read.
 
 A local model needs no key at all:
 
 ```bash
-zot --backend ollama --model llama-4 "…"
+zot --provider ollama --model llama-4 "…"
 ```
 
 To make a different pair the default, set both in config:
 
 ```yaml
 # ~/.config/zot/config.yaml
-default_backend: openai
+default_provider: openai
 agent:
   model: gpt-5.4-mini
 ```
@@ -61,10 +60,59 @@ path given to `--config`), including as a `$ENV_VAR` reference so no secret is
 written to disk:
 
 ```yaml
-backends:
+providers:
   openai:
     api_key: '$OPENAI_API_KEY'
 ```
+
+The provider name normally selects its driver, so `openai:` means
+`driver: openai`. Set the driver explicitly when the connection has a local
+alias:
+
+```yaml
+default_provider: corporate
+providers:
+  corporate:
+    driver: openai
+    base_url: https://models.example.com/v1
+    api_key: '$CORPORATE_MODEL_KEY'
+```
+
+The driver selects Zot's endpoint defaults and provider-specific behavior; the
+map key remains the name used by `--provider` and `default_provider`.
+
+## Built-in and custom model lists
+
+The `models` block on a provider is optional. Without it, Zot accepts the model
+named by `agent.model` or `--model`; catalogued models contribute their known
+context and capabilities, while a newly released unknown model still runs with
+conservative defaults.
+
+Define `models` when a connection should expose a deliberate custom list. Its
+map keys become the allowed names for that provider, and each entry can alias
+the real model ID or override model-specific settings:
+
+```yaml
+default_provider: corporate
+agent:
+  model: fast
+
+providers:
+  corporate:
+    driver: openai
+    base_url: https://models.example.com/v1
+    api_key: $CORPORATE_MODEL_KEY
+    models:
+      fast:
+        model: gpt-5.4-mini
+        max_iterations: 50
+      deep:
+        model: gpt-5.4
+```
+
+When a custom list exists, selecting any other model is a configuration error.
+This makes the list useful as an intentional connection boundary. Omit it when
+you want Zot's permissive built-in/unknown-model behavior.
 
 ## Gateways and prefixed models
 
@@ -77,40 +125,38 @@ catalogue:
 
 ```bash
 export OPENROUTER_API_KEY="sk-..."
-zot --backend openrouter --model glm-5.2 "…"   # sent as z-ai/glm-5.2
+zot --provider openrouter --model glm-5.2 "…"   # sent as z-ai/glm-5.2
 
 export AI_GATEWAY_API_KEY="..."                # Vercel AI Gateway
-zot --backend vercel --model glm-5.2 "…"       # sent as zai/glm-5.2
+zot --provider vercel --model glm-5.2 "…"       # sent as zai/glm-5.2
 ```
 
 A name you qualify yourself (`--model z-ai/glm-5.2`) is always sent as-is, and a
 model zot has not catalogued passes through bare for the gateway to resolve.
 
 **Cloudflare AI Gateway** is supported too, but its endpoint carries your account
-and gateway ids, so there is no fixed URL to ship - configure it as a backend
-with the `cloudflare` provider and your gateway's compat URL:
+and gateway ids, so there is no fixed URL to ship - configure the `cloudflare`
+provider with your gateway's compat URL:
 
 ```yaml
-default_backend: cloudflare
-backends:
+default_provider: cloudflare
+providers:
   cloudflare:
-    provider: cloudflare
     base_url: https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat
     api_key: '$OPENAI_API_KEY' # the downstream provider's key
-    # headers: { cf-aig-authorization: 'Bearer <gateway-token>' }  # if the gateway is authenticated
 ```
 
 ## Any other provider
 
-Anything that speaks the OpenAI chat-completions API works. Name a backend, give
+Anything that speaks the OpenAI chat-completions API works. Name a provider, give
 it a base URL and a key:
 
 ```yaml
-default_backend: mygateway
+default_provider: mygateway
 
-backends:
+providers:
   mygateway:
-    provider: custom
+    driver: custom
     base_url: https://gateway.internal.example.com/v1
     api_key: '$GATEWAY_KEY'
 ```
@@ -128,12 +174,3 @@ the model resumes from; chat-completions has nowhere to put it, so a reasoning
 model driven that way re-derives its thinking on every round.
 
 Only OpenAI implements it today, so everywhere else stays on chat-completions.
-Override per backend if a gateway supports it:
-
-```yaml
-backends:
-  mygateway:
-    provider: custom
-    base_url: https://gateway.example.com/v1
-    use_responses: true # or disable_responses: true
-```

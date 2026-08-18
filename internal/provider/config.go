@@ -115,7 +115,7 @@ var gatewaySlugs = map[string]map[string]string{
 // qualifyModel completes a bare model name for a gateway that routes by
 // creator/model.
 //
-// It acts only when all three hold: the backend is such a gateway, the model
+// It acts only when all three hold: the provider is such a gateway, the model
 // carries no slash already, and the catalogue recognises it. Any of those
 // failing leaves the name exactly as the user typed it - guessing a prefix zot
 // cannot justify is worse than passing the name through, because a wrong prefix
@@ -248,7 +248,7 @@ func (c Config) Resolve() (Config, error) {
 	default:
 		if hint, ok := gatewayProviders[resolved.Provider]; ok {
 			return Config{}, fmt.Errorf(
-				"provider: %q needs a base URL - its endpoint is account-specific (e.g. %s); set base_url on the backend",
+				"provider: %q needs a base URL - its endpoint is account-specific (e.g. %s); set base_url on the provider",
 				resolved.Provider, hint)
 		}
 

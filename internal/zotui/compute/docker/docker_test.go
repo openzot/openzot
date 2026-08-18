@@ -76,17 +76,18 @@ func TestDockerSandboxLifecycle(t *testing.T) {
 		t.Fatalf("installed worker = args %v, stdin %q", runner.calls[2].args, runner.calls[2].stdin)
 	}
 	var installed struct {
-		DefaultBackend string `json:"default_backend"`
-		Agent          struct {
+		DefaultProvider string `json:"default_provider"`
+		Agent           struct {
 			Model         string `json:"model"`
 			MaxIterations int    `json:"max_iterations"`
 		} `json:"agent"`
-		Backends map[string]map[string]string `json:"backends"`
+		Providers map[string]map[string]string `json:"providers"`
 	}
 	if err := json.Unmarshal([]byte(runner.calls[3].stdin), &installed); err != nil {
 		t.Fatalf("installed config: %v", err)
 	}
-	if installed.DefaultBackend != "worker" || installed.Agent.Model != "glm-5.2" || installed.Agent.MaxIterations != 41 || installed.Backends["worker"]["api_key"] != "secret" {
+	if installed.DefaultProvider != "worker" || installed.Agent.Model != "glm-5.2" || installed.Agent.MaxIterations != 41 ||
+		installed.Providers["worker"]["driver"] != "zai" || installed.Providers["worker"]["api_key"] != "secret" {
 		t.Fatalf("installed config = %+v", installed)
 	}
 

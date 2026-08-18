@@ -2,7 +2,7 @@
 
 How to configure a run, the flags and keys, where the session logs live, and how
 zot picks up `AGENT.md` and skills. For choosing and configuring a provider, see
-[backends.md](backends.md); for the agent itself, the [README](../README.md).
+[providers.md](providers.md); for the agent itself, the [README](../README.md).
 
 ## The config file and env vars
 
@@ -15,7 +15,7 @@ zot config path   # print the config file location
 ```
 
 Scalar fields have a matching `ZOT_<PATH>` env var (e.g. `agent.model` →
-`ZOT_AGENT_MODEL`, `default_backend` → `ZOT_DEFAULT_BACKEND`). Provider
+`ZOT_AGENT_MODEL`, `default_provider` → `ZOT_DEFAULT_PROVIDER`). Provider
 credentials come from their own conventional variables (`OPENAI_API_KEY`,
 `ANTHROPIC_API_KEY`, …) and so need no `ZOT_` prefix; they can equally be set in
 config, referencing a variable you export. Every field is documented in
@@ -27,7 +27,7 @@ config, referencing a variable you export. Every field is documented in
 
 | Flag                                          | Effect                                                             |
 | --------------------------------------------- | ------------------------------------------------------------------ |
-| `--backend` / `--model`                       | which provider and model to run against                            |
+| `--provider` / `--model`                       | which provider and model to run against                            |
 | `--dir`                                       | the directory the agent reads, writes and runs commands in         |
 | `--max-iterations`                            | cap the agentic rounds; the default is deliberately large          |
 | `--task-file`                                 | read the brief from a file instead of the command line             |

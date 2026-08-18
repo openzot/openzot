@@ -48,6 +48,7 @@ type Worker struct {
 	Repo          string    `json:"repo"`
 	Repository    string    `json:"repository"`
 	Environment   string    `json:"environment"`
+	Provider      string    `json:"provider"`
 	Model         string    `json:"model"`
 	Mission       string    `json:"mission"`
 	MaxIterations int       `json:"maxIterations"`
@@ -62,6 +63,7 @@ type Run struct {
 	WorkerID      string     `json:"workerId"`
 	Status        RunStatus  `json:"status"`
 	Mission       string     `json:"mission"`
+	Provider      string     `json:"provider"`
 	Model         string     `json:"model"`
 	MaxIterations int        `json:"maxIterations"`
 	Iteration     int        `json:"iteration"`

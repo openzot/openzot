@@ -159,7 +159,7 @@ func TestOpenRouterAlwaysUsesChatCompletions(t *testing.T) {
 	}
 }
 
-// The same reasoning model on the OpenAI backend directly does use the Responses
+// The same reasoning model on the OpenAI provider directly does use the Responses
 // API - this is the contrast that proves the choice is keyed on the provider,
 // not on the model name.
 func TestTheSameModelUsesResponsesOnOpenAIDirectly(t *testing.T) {
@@ -177,8 +177,8 @@ func TestTheSameModelUsesResponsesOnOpenAIDirectly(t *testing.T) {
 	}
 }
 
-// The openrouter backend resolves to OpenRouter's endpoint with no base URL
-// configured - which is what makes `--backend openrouter` work on its own.
+// The openrouter provider resolves to OpenRouter's endpoint with no base URL
+// configured - which is what makes `--provider openrouter` work on its own.
 func TestOpenRouterHasABuiltinEndpoint(t *testing.T) {
 	config, err := Config{
 		Provider: OpenRouter,
@@ -334,7 +334,7 @@ func TestAnAlreadyQualifiedModelIsUntouched(t *testing.T) {
 }
 
 // Auto-qualification is a gateway convenience only. A direct provider or a custom
-// backend must send exactly what the user typed - prefixing there would corrupt
+// provider must send exactly what the user typed - prefixing there would corrupt
 // a name the provider expects bare.
 func TestDirectProvidersAreNotQualified(t *testing.T) {
 	for _, provider := range []string{OpenAI, Anthropic, ZAI, Custom} {

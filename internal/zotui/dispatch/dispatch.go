@@ -17,6 +17,7 @@ type Execution struct {
 	Repository    string
 	Mission       string
 	Environment   string
+	Provider      string
 	Model         string
 	MaxIterations int
 }

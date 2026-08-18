@@ -203,7 +203,7 @@
       const progressLabel = activeRun
         ? `iteration ${activeRun.iteration}`
         : instance.schedule?.short || "manual";
-      const scope = `${instance.environment} / ${instance.backend} / ${instance.model}`;
+      const scope = `${instance.environment} / ${instance.repo} / ${instance.model}`;
       this.innerHTML = `
         <button class="instance-card${active ? " active" : ""}" data-instance="${escapeHTML(instance.id)}" aria-pressed="${active}">
           <div class="card-row"><span>${escapeHTML(instance.id)}</span><span class="status ${escapeHTML(state)}">${escapeHTML(stateLabel)}</span></div>

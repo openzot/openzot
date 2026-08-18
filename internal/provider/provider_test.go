@@ -349,7 +349,7 @@ func TestClientExposesItsConfig(t *testing.T) {
 
 // The provider list is what an error message offers, so it must be complete and
 // include the escape hatch.
-func TestProvidersListsEveryBackend(t *testing.T) {
+func TestProvidersListsEveryProvider(t *testing.T) {
 	providers := Providers()
 
 	seen := map[string]bool{}

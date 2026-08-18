@@ -325,14 +325,14 @@ func TestApplyOverrides(t *testing.T) {
 		cfg := base()
 
 		applyOverrides(&cfg, overrides{
-			Backend:       "groq",
+			Provider:      "groq",
 			Model:         "glm-5.2",
 			MaxIterations: 12,
 			Color:         "always",
 		})
 
-		if cfg.DefaultBackend != "groq" {
-			t.Errorf("backend = %q", cfg.DefaultBackend)
+		if cfg.DefaultProvider != "groq" {
+			t.Errorf("provider = %q", cfg.DefaultProvider)
 		}
 
 		if cfg.Agent.Model != "glm-5.2" {
@@ -551,11 +551,11 @@ agent:
 ui:
   plain: true
 
-default_backend: local
+default_provider: local
 
-backends:
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)
@@ -581,10 +581,10 @@ backends:
 func TestRunRejectsAnInvalidConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 
-	// a backend that names no known provider and has no endpoint
+	// a provider that names no known driver and has no endpoint
 	if err := os.WriteFile(configPath, []byte(`
-default_backend: nowhere
-backends:
+default_provider: nowhere
+providers:
   nowhere: {}
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -593,7 +593,7 @@ backends:
 	withArgs(t, "--config", configPath, "a task")
 
 	if err := run(); err == nil {
-		t.Error("an unreachable backend must fail before any request")
+		t.Error("an unreachable provider must fail before any request")
 	}
 }
 
@@ -676,11 +676,11 @@ agent:
 ui:
   plain: true
 
-default_backend: local
+default_provider: local
 
-backends:
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)
@@ -817,10 +817,10 @@ agent:
   model: test-model
 ui:
   plain: true
-default_backend: local
-backends:
+default_provider: local
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)), 0o644); err != nil {
@@ -872,10 +872,10 @@ agent:
   model: test-model
 ui:
   plain: true
-default_backend: local
-backends:
+default_provider: local
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)), 0o644); err != nil {

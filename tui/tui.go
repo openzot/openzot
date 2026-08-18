@@ -25,8 +25,8 @@ type Meta struct {
 	Task string
 	// Model is the model name driving the agent.
 	Model string
-	// Backend is the name of the backend the run targets.
-	Backend string
+	// Provider is the name of the model provider the run targets.
+	Provider string
 	// Workdir is the directory the agent's tools operate in.
 	Workdir string
 	// ShowDiff renders a syntax-highlighted diff panel under each edit/write.
@@ -84,7 +84,7 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 		return runStream(ctx, client, meta, opts, streamColorEnabled(meta.Color))
 	}
 
-	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)
+	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Provider, meta.Workdir, meta.ShowDiff)
 	if meta.MaxScrollback > 0 {
 		m.maxEntries = meta.MaxScrollback
 	}

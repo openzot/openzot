@@ -66,6 +66,10 @@ var baselineSchema = []string{
 // migrations is the ordered, authoritative schema history.
 var migrations = []Migration{
 	{Version: 2, Name: "replace jobs with workers and runs", Statements: baselineSchema},
+	{Version: 3, Name: "persist model provider", Statements: []string{
+		`ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+	}},
 }
 
 // MigrationState reports how the database's schema compares to the code.

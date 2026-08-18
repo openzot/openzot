@@ -64,7 +64,7 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 	palette := streamPalette{enabled: color}
 	fmt.Printf("%s: %s\n", palette.paint("1;94", meta.AppName), meta.Task)
 	fmt.Printf("%s %s · %s %s · %s %s\n",
-		palette.paint("2", "backend"), meta.Backend,
+		palette.paint("2", "provider"), meta.Provider,
 		palette.paint("2", "model"), palette.paint("94", meta.Model),
 		palette.paint("2", "dir"), meta.Workdir)
 

@@ -42,7 +42,7 @@ type Client struct {
 
 // ClientOptions configures a Client.
 type ClientOptions struct {
-	// Provider names the backend: "openai", "anthropic", "groq", "mistral",
+	// Provider names the model provider: "openai", "anthropic", "groq", "mistral",
 	// "ollama" and so on. Defaults to "openai".
 	//
 	// Anything else that speaks the OpenAI chat-completions API works too - name

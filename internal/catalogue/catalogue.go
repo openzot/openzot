@@ -288,6 +288,25 @@ func Names() []string {
 	return names
 }
 
+// NamesForProvider lists the catalogued models available from a provider,
+// sorted. Gateways expose the whole catalogue because they route models from
+// several creators; direct providers expose only models they originate.
+func NamesForProvider(provider string) []string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "openrouter" || provider == "vercel" {
+		return Names()
+	}
+
+	names := make([]string, 0)
+	for name, model := range models {
+		if model.Provider == provider {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // InputBudget is how many tokens of conversation may be sent to a model.
 //
 // It is the number the thread builder trims to and compaction triggers against,

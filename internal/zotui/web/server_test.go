@@ -26,8 +26,8 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	cfg := &config.Config{
 		Repos:        map[string]config.Repo{"acme": {Repositories: []string{"acme/api"}}},
 		Compute:      map[string]config.Compute{"cf": {Type: "cloudflare"}},
-		Models:       map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2"}},
-		Environments: map[string]config.Environment{"go": {Compute: "cf", Model: "glm"}},
+		Providers:    map[string]config.Provider{"zai": {Models: map[string]config.Model{"glm": {Model: "glm-5.2"}}}},
+		Environments: map[string]config.Environment{"go": {Compute: "cf", Provider: "zai", Model: "glm"}},
 	}
 	handler := web.New(app.New(cfg, st))
 
@@ -40,7 +40,7 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	response = serve(handler, http.MethodGet, "/workers", "")
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("Software Factory")) || bytes.Contains(body, []byte("const outputSets")) {
+	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("Software Factory")) || !bytes.Contains(body, []byte(`id="provider-grid"`)) || bytes.Contains(body, []byte("const outputSets")) {
 		t.Fatalf("web app status=%d body=%q", response.StatusCode, body[:min(len(body), 200)])
 	}
 	// A released zotui binary must render without reaching a public CDN.
@@ -68,7 +68,7 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	}
 	response.Body.Close()
 
-	payload := `{"name":"builder","repo":"acme","repository":"acme/api","environment":"go","mission":"ship it","maxIterations":8,"schedule":{"cron":"","timezone":"UTC","runtimeMinutes":0}}`
+	payload := `{"name":"builder","repo":"acme","repository":"acme/api","environment":"go","provider":"zai","model":"glm","mission":"ship it","maxIterations":8,"schedule":{"cron":"","timezone":"UTC","runtimeMinutes":0}}`
 	response = serve(handler, http.MethodPost, "/api/workers", payload)
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", response.StatusCode, read(response))
@@ -81,7 +81,7 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 
 	response = serve(handler, http.MethodGet, "/api/state", "")
 	stateBody := read(response)
-	if response.StatusCode != http.StatusOK || !strings.Contains(stateBody, `"name":"builder"`) || !strings.Contains(stateBody, `"repos":["acme"]`) || !strings.Contains(stateBody, `"runs":[]`) {
+	if response.StatusCode != http.StatusOK || !strings.Contains(stateBody, `"name":"builder"`) || !strings.Contains(stateBody, `"provider":"zai"`) || !strings.Contains(stateBody, `"repos":["acme"]`) || !strings.Contains(stateBody, `"runs":[]`) {
 		t.Fatalf("state status=%d body=%s", response.StatusCode, stateBody)
 	}
 	var statePayload struct {
@@ -92,6 +92,9 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	}
 	if got := statePayload.Choices.Repositories["acme"]; len(got) != 1 || got[0] != "acme/api" {
 		t.Fatalf("repository choices did not reach the browser: %v", got)
+	}
+	if len(statePayload.Choices.Providers) != 1 || statePayload.Choices.Providers[0] != "zai" || len(statePayload.Choices.Models["zai"]) != 1 || statePayload.Choices.Models["zai"][0] != "glm" {
+		t.Fatalf("provider model choices did not reach the browser: %+v", statePayload.Choices)
 	}
 	if statePayload.Choices.DefaultMaxIterations != 1_000_000 {
 		t.Fatalf("worker default did not reach the browser: %d", statePayload.Choices.DefaultMaxIterations)

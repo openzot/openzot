@@ -20,10 +20,10 @@
 #   ui.plain              -> ZOT_UI_PLAIN
 #   ui.color              -> ZOT_UI_COLOR
 #   ui.scrollback         -> ZOT_UI_SCROLLBACK
-#   default_backend       -> ZOT_DEFAULT_BACKEND
+#   default_provider       -> ZOT_DEFAULT_PROVIDER
 #
 # Credentials: put the key DIRECTLY in this file, or reference an environment
-# variable with $VAR - either works. Each built-in backend also reads its
+# variable with $VAR - either works. Each built-in provider also reads its
 # provider's conventional variable, so exporting that is usually enough:
 #   openai     -> OPENAI_API_KEY          anthropic  -> ANTHROPIC_API_KEY
 #   groq       -> GROQ_API_KEY            mistral    -> MISTRAL_API_KEY
@@ -38,8 +38,8 @@ agent:
   # works well across open models (glm-5.2, kimi-k3, deepseek-v4-flash) and top
   # coding models from OpenAI and Anthropic (gpt-5.4-mini, claude-5-sonnet).
   #
-  # Whatever you pick, make sure default_backend below actually serves it. A
-  # model and a backend that cannot talk to each other fail as a provider error
+  # Whatever you pick, make sure default_provider below actually serves it. A
+  # model and a provider that cannot talk to each other fail as a provider error
   # rather than a configuration one, which is much harder to read.
   model: "glm-5.2"
 
@@ -137,22 +137,24 @@ ui:
   # scrollback: 5000
 
   # Which fields the header stats bar shows, and in what order. Valid fields:
-  # model, backend, dir, iter, tools, edits, elapsed, tokens (default: all).
+  # model, provider, dir, iter, tools, edits, elapsed, tokens (default: all).
   # `tokens` shows the provider's own reported usage; iter/tools/elapsed show
   # progress against a limit (e.g. 5/1000) when one is set.
   # (Config file only - a list has no single environment variable.)
-  # stats: [model, backend, iter, tools, elapsed, tokens]
+  # stats: [model, provider, iter, tools, elapsed, tokens]
 
-# Backends are the providers a run can target. zot talks to each one directly
-# over the OpenAI-compatible chat-completions API - there is no gateway and no
-# account in between. Pick one per run with --backend; otherwise default_backend
-# is used.
+# Providers are the named inference connections a run can target. They may be
+# direct model services, local servers, or gateways. Pick one per run with
+# --provider; otherwise default_provider is used.
 #
-# A backend named after a provider needs no further configuration: the name is
-# the provider, and the credential comes from its conventional variable.
-default_backend: zai
+# A provider named after a built-in driver needs no further configuration: the
+# driver is inferred from the name and the credential comes from its conventional
+# environment variable. Its `models` block is optional too: omit it to use any
+# model (with catalogued models providing known capabilities), or define it as a
+# custom allowlist of aliases for this connection.
+default_provider: zai
 
-backends:
+providers:
   # The default, paired with the default model above: glm-5.2 served by Z.AI.
   # The common case is nothing here at all, and ZAI_API_KEY in the environment.
   zai:
@@ -166,10 +168,7 @@ backends:
     # api_key: '$ANTHROPIC_API_KEY'
 
   # On OpenAI, reasoning models use the Responses API automatically: it carries
-  # reasoning state between tool rounds, which chat-completions cannot. Force it
-  # either way if a gateway needs you to.
-  #   use_responses: true
-  #   disable_responses: true
+  # reasoning state between tool rounds, which chat-completions cannot.
 
   # A local model needs no key.
   ollama:
@@ -188,22 +187,21 @@ backends:
   # and gateway ids, so there is no fixed endpoint - name the provider and give
   # the compat URL. The key is the downstream provider's.
   cloudflare:
-  #   provider: cloudflare
   #   base_url: 'https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat'
   #   api_key: '$OPENAI_API_KEY'
-  #   # headers: { cf-aig-authorization: 'Bearer <gateway-token>' }  # if the gateway is authenticated
 
   # Anything else that speaks the OpenAI chat-completions API. A custom endpoint
   # must be https (unless loopback) and needs its own key: zot will not forward a
   # credential issued for one host to another.
-  mygateway:
-  #   provider: custom
+  # mygateway:
+  #   driver: custom
   #   base_url: 'https://gateway.internal.example.com/v1'
   #   api_key: '$GATEWAY_KEY'
   #
-  #   # Named model configurations. A run whose --model matches a key here picks
-  #   # up that entry's settings - handy for aliasing, or for pointing one model
-  #   # at a different provider.
+  #   # Optional custom model list. When present, --model must name one of these
+  #   # keys. Each entry can alias the provider's real model ID and override its
+  #   # run settings. Omit the block to use the built-in catalogue or a new model
+  #   # Zot has not catalogued yet.
   #   models:
   #     fast:
   #       model: 'gpt-5.4-mini'

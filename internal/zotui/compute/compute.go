@@ -60,10 +60,10 @@ type ModelSpec struct {
 // sandbox. Compute drivers write it with owner-only permissions.
 func EncodeZotConfig(spec Spec) ([]byte, error) {
 	return json.Marshal(map[string]any{
-		"default_backend": "worker",
-		"agent":           map[string]any{"model": spec.Model.Model, "max_iterations": spec.MaxIterations},
-		"backends": map[string]any{"worker": map[string]string{
-			"provider": spec.Model.Provider, "base_url": spec.Model.BaseURL, "api_key": spec.Model.APIKey,
+		"default_provider": "worker",
+		"agent":            map[string]any{"model": spec.Model.Model, "max_iterations": spec.MaxIterations},
+		"providers": map[string]any{"worker": map[string]string{
+			"driver": spec.Model.Provider, "base_url": spec.Model.BaseURL, "api_key": spec.Model.APIKey,
 		}},
 	})
 }

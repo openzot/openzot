@@ -15,10 +15,12 @@ import (
 
 func testConfig() *config.Config {
 	return &config.Config{
-		Repos:        map[string]config.Repo{"acme": {Type: "github", Repositories: []string{"acme/api"}}},
-		Compute:      map[string]config.Compute{"cf": {Type: "cloudflare"}},
-		Models:       map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2"}},
-		Environments: map[string]config.Environment{"go": {Compute: "cf", Model: "glm", Image: "img"}},
+		Repos:   map[string]config.Repo{"acme": {Type: "github", Repositories: []string{"acme/api"}}},
+		Compute: map[string]config.Compute{"cf": {Type: "cloudflare"}},
+		Providers: map[string]config.Provider{"zai": {Models: map[string]config.Model{
+			"glm": {Model: "glm-5.2"},
+		}}},
+		Environments: map[string]config.Environment{"go": {Compute: "cf", Provider: "zai", Model: "glm", Image: "img"}},
 	}
 }
 
@@ -32,13 +34,22 @@ func openStore(t *testing.T) store.Store {
 	return st
 }
 
-// Repository choices must follow their connection so the worker form cannot
-// silently accept only free-form text when configuration already names them.
-func TestChoicesGroupRepositoriesByConnection(t *testing.T) {
+// Repository choices follow their connection, and model choices follow their
+// provider, so the worker form cannot present invalid combinations.
+func TestChoicesGroupRepositoriesAndModelsByProvider(t *testing.T) {
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
 			"second": {Repositories: []string{"zeta/api", "alpha/web"}},
 			"first":  {Type: "local"},
+		},
+		Providers: map[string]config.Provider{
+			"zai": {Models: map[string]config.Model{
+				"glm-5": {Model: "glm-5"},
+				"glm-4": {Model: "glm-4"},
+			}},
+			"anthropic": {Models: map[string]config.Model{
+				"sonnet": {Model: "claude-sonnet"},
+			}},
 		},
 	}
 	choices, err := app.New(cfg, nil).Choices(context.Background())
@@ -53,6 +64,15 @@ func TestChoicesGroupRepositoriesByConnection(t *testing.T) {
 	}
 	if got, ok := choices.Repositories["first"]; !ok || len(got) != 0 {
 		t.Fatalf("connection without a fixed list = %v, present %v", got, ok)
+	}
+	if len(choices.Providers) != 2 || choices.Providers[0] != "anthropic" || choices.Providers[1] != "zai" {
+		t.Fatalf("providers = %v", choices.Providers)
+	}
+	if got := choices.Models["zai"]; len(got) != 2 || got[0] != "glm-4" || got[1] != "glm-5" {
+		t.Fatalf("zai models = %v", got)
+	}
+	if got := choices.Models["anthropic"]; len(got) != 1 || got[0] != "sonnet" {
+		t.Fatalf("anthropic models = %v", got)
 	}
 
 	choices.Repositories["second"][0] = "changed/outside"
@@ -79,7 +99,7 @@ func TestWorkerLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.Model != "glm" || w.MaxIterations != 1_000_000 || w.Schedule.Cron != "0 */4 * * *" {
+	if w.Provider != "zai" || w.Model != "glm" || w.MaxIterations != 1_000_000 || w.Schedule.Cron != "0 */4 * * *" {
 		t.Fatalf("defaults or schedule lost: %+v", w)
 	}
 	err = a.UpdateWorker(ctx, id, app.WorkerParams{Name: "API owner", Repo: "acme",
@@ -159,10 +179,12 @@ func TestWorkerValidationAndControls(t *testing.T) {
 
 func TestLocalRepoResolvesDockerCompute(t *testing.T) {
 	cfg := &config.Config{
-		Repos:        map[string]config.Repo{"checkout": {Type: "local", Path: "/workspaces/openzot", Repositories: []string{"openzot/openzot"}}},
-		Compute:      map[string]config.Compute{"development": {Type: "docker"}},
-		Models:       map[string]config.Model{"local": {Provider: "zai", Model: "glm", APIKey: "secret"}},
-		Environments: map[string]config.Environment{"dev": {Compute: "development", Model: "local", Image: "golang:1.26.5-bookworm"}},
+		Repos:   map[string]config.Repo{"checkout": {Type: "local", Path: "/workspaces/openzot", Repositories: []string{"openzot/openzot"}}},
+		Compute: map[string]config.Compute{"development": {Type: "docker"}},
+		Providers: map[string]config.Provider{"zai": {APIKey: "secret", Models: map[string]config.Model{
+			"local": {Model: "glm"},
+		}}},
+		Environments: map[string]config.Environment{"dev": {Compute: "development", Provider: "zai", Model: "local", Image: "golang:1.26.5-bookworm"}},
 	}
 	a := app.New(cfg, openStore(t))
 	provider, spec, err := a.Resolve(dispatch.Execution{Repo: "checkout", Repository: "openzot/openzot", Environment: "dev", Model: "local", MaxIterations: 27})
@@ -174,6 +196,12 @@ func TestLocalRepoResolvesDockerCompute(t *testing.T) {
 	}
 	if len(spec.Mounts) != 1 || spec.Mounts[0].Source != "/workspaces/openzot" || spec.Mounts[0].Target != "/workspace" {
 		t.Fatalf("local checkout mount = %+v", spec.Mounts)
+	}
+	if spec.Model.Provider != "zai" || spec.Model.APIKey != "secret" {
+		t.Fatalf("provider name was not used as the default driver: %+v", spec.Model)
+	}
+	if _, _, err := a.Resolve(dispatch.Execution{Environment: "dev", Provider: "missing", Model: "local"}); err == nil || !strings.Contains(err.Error(), `provider "missing"`) {
+		t.Fatalf("missing model provider error = %v", err)
 	}
 	if _, err := a.CreateWorker(context.Background(), app.WorkerParams{Name: "tester", Repo: "checkout", Repository: "openzot/openzot", Environment: "dev", Mission: "run tests"}); err != nil {
 		t.Fatalf("local worker: %v", err)
@@ -191,14 +219,16 @@ func TestGitHubRepoResolvesVercelComputeAndGitSource(t *testing.T) {
 		Compute: map[string]config.Compute{"remote": {
 			Type: "vercel", Token: "sandbox-token", TeamID: "team_123", ProjectID: "prj_123", Timeout: "2h",
 		}},
-		Models: map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2", APIKey: "model-secret"}},
+		Providers: map[string]config.Provider{"corporate": {Driver: "zai", APIKey: "model-secret", BaseURL: "https://models.example.com", Models: map[string]config.Model{
+			"glm": {Model: "glm-5.2"},
+		}}},
 		Environments: map[string]config.Environment{"remote": {
-			Compute: "remote", Model: "glm", Image: "go-environment:latest",
+			Compute: "remote", Provider: "corporate", Model: "glm", Image: "go-environment:latest",
 		}},
 	}
 
 	provider, spec, err := app.New(cfg, nil).Resolve(dispatch.Execution{
-		Repo: "github", Repository: "openzot/openzot", Environment: "remote", Model: "glm", MaxIterations: 17,
+		Repo: "github", Repository: "openzot/openzot", Environment: "remote", Provider: "corporate", Model: "glm", MaxIterations: 17,
 	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -206,15 +236,18 @@ func TestGitHubRepoResolvesVercelComputeAndGitSource(t *testing.T) {
 	if provider.Type() != "vercel" || spec.Source.URL != "https://github.com/openzot/openzot.git" || spec.Source.Username != "x-access-token" || spec.Source.Directory != "openzot" {
 		t.Fatalf("resolved provider/source = %s, %+v", provider.Type(), spec.Source)
 	}
+	if spec.Model.Provider != "zai" || spec.Model.Model != "glm-5.2" || spec.Model.APIKey != "model-secret" || spec.Model.BaseURL != "https://models.example.com" {
+		t.Fatalf("resolved model provider = %+v", spec.Model)
+	}
 }
 
 func TestWorkerRejectsLocalRepoOnVercelCompute(t *testing.T) {
 	cfg := &config.Config{
-		Repos:   map[string]config.Repo{"checkout": {Type: "local", Path: "/workspace", Repositories: []string{"openzot/openzot"}}},
-		Compute: map[string]config.Compute{"remote": {Type: "vercel"}},
-		Models:  map[string]config.Model{"glm": {Provider: "zai", Model: "glm-5.2"}},
+		Repos:     map[string]config.Repo{"checkout": {Type: "local", Path: "/workspace", Repositories: []string{"openzot/openzot"}}},
+		Compute:   map[string]config.Compute{"remote": {Type: "vercel"}},
+		Providers: map[string]config.Provider{"zai": {Models: map[string]config.Model{"glm": {Model: "glm-5.2"}}}},
 		Environments: map[string]config.Environment{"remote": {
-			Compute: "remote", Model: "glm", Image: "go-environment:latest",
+			Compute: "remote", Provider: "zai", Model: "glm", Image: "go-environment:latest",
 		}},
 	}
 	_, err := app.New(cfg, openStore(t)).CreateWorker(context.Background(), app.WorkerParams{

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/openzot/openzot/agent"
+	"github.com/openzot/openzot/internal/catalogue"
 	"github.com/openzot/openzot/tui"
 )
 
@@ -23,56 +25,58 @@ type Config struct {
 	// LoadProjectContext fills this from the SKILL.md files it finds, and the
 	// engine describes them in the system prompt.
 	Skills []agent.SkillDefinition `yaml:"-"`
-	// DefaultBackend is the backend used when --backend is not given.
-	DefaultBackend string `yaml:"default_backend"`
-	// Backends are the named providers a run can target. zot ships with three -
-	// a backend for each provider it knows - and a config file can override
+	// DefaultProvider is the provider used when --provider is not given.
+	DefaultProvider string `yaml:"default_provider"`
+	// Providers are the named model-provider connections a run can target. zot
+	// ships with one for each provider it knows, and a config file can override
 	// their credentials or endpoint, or add custom model entries.
-	Backends map[string]Backend `yaml:"backends"`
+	Providers map[string]ProviderConfig `yaml:"providers"`
 }
 
-// Backend is a provider zot can run against. Every provider authenticates with a
-// Bearer credential.
-type Backend struct {
-	// Provider names the model provider this backend talks to: "openai",
+// ProviderConfig is a named model-provider connection zot can run against.
+// Every provider authenticates with a Bearer credential.
+type ProviderConfig struct {
+	// Driver names the provider implementation this connection uses: "openai",
 	// "anthropic", "groq", "ollama" and so on. Empty infers it from the
-	// backend's own name, so a backend called "groq" needs no further
+	// provider's own name, so a provider called "groq" needs no further
 	// configuration.
 	//
 	// zot speaks the OpenAI-compatible chat-completions API to every provider, so
-	// a backend is a URL and a credential rather than a protocol of its own.
-	Provider string `yaml:"provider"`
+	// a provider connection is a URL and a credential rather than a protocol of
+	// its own. The driver selects endpoint defaults and provider-specific quirks.
+	Driver string `yaml:"driver"`
 	// BaseURL overrides the API endpoint. Empty uses the built-in default.
 	BaseURL string `yaml:"base_url"`
 	// APIKey is the provider credential. Supports "$ENV_VAR" references, so no
 	// secret need be written to disk.
 	APIKey string `yaml:"api_key"`
-	// Models holds custom, named model configurations for this backend. When a
-	// run's model name matches a key here, that entry's settings take priority.
+	// Models is an optional custom model list for this provider. When omitted,
+	// callers can use the built-in catalogue. When present, its keys are the
+	// selectable names and each entry may alias or override that model.
 	Models map[string]ModelConfig `yaml:"models"`
 }
 
-// ModelConfig is a custom model definition under a backend. Any field set here
+// ModelConfig is a custom model definition under a provider. Any field set here
 // overrides the run's defaults when the model is selected.
 type ModelConfig struct {
-	// Provider overrides the backend's provider for this model, so one backend
-	// entry can front several providers.
-	Provider string `yaml:"provider"`
+	// Driver overrides the provider's driver for this model, so one provider
+	// connection can front several implementations.
+	Driver string `yaml:"driver"`
 	// Model is the underlying model id to send. Lets a custom name alias a real
 	// model; leave empty to use the selected name as-is.
 	Model string `yaml:"model"`
 	// MaxIterations overrides the global iteration cap for this model.
 	MaxIterations int `yaml:"max_iterations"`
-	// APIKey is this model's own credential, overriding the backend's. Useful
+	// APIKey is this model's own credential, overriding the provider's. Useful
 	// where one gateway fronts several providers, each wanting its own key.
 	// Supports "$ENV_VAR".
 	APIKey string `yaml:"api_key"`
 }
 
-// builtinBackends are the providers zot ships with. Each falls back to its
+// builtinProviders are the providers zot ships with. Each falls back to its
 // provider's conventional environment variable, so exporting that is the whole
 // setup. The endpoint is left empty where the provider package already knows it.
-var builtinBackends = map[string]struct {
+var builtinProviders = map[string]struct {
 	baseURL   string
 	secretEnv string // the provider's conventional credential variable
 }{
@@ -93,28 +97,41 @@ var builtinBackends = map[string]struct {
 
 	// The Vercel AI Gateway: a fixed OpenAI-compatible endpoint, so it works
 	// with just the key. Cloudflare's is deliberately absent - its endpoint is
-	// account-specific, so a run configures it as a backend with a base_url
+	// account-specific, so a run configures it as a provider with a base_url
 	// rather than reaching for it by name with no setup.
 	"vercel": {secretEnv: "AI_GATEWAY_API_KEY"},
 }
 
-// BackendProvider resolves which model provider a backend addresses.
+// ProviderDriver resolves which implementation a named provider uses.
 //
-// A backend named after a provider is that provider, so the common case needs no
-// configuration at all. Anything else has to say what it is: zot speaks to model
-// providers directly, and a backend that names no provider has no endpoint to
-// call.
-func BackendProvider(name string, backend Backend) string {
-	if backend.Provider != "" {
-		return backend.Provider
+// A provider named after a driver uses that driver, so the common case needs no
+// configuration at all. An aliased connection states its driver explicitly.
+func ProviderDriver(name string, provider ProviderConfig) string {
+	if provider.Driver != "" {
+		return provider.Driver
 	}
 
 	return name
 }
 
-// BackendCredential returns the credential configured for a backend.
-func BackendCredential(backend Backend) string {
-	return backend.APIKey
+// ProviderCredential returns the credential configured for a provider.
+func ProviderCredential(provider ProviderConfig) string {
+	return provider.APIKey
+}
+
+// ProviderModels returns the names exposed by a provider. An explicit custom
+// list replaces the built-in catalogue for that connection; otherwise the
+// provider's resolved driver selects its built-in models.
+func ProviderModels(name string, provider ProviderConfig) []string {
+	if len(provider.Models) > 0 {
+		names := make([]string, 0, len(provider.Models))
+		for name := range provider.Models {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		return names
+	}
+	return catalogue.NamesForProvider(ProviderDriver(name, provider))
 }
 
 // UI holds presentation options for the read-only viewer.
@@ -134,7 +151,7 @@ type UI struct {
 	// (at more memory). The full run is always in the session log regardless.
 	Scrollback int `yaml:"scrollback"`
 	// Stats selects which fields the header bar shows, and in what order (see
-	// tui.KnownStats: model, backend, dir, iter, tools, edits, elapsed). Empty
+	// tui.KnownStats: model, provider, dir, iter, tools, edits, elapsed). Empty
 	// uses the default set.
 	Stats []string `yaml:"stats"`
 }
@@ -222,12 +239,11 @@ func (a Agent) MaxDuration() (time.Duration, error) {
 
 // Defaults returns the built-in configuration used when nothing else is set.
 //
-// zot talks to model providers directly, so the default backend is a provider
-// rather than a gateway: export the provider's key and it runs, with no account
-// anywhere else.
+// zot talks to model providers directly: export the provider's key and it runs,
+// with no account anywhere else.
 //
-// @note the default model and the default backend have to agree - glm-5.2 is
-// served natively by Z.AI, so that is the backend. A default pair that cannot
+// @note the default model and provider have to agree - glm-5.2 is served
+// natively by Z.AI, so that is the provider. A default pair that cannot
 // actually talk to each other is worse than no default, because the failure
 // arrives as a provider error rather than as a configuration one.
 func Defaults() Config {
@@ -237,8 +253,8 @@ func Defaults() Config {
 			MaxIterations:   1_000_000,
 			ContextStrategy: agent.StrategyCompact,
 		},
-		UI:             UI{Color: "auto"},
-		DefaultBackend: "zai",
+		UI:              UI{Color: "auto"},
+		DefaultProvider: "zai",
 	}
 }
 
@@ -256,7 +272,9 @@ func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&cfg); err != nil {
 			return cfg, fmt.Errorf("parse %s: %w", path, err)
 		}
 	case os.IsNotExist(err) && !explicit:
@@ -279,10 +297,10 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 
-	resolveBackends(&cfg)
+	resolveProviders(&cfg)
 
-	if cfg.DefaultBackend == "" {
-		cfg.DefaultBackend = "zai"
+	if cfg.DefaultProvider == "" {
+		cfg.DefaultProvider = "zai"
 	}
 
 	return cfg, nil
@@ -297,7 +315,9 @@ func applyPortableOverlay(cfg *Config, data []byte) error {
 		return nil
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return fmt.Errorf("parse compiled-in config: %w", err)
 	}
 
@@ -311,49 +331,49 @@ func Portable() bool {
 	return len(portableConfig()) > 0
 }
 
-// resolveBackends ensures the built-in backends exist, fills their default
+// resolveProviders ensures the built-in providers exist, fills their default
 // endpoint, and resolves every credential (config "$ENV" reference first, then
-// the built-in environment fallback) - the Bearer secret, the backend-level
-// model authorization, and each model's own authorization.
-func resolveBackends(cfg *Config) {
-	if cfg.Backends == nil {
-		cfg.Backends = map[string]Backend{}
+// the built-in environment fallback) - the provider-level key and each model's
+// own key.
+func resolveProviders(cfg *Config) {
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]ProviderConfig{}
 	}
 
-	for name := range builtinBackends {
-		if _, ok := cfg.Backends[name]; !ok {
-			cfg.Backends[name] = Backend{}
+	for name := range builtinProviders {
+		if _, ok := cfg.Providers[name]; !ok {
+			cfg.Providers[name] = ProviderConfig{}
 		}
 	}
 
-	for name, b := range cfg.Backends {
-		builtin, isBuiltin := builtinBackends[name]
-		if b.BaseURL == "" && isBuiltin {
-			b.BaseURL = builtin.baseURL
+	for name, p := range cfg.Providers {
+		builtin, isBuiltin := builtinProviders[name]
+		if p.BaseURL == "" && isBuiltin {
+			p.BaseURL = builtin.baseURL
 		}
 
 		// The credential, in whichever spelling it was written. Every one is
 		// resolved: `api_key` is the documented spelling, so a `$VAR` reference
 		// left unexpanded there would send the literal string "$MY_KEY" to the
 		// provider and come back as a 401 that reads like a bad key.
-		b.APIKey = resolveSecret(b.APIKey)
+		p.APIKey = resolveSecret(p.APIKey)
 
-		// A built-in backend with nothing configured falls back to its
+		// A built-in provider with nothing configured falls back to its
 		// provider's conventional variable, which is what makes `export
 		// OPENAI_API_KEY=…` enough on its own.
-		if BackendCredential(b) == "" && isBuiltin && builtin.secretEnv != "" {
-			b.APIKey = strings.TrimSpace(os.Getenv(builtin.secretEnv))
+		if ProviderCredential(p) == "" && isBuiltin && builtin.secretEnv != "" {
+			p.APIKey = strings.TrimSpace(os.Getenv(builtin.secretEnv))
 		}
 
 		// Per-model authorization.
-		for mName, mc := range b.Models {
+		for mName, mc := range p.Models {
 			if mc.APIKey != "" {
 				mc.APIKey = resolveSecret(mc.APIKey)
-				b.Models[mName] = mc
+				p.Models[mName] = mc
 			}
 		}
 
-		cfg.Backends[name] = b
+		cfg.Providers[name] = p
 	}
 }
 
@@ -377,21 +397,20 @@ func resolveSecret(v string) string {
 	return v
 }
 
-// ScrubBackendSecrets removes every resolved backend credential - Bearer
-// secrets and provider authorizations, backend-level and per-model - from the
-// process environment. Config retains the resolved values used by the SDK
-// client, while shell commands launched by the agent no longer inherit those
-// credentials.
-func ScrubBackendSecrets(cfg Config) {
+// ScrubProviderSecrets removes every resolved provider credential, both
+// provider-level and per-model, from the process environment. Config retains
+// the resolved values used by the SDK client, while shell commands launched by
+// the agent no longer inherit those credentials.
+func ScrubProviderSecrets(cfg Config) {
 	secrets := map[string]bool{}
 	add := func(v string) {
 		if v != "" {
 			secrets[v] = true
 		}
 	}
-	for _, backend := range cfg.Backends {
-		add(backend.APIKey)
-		for _, mc := range backend.Models {
+	for _, provider := range cfg.Providers {
+		add(provider.APIKey)
+		for _, mc := range provider.Models {
 			add(mc.APIKey)
 		}
 	}
@@ -449,23 +468,29 @@ func (c Config) Validate() error {
 				s, strings.Join(tui.KnownStats, ", "))
 		}
 	}
-	if _, ok := c.Backends[c.DefaultBackend]; !ok {
-		return fmt.Errorf("default backend %q is not configured", c.DefaultBackend)
+	if _, ok := c.Providers[c.DefaultProvider]; !ok {
+		return fmt.Errorf("default provider %q is not configured", c.DefaultProvider)
 	}
-	for name, backend := range c.Backends {
-		// A backend either names a provider zot knows how to reach, or supplies
+	if provider := c.Providers[c.DefaultProvider]; len(provider.Models) > 0 {
+		if _, ok := provider.Models[c.Agent.Model]; !ok {
+			return fmt.Errorf("model %q is not configured for provider %q (available: %s)",
+				c.Agent.Model, c.DefaultProvider, strings.Join(ProviderModels(c.DefaultProvider, provider), ", "))
+		}
+	}
+	for name, provider := range c.Providers {
+		// A provider either names a driver zot knows how to reach, or supplies
 		// its own endpoint. Neither means there is nowhere to send the request,
 		// and finding that out mid-run is worse than at load.
-		if backend.BaseURL != "" {
+		if provider.BaseURL != "" {
 			continue
 		}
 
-		provider := BackendProvider(name, backend)
+		driver := ProviderDriver(name, provider)
 
-		if !slices.Contains(agent.Providers(), provider) {
+		if !slices.Contains(agent.Providers(), driver) {
 			return fmt.Errorf(
-				"backends.%s: %q is not a known provider and no base_url is set (known: %s)",
-				name, provider, strings.Join(agent.Providers(), ", "))
+				"providers.%s: driver %q is not known and no base_url is set (known: %s)",
+				name, driver, strings.Join(agent.Providers(), ", "))
 		}
 	}
 	return nil

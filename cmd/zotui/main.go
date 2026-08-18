@@ -3,7 +3,7 @@
 //
 // The only other command is `zotui config`, which opens the config in $EDITOR
 // (seeding it from an embedded template on first run). The config file locates the
-// repos, compute, models and environments; override its path
+// repos, compute, model providers and environments; override its path
 // with $ZOTUI_CONFIG.
 //
 // Local Docker and GitHub-backed Vercel Sandbox runs work end to end. Cloudflare

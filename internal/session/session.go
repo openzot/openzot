@@ -83,9 +83,11 @@ type Meta struct {
 	// Task is the brief the run was given.
 	Task string `json:"task"`
 
-	Model    string `json:"model"`
+	Model string `json:"model"`
+	// Provider is the selected named connection; Driver is the resolved
+	// implementation that handles its endpoint and protocol quirks.
 	Provider string `json:"provider"`
-	Backend  string `json:"backend"`
+	Driver   string `json:"driver"`
 
 	// Workdir is where the agent's tools operated.
 	Workdir string `json:"workdir"`
