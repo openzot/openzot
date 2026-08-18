@@ -82,11 +82,14 @@ func TestSandboxLifecycleUsesVercelAPIAndStreamsRawOutput(t *testing.T) {
 	if driver.Type() != "vercel" {
 		t.Fatalf("Type = %q", driver.Type())
 	}
-	if createBody["projectId"] != "prj_123" || createBody["runtime"] != defaultRuntime || createBody["persistent"] != false {
+	if createBody["projectId"] != "prj_123" || createBody["persistent"] != false {
 		t.Fatalf("create body = %#v", createBody)
 	}
 	if _, present := createBody["image"]; present {
 		t.Fatalf("default sandbox sent a custom image: %#v", createBody)
+	}
+	if _, present := createBody["runtime"]; present {
+		t.Fatalf("v3 sandbox request sent unsupported runtime property: %#v", createBody)
 	}
 	if createBody["timeout"] != float64((45 * time.Minute).Milliseconds()) {
 		t.Fatalf("default timeout = %#v", createBody["timeout"])

@@ -217,14 +217,16 @@ Vercel documents access-token and OIDC authentication in its
 
 #### Standard runtime and optional custom image
 
-When `image` is omitted, Zotui requests Vercel's built-in `node24` runtime. That
-runtime provides a full shell, Git, and curl without requiring this project to
-publish a container image. Zotui then uploads its embedded worker.
+When `image` is omitted, Zotui omits the image selector entirely and Vercel uses
+its managed default image. Zotui does not send the legacy `runtime` property to
+the `/v3/sandboxes` endpoint. The managed environment provides a full shell,
+Git, and curl without requiring this project to publish a container image;
+Zotui then uploads its embedded worker.
 
-An explicit `image` is an override. Vercel Sandbox custom images must come from
-the project-scoped Vercel Container Registry (VCR), so an arbitrary Docker Hub,
-GHCR, or MCR reference cannot be shared with Docker compute. A custom image must
-contain:
+An explicit `image` is an override. It may name a Vercel-managed image or a
+custom image from the project-scoped Vercel Container Registry (VCR); an
+arbitrary Docker Hub, GHCR, or MCR reference cannot be shared with Docker
+compute. A custom image must contain:
 
 - Git and a shell;
 - the language toolchains and utilities the worker is expected to use.
@@ -371,7 +373,8 @@ environments:
   may select another provider/model pair.
 - `image` is optional. Omit it for Zotui's standard environment; set it to an
   image understood by the selected compute provider when a custom toolchain is
-  needed (a Docker registry reference for Docker, or a VCR image for Vercel).
+  needed (a Docker registry reference for Docker, or a Vercel-managed/VCR image
+  for Vercel).
 - `env` becomes the sandbox's baseline environment.
 - `repositories` is an optional allowlist. Each entry is
   `repo-connection/owner/name`, not just `owner/name`.
@@ -504,7 +507,7 @@ environment or configure a remote GitHub repo connection.
 
 ### Vercel reports an unknown or invalid image
 
-Remove `image` to use Zotui's standard Vercel runtime. If a custom toolchain is
+Remove `image` to use Vercel's managed default image. If a custom toolchain is
 intentional, confirm that it was pushed to the same Vercel project named by
 `project_id`, then check the project's Images view for the repository and tag.
 Vercel does not accept an arbitrary external registry reference here. Use the

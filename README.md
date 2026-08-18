@@ -12,6 +12,20 @@ plans, edits, runs, and verifies until the work is done.
   <img width="1504" height="1080" alt="zot demo" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 </p>
 
+## The point
+
+zot is not another coding agent you sit with and steer prompt by prompt. Its
+reason to exist is **fully autonomous software work**: give it a goal, walk away,
+and come back to a finished result. It will sometimes fall short of that ideal,
+especially while it is 0.x, but the ideal is the design constraint. We will not
+build workflows or features that contradict it.
+
+If what you want is an interactive coding agent, use
+[Codex](https://openai.com/codex/),
+[Claude Code](https://www.anthropic.com/claude-code),
+[Cursor](https://www.cursor.com/), or one of the other excellent tools built for
+that way of working.
+
 ## What you get
 
 Give it a brief and walk away:

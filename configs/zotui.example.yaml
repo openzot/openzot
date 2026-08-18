@@ -98,7 +98,7 @@ environments:
   #   provider: zai
   #   model: glm-5.2
   #   # Optional Vercel override; it must be in this project's Vercel Container
-  #   # Registry. With no image, Zotui uses Vercel's standard built-in runtime.
+  #   # Registry. With no image, Vercel uses its managed default image.
   #   # image: go-environment:latest
   #   repositories:
   #     - public/openzot/openzot
