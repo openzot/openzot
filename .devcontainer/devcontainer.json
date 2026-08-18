@@ -37,7 +37,9 @@
   "customizations": {
     "vscode": {
       "extensions": [
+        "Anthropic.claude-code",
         "golang.go",
+        "openai.chatgpt",
         "redhat.vscode-yaml"
       ],
       "settings": {
