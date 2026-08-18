@@ -42,7 +42,21 @@
       ],
       "settings": {
         "editor.formatOnSave": true,
-        "go.toolsManagement.autoUpdate": true
+        "go.toolsManagement.autoUpdate": true,
+        "workbench.colorCustomizations": {
+          "activityBar.background": "#050505",
+          "statusBar.background": "#090A09",
+          "statusBar.foreground": "#E6E6E6",
+          "statusBarItem.remoteBackground": "#2DD4A7",
+          "statusBarItem.remoteForeground": "#050505",
+          "titleBar.activeBackground": "#090A09",
+          "titleBar.activeForeground": "#E6E6E6",
+          "titleBar.border": "#56C2FF",
+          "titleBar.inactiveBackground": "#050505",
+          "titleBar.inactiveForeground": "#7A7A7A",
+          "window.activeBorder": "#56C2FF",
+          "window.inactiveBorder": "#6B7280"
+        }
       }
     }
   }
