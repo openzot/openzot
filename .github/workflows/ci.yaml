@@ -180,6 +180,7 @@ jobs:
             ! command -v git >/dev/null
             ! command -v rg >/dev/null
             test -f /usr/local/share/zot/zot.example.yaml
+            test -f /usr/local/share/zot/zotui.example.yaml
             cd /workspace && echo probe > probe.txt && cat probe.txt
           '
 

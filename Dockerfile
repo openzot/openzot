@@ -52,6 +52,8 @@ COPY --from=build /out/zot /usr/local/bin/zot
 COPY --from=build /out/zotui /usr/local/bin/zotui
 COPY configs/zot.example.yaml \
     /usr/local/share/zot/zot.example.yaml
+COPY configs/zotui.example.yaml \
+    /usr/local/share/zot/zotui.example.yaml
 
 ENV HOME=/home/zot \
     XDG_CACHE_HOME=/home/zot/.cache \

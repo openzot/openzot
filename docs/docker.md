@@ -38,6 +38,7 @@ embedded Zot worker into whichever toolchain image an environment selects.
 | `/workspace` | Working directory. Mount your checkout here. |
 | `/home/zot/.config/zot/config.yaml` | Config file, pointed at by `ZOT_CONFIG`. Absent by default - zot runs on defaults plus env vars. |
 | `/usr/local/share/zot/zot.example.yaml` | The documented example config, for copying out. |
+| `/usr/local/share/zot/zotui.example.yaml` | The Zotui example config, for copying out. |
 | `/usr/local/bin/zot` | The binary. |
 | `/usr/local/bin/zotui` | The browser command-center binary. |
 

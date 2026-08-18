@@ -107,9 +107,16 @@ jobs:
           done
 
           cp configs/zot.example.yaml "${OUTDIR}/zot.example.yaml"
+          cp configs/zotui.example.yaml "${OUTDIR}/zotui.example.yaml"
           cp README.md "${OUTDIR}/README.md"
 
-          tar -czf "dist/zot-${VERSION}-${GOOS}-${GOARCH}.tar.gz" -C dist "zot-${VERSION}-${GOOS}-${GOARCH}"
+          ARCHIVE="dist/zot-${VERSION}-${GOOS}-${GOARCH}.tar.gz"
+          ROOT="zot-${VERSION}-${GOOS}-${GOARCH}"
+          tar -czf "${ARCHIVE}" -C dist "${ROOT}"
+          CONTENTS="$(tar -tzf "${ARCHIVE}")"
+          for file in "zot${EXT}" "zotui${EXT}" zot.example.yaml zotui.example.yaml README.md; do
+            grep -Fxq "${ROOT}/${file}" <<<"${CONTENTS}"
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
