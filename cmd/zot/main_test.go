@@ -521,7 +521,7 @@ func TestRunEndToEnd(t *testing.T) {
 		frames := [][]string{
 			{`{"choices":[{"delta":{"content":"on it"}}]}`,
 				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
-			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`},
+			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`},
 		}
 
 		index := turn
@@ -658,7 +658,7 @@ func TestRunRecordsAndResumesASession(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -803,7 +803,7 @@ func TestResumeWithoutATaskReusesTheOriginal(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -858,7 +858,7 @@ func TestNoSessionWritesNothing(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
