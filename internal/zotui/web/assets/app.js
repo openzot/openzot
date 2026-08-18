@@ -1,9 +1,10 @@
 const $ = (selector) => document.querySelector(selector);
 
-let state = { choices: { repos: [], repositories: {}, environments: [], providers: [], models: {}, defaultMaxIterations: 1000000 }, workers: [] };
+let state = { choices: { repos: [], repositories: {}, repositoriesByEnvironment: {}, environments: [], providers: [], models: {}, defaultMaxIterations: 1000000 }, workers: [] };
 let selectedWorker = 0;
 let selectedRun = 0;
 let editingID = "";
+let deletingID = "";
 let schedule = { cron: "", timezone: "", runtimeMinutes: 0 };
 let poll;
 let outputRequest = 0;
@@ -29,6 +30,7 @@ async function request(path, options = {}) {
 
 function worker() { return state.workers[selectedWorker]; }
 function run() { return worker()?.runs[selectedRun]; }
+function dialogOpen() { return Boolean(document.querySelector("dialog[open]")); }
 function activeRun(item = worker()) {
   return item?.runs.find((record) => ["scheduled", "running", "paused"].includes(record.status));
 }
@@ -166,7 +168,7 @@ function renderWorkers() {
       const card = document.createElement("zot-instance-card");
       card.addEventListener("click", (event) => {
         if (event.target.closest("[data-delete-worker]")) {
-          deleteWorker(card.dataset.key);
+          requestDelete(card.dataset.key);
           return;
         }
         const index = state.workers.findIndex((item) => item.id === card.dataset.key);
@@ -198,20 +200,41 @@ function renderWorkers() {
   $("#run-count").textContent = String(allRuns.length).padStart(2, "0");
 }
 
-async function deleteWorker(id) {
+function requestDelete(id) {
   const item = state.workers.find((worker) => worker.id === id);
   if (!item) return;
   if (activeRun(item)) {
     showToast("DELETE BLOCKED", "Stop the active run before deleting this worker.");
     return;
   }
-  if (!window.confirm(`Delete worker "${item.name}" and all of its run history and output? This cannot be undone.`)) return;
+  deletingID = id;
+  $("#delete-worker-name").textContent = `${item.name.toUpperCase()} / ${item.id}`;
+  $("#delete-dialog").showModal();
+}
+
+async function confirmDelete(event) {
+  event.preventDefault();
+  const id = deletingID;
+  const item = state.workers.find((worker) => worker.id === id);
+  if (!item) {
+    $("#delete-dialog").close();
+    return;
+  }
+  const button = $("#delete-confirm");
+  button.disabled = true;
+  button.textContent = "Deleting…";
   try {
     await request(`/api/workers/${id}`, { method: "DELETE" });
+    $("#delete-dialog").close();
+    if (editingID === id && $("#create-dialog").open) $("#create-dialog").close();
+    editingID = "";
     showToast("WORKER DELETED", item.name.toUpperCase());
     await refresh({ quiet: false });
   } catch (error) {
     showToast("DELETE FAILED", error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Delete permanently";
   }
 }
 
@@ -316,11 +339,15 @@ async function loadOutput() {
   }
 }
 
-function fillChoices(selectedRepo = "", selectedRepository = "", preferredProvider = "", selectedModel = "") {
-  $("#repo").innerHTML = state.choices.repos.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`).join("");
-  if (selectedRepo) $("#repo").value = selectedRepo;
-  fillRepositories(selectedRepository);
-  $("#environment-grid").innerHTML = state.choices.environments.map((value, index) => `<button type="button" class="environment-option${index === 0 ? " active" : ""}" data-environment="${escapeAttribute(value)}"><span>CONFIGURED</span><strong>${escapeText(value.toUpperCase())}</strong><small>Reusable runtime<br/>from zotui config</small></button>`).join("");
+function fillChoices(selectedRepo = "", selectedRepository = "", preferredProvider = "", selectedModel = "", preferredEnvironment = "") {
+  const selectedEnvironment = state.choices.environments.includes(preferredEnvironment)
+    ? preferredEnvironment
+    : (state.choices.environments[0] || "");
+  $("#environment-grid").innerHTML = state.choices.environments.map((value) => {
+    const active = value === selectedEnvironment;
+    return `<button type="button" class="environment-option${active ? " active" : ""}" data-environment="${escapeAttribute(value)}" role="option" aria-selected="${active}"><span>CONFIGURED</span><strong>${escapeText(value.toUpperCase())}</strong><small>Reusable runtime<br/>from zotui config</small></button>`;
+  }).join("");
+  fillRepoChoices(selectedEnvironment, selectedRepo, selectedRepository);
   const selectedProvider = state.choices.providers.includes(preferredProvider)
     ? preferredProvider
     : (state.choices.providers.find((provider) => state.choices.models?.[provider]?.includes(selectedModel)) || state.choices.providers[0] || "");
@@ -329,8 +356,21 @@ function fillChoices(selectedRepo = "", selectedRepository = "", preferredProvid
     return `<button type="button" class="choice${active ? " active" : ""}" data-provider="${escapeAttribute(value)}" role="option" aria-selected="${active}"><strong>${escapeText(value)}</strong><small>CONFIGURED PROVIDER</small></button>`;
   }).join("");
   fillModels(selectedProvider, selectedModel);
-  $("#environment-label").textContent = (state.choices.environments[0] || "NO ENVIRONMENT").toUpperCase();
+  $("#environment-label").textContent = (selectedEnvironment || "NO ENVIRONMENT").toUpperCase();
   bindChoiceButtons();
+}
+
+function fillRepoChoices(environment, preferredRepo = "", preferredRepository = "") {
+  const allowed = state.choices.repositoriesByEnvironment?.[environment] || {};
+  const repos = state.choices.repos.filter((value) => (allowed[value] || []).length > 0);
+  const selected = repos.includes(preferredRepo) ? preferredRepo : (repos[0] || "");
+  $("#repo").innerHTML = repos.length
+    ? repos.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`).join("")
+    : '<option value="">No repositories available</option>';
+  $("#repo").value = selected;
+  $("#repo").disabled = repos.length === 0;
+  $("#create-submit").disabled = repos.length === 0;
+  fillRepositories(preferredRepository, environment);
 }
 
 function fillModels(provider, preferred = "") {
@@ -344,54 +384,48 @@ function fillModels(provider, preferred = "") {
   bindModelButtons();
 }
 
-function fillRepositories(preferred = "") {
+function fillRepositories(preferred = "", environment = document.querySelector("[data-environment].active")?.dataset.environment) {
   const connection = $("#repo").value;
-  const repositories = state.choices.repositories?.[connection] || [];
+  const repositories = state.choices.repositoriesByEnvironment?.[environment]?.[connection] || [];
   const select = $("#repository");
-  const manual = $("#repository-manual");
   const label = $("#repository-label");
   const hint = $("#repository-hint");
 
   if (repositories.length) {
     const options = repositories.length > 1 ? ['<option value="">Select a repository…</option>'] : [];
     options.push(...repositories.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`));
-    if (preferred && !repositories.includes(preferred)) {
-      options.push(`<option value="${escapeAttribute(preferred)}">${escapeText(preferred)} (current)</option>`);
-    }
     select.innerHTML = options.join("");
     select.hidden = false;
     select.disabled = false;
-    manual.hidden = true;
-    manual.disabled = true;
-    manual.value = "";
     label.htmlFor = "repository";
-    select.value = preferred || (repositories.length === 1 ? repositories[0] : "");
+    select.value = repositories.includes(preferred) ? preferred : (repositories.length === 1 ? repositories[0] : "");
     hint.textContent = repositories.length === 1
       ? `Selected automatically from ${connection}.`
       : `Choose one of ${repositories.length} repositories available through ${connection}.`;
     return;
   }
 
-  select.innerHTML = "";
-  select.hidden = true;
+  select.innerHTML = '<option value="">No repositories allowed on this environment</option>';
+  select.hidden = false;
   select.disabled = true;
-  manual.hidden = false;
-  manual.disabled = !connection;
-  manual.value = preferred;
-  label.htmlFor = "repository-manual";
-  hint.textContent = connection
-    ? `No fixed repository list is configured for ${connection}; enter owner/name.`
-    : "Choose a repo connection first.";
+  label.htmlFor = "repository";
+  hint.textContent = environment
+    ? `No configured repositories are allowed on ${environment}.`
+    : "Choose an environment first.";
 }
 
 function repositoryValue() {
-  return $("#repository").hidden ? $("#repository-manual").value : $("#repository").value;
+  return $("#repository").value;
 }
 
 function bindChoiceButtons() {
   document.querySelectorAll("[data-environment]").forEach((button) => button.addEventListener("click", () => {
-    document.querySelectorAll("[data-environment]").forEach((item) => item.classList.toggle("active", item === button));
+    document.querySelectorAll("[data-environment]").forEach((item) => {
+      item.classList.toggle("active", item === button);
+      item.setAttribute("aria-selected", item === button);
+    });
     $("#environment-label").textContent = button.dataset.environment.toUpperCase();
+    fillRepoChoices(button.dataset.environment, $("#repo").value, repositoryValue());
   }));
   document.querySelectorAll("[data-provider]").forEach((button) => button.addEventListener("click", () => {
     choose("[data-provider]", "provider", button.dataset.provider);
@@ -424,6 +458,7 @@ function openCreate() {
   $("#dialog-kicker").textContent = "Provision autonomous runtime";
   $("#dialog-title").textContent = "Create ZOT worker_";
   $("#create-submit").textContent = "Create worker";
+  $("#edit-delete").hidden = true;
   $("#instance-name").value = "";
   $("#objective").value = "";
   $("#max-iterations").value = String(state.choices.defaultMaxIterations ?? 1000000);
@@ -436,14 +471,18 @@ function openEdit() {
   const item = worker();
   if (!item) return;
   editingID = item.id;
-  fillChoices(item.repo, item.repository, item.provider, item.model);
+  fillChoices(item.repo, item.repository, item.provider, item.model, item.environment);
   $("#dialog-kicker").textContent = `Update ${item.id} · history retained`;
   $("#dialog-title").textContent = "Edit ZOT worker_";
   $("#create-submit").textContent = "Save worker";
+  const deleteButton = $("#edit-delete");
+  const deleteBlocked = Boolean(activeRun(item));
+  deleteButton.hidden = false;
+  deleteButton.disabled = deleteBlocked;
+  deleteButton.title = deleteBlocked ? "Stop the active run before deleting this worker" : "Delete this worker";
   $("#instance-name").value = item.name;
   $("#objective").value = item.mission;
   $("#max-iterations").value = item.maxIterations;
-  choose("[data-environment]", "environment", item.environment);
   schedule = { ...item.schedule };
   updateScheduleSummary();
   $("#create-dialog").showModal();
@@ -546,6 +585,7 @@ function escapeAttribute(value) { return escapeText(value); }
 
 $("#new-instance").addEventListener("click", openCreate);
 $("#edit-worker").addEventListener("click", openEdit);
+$("#edit-delete").addEventListener("click", () => requestDelete(editingID));
 $("#repo").addEventListener("change", () => fillRepositories());
 $("#create-form").addEventListener("submit", saveWorker);
 $("#dialog-close").addEventListener("click", () => $("#create-dialog").close());
@@ -559,6 +599,10 @@ $("#schedule-apply").addEventListener("click", applySchedule);
 $("#schedule-clear").addEventListener("click", () => { schedule = { cron: "", timezone: "UTC", runtimeMinutes: 0 }; updateScheduleSummary(); $("#schedule-dialog").close(); });
 $("#schedule-dialog-close").addEventListener("click", () => $("#schedule-dialog").close());
 $("#schedule-cancel").addEventListener("click", () => $("#schedule-dialog").close());
+$("#delete-form").addEventListener("submit", confirmDelete);
+$("#delete-dialog-close").addEventListener("click", () => $("#delete-dialog").close());
+$("#delete-cancel").addEventListener("click", () => $("#delete-dialog").close());
+$("#delete-dialog").addEventListener("close", () => { deletingID = ""; });
 $("#generate-cron").addEventListener("click", () => showToast("AI SCHEDULE UNAVAILABLE", "Enter the cron expression directly for now."));
 $("#cron-expression").addEventListener("input", updateCronPreview);
 $("#cron-timezone").addEventListener("change", updateCronPreview);
@@ -575,9 +619,14 @@ $("#cron-ai-tab").addEventListener("click", () => {
 });
 $("#create-dialog").addEventListener("close", () => { if ($("#schedule-dialog").open) $("#schedule-dialog").close(); });
 document.addEventListener("keydown", (event) => {
-  if (event.key.toLowerCase() === "n" && !$("#create-dialog").open) openCreate();
-  if (event.key.toLowerCase() === "r" && !$("#create-dialog").open) startRun();
-  if (event.key === "Escape") { if ($("#schedule-dialog").open) $("#schedule-dialog").close(); else if ($("#create-dialog").open) $("#create-dialog").close(); }
+  if (event.key.toLowerCase() === "n" && !dialogOpen()) openCreate();
+  if (event.key.toLowerCase() === "r" && !dialogOpen()) startRun();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if ($("#delete-dialog").open) $("#delete-dialog").close();
+    else if ($("#schedule-dialog").open) $("#schedule-dialog").close();
+    else if ($("#create-dialog").open) $("#create-dialog").close();
+  }
 });
 
 await initTerminal();

@@ -53,12 +53,13 @@ func New(cfg *config.Config, st store.Store) *App {
 }
 
 type Choices struct {
-	Repos                []string            `json:"repos"`
-	Repositories         map[string][]string `json:"repositories"`
-	Environments         []string            `json:"environments"`
-	Providers            []string            `json:"providers"`
-	Models               map[string][]string `json:"models"`
-	DefaultMaxIterations int                 `json:"defaultMaxIterations"`
+	Repos                     []string                       `json:"repos"`
+	Repositories              map[string][]string            `json:"repositories"`
+	RepositoriesByEnvironment map[string]map[string][]string `json:"repositoriesByEnvironment"`
+	Environments              []string                       `json:"environments"`
+	Providers                 []string                       `json:"providers"`
+	Models                    map[string][]string            `json:"models"`
+	DefaultMaxIterations      int                            `json:"defaultMaxIterations"`
 }
 
 func (a *App) Choices(ctx context.Context) (Choices, error) {
@@ -75,8 +76,31 @@ func (a *App) Choices(ctx context.Context) (Choices, error) {
 		models[provider] = a.cfg.ProviderModels(provider)
 	}
 	return Choices{Repos: sortedKeys(a.cfg.Repos), Repositories: repositories,
-		Environments: sortedKeys(a.cfg.Environments), Providers: sortedKeys(a.cfg.Providers), Models: models,
+		RepositoriesByEnvironment: a.repositoriesByEnvironment(repositories),
+		Environments:              sortedKeys(a.cfg.Environments), Providers: sortedKeys(a.cfg.Providers), Models: models,
 		DefaultMaxIterations: DefaultMaxIterations}, nil
+}
+
+func (a *App) repositoriesByEnvironment(repositories map[string][]string) map[string]map[string][]string {
+	choices := make(map[string]map[string][]string, len(a.cfg.Environments))
+	for _, environmentName := range sortedKeys(a.cfg.Environments) {
+		environment := a.cfg.Environments[environmentName]
+		allowed := make(map[string][]string)
+		for _, repoName := range sortedKeys(a.cfg.Repos) {
+			repoConfig := a.cfg.Repos[repoName]
+			if repoConfig.Type == "local" && a.cfg.Compute[environment.Compute].Type != "docker" {
+				continue
+			}
+			for _, repository := range repositories[repoName] {
+				qualified := repoName + "/" + repository
+				if len(environment.Repositories) == 0 || slices.Contains(environment.Repositories, qualified) {
+					allowed[repoName] = append(allowed[repoName], repository)
+				}
+			}
+		}
+		choices[environmentName] = allowed
+	}
+	return choices
 }
 
 type WorkerParams struct {
@@ -349,7 +373,6 @@ func (a *App) authorize(ctx context.Context, execution dispatch.Execution) error
 		if !slices.Contains(repoLock, execution.Repository) {
 			return fmt.Errorf("repository %q is not in repo %q's lockdown", execution.Repository, execution.Repo)
 		}
-		return nil
 	}
 	repositories, err := a.repositoriesFor(ctx, execution.Repo)
 	if err != nil {
@@ -366,16 +389,10 @@ func (a *App) repositoriesFor(ctx context.Context, name string) ([]string, error
 	if !ok {
 		return nil, fmt.Errorf("unknown repo %q", name)
 	}
-	if len(configured.Repositories) > 0 {
-		repositories := slices.Clone(configured.Repositories)
-		sort.Strings(repositories)
-		return repositories, nil
-	}
-
 	now := time.Now()
 	a.mu.Lock()
 	if cached, ok := a.repositoryCache[name]; ok && now.Before(cached.expires) {
-		repositories := slices.Clone(cached.repositories)
+		repositories := restrictRepositories(cached.repositories, configured.Repositories)
 		a.mu.Unlock()
 		return repositories, nil
 	}
@@ -394,7 +411,17 @@ func (a *App) repositoriesFor(ctx context.Context, name string) ([]string, error
 	a.mu.Lock()
 	a.repositoryCache[name] = repositoryChoices{repositories: slices.Clone(repositories), expires: now.Add(repositoryCacheTTL)}
 	a.mu.Unlock()
-	return slices.Clone(repositories), nil
+	return restrictRepositories(repositories, configured.Repositories), nil
+}
+
+func restrictRepositories(discovered, configured []string) []string {
+	repositories := slices.Clone(discovered)
+	if len(configured) > 0 {
+		repositories = slices.DeleteFunc(repositories, func(repository string) bool {
+			return !slices.Contains(configured, repository)
+		})
+	}
+	return repositories
 }
 
 func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.Spec, error) {

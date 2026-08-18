@@ -215,7 +215,7 @@
             <div class="instance-meta"><span>${escapeHTML(recordLabel)}</span><span>${escapeHTML(progressLabel)}</span></div>
             <div class="instance-scope">${escapeHTML(scope)}</div>
           </button>
-          <button type="button" class="instance-delete" data-delete-worker aria-label="${escapeHTML(deleteLabel)}" title="${escapeHTML(deleteLabel)}"${deletable ? "" : " disabled"}>DELETE</button>
+          <button type="button" class="instance-delete" data-delete-worker aria-label="${escapeHTML(deleteLabel)}" title="${escapeHTML(deleteLabel)}" aria-haspopup="dialog" aria-controls="delete-dialog"${deletable ? "" : " disabled"}>DELETE</button>
         </div>`;
     }
   }

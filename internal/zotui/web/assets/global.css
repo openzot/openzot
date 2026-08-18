@@ -641,6 +641,17 @@ body::before {
   background: var(--cyan);
   border-color: var(--cyan);
 }
+.action.danger {
+  color: var(--danger);
+  border-color: rgba(255, 90, 90, 0.45);
+  background: rgba(255, 90, 90, 0.04);
+}
+.action.danger:hover,
+.action.danger:focus-visible {
+  color: #050505;
+  border-color: var(--danger);
+  background: var(--danger);
+}
 .operation-grid {
   display: grid;
   grid-template-columns: minmax(220px, 28%) minmax(0, 1fr);
@@ -1453,6 +1464,72 @@ dialog[open] {
 .dialog-actions {
   display: flex;
   gap: 7px;
+}
+.worker-dialog-foot {
+  justify-content: space-between;
+}
+.worker-dialog-foot .dialog-actions {
+  margin-left: auto;
+}
+.delete-dialog {
+  width: min(560px, calc(100vw - 48px));
+  border-color: rgba(255, 90, 90, 0.72);
+  box-shadow:
+    0 45px 160px rgba(0, 0, 0, 0.98),
+    0 0 80px rgba(255, 90, 90, 0.09);
+}
+.delete-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.86);
+  backdrop-filter: blur(6px);
+}
+.delete-dialog .dialog-head small {
+  color: var(--danger);
+}
+.delete-confirmation {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.delete-mark {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  place-items: center;
+  color: var(--danger);
+  font-family: var(--display);
+  font-size: var(--font-display-md);
+  border: 1px solid rgba(255, 90, 90, 0.5);
+  background: rgba(255, 90, 90, 0.06);
+}
+.delete-confirmation small,
+.delete-boundary span {
+  color: var(--danger);
+  font-size: var(--font-xs);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+.delete-confirmation strong {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: var(--font-display-sm);
+  font-weight: 400;
+  letter-spacing: 0.05em;
+}
+.delete-confirmation p,
+.delete-boundary p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: var(--leading-body);
+}
+.delete-boundary {
+  margin-top: 17px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-left-color: var(--danger);
+  background: rgba(255, 90, 90, 0.025);
 }
 .cron-trigger {
   display: grid;

@@ -34,13 +34,17 @@ func openStore(t *testing.T) store.Store {
 	return st
 }
 
-// Repository choices follow their connection, and model choices follow their
-// provider, so the worker form cannot present invalid combinations.
+// Repository choices follow both their connection and environment, and model
+// choices follow their provider, so the worker form cannot present invalid combinations.
 func TestChoicesGroupRepositoriesAndModelsByProvider(t *testing.T) {
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
 			"second": {Repositories: []string{"zeta/api", "alpha/web"}},
-			"first":  {Type: "local"},
+			"first":  {Type: "local", Repositories: []string{"local/repo"}},
+		},
+		Compute: map[string]config.Compute{"remote": {Type: "vercel"}},
+		Environments: map[string]config.Environment{
+			"production": {Compute: "remote", Repositories: []string{"second/alpha/web", "first/local/repo"}},
 		},
 		Providers: map[string]config.Provider{
 			"zai": {Models: map[string]config.Model{
@@ -62,8 +66,11 @@ func TestChoicesGroupRepositoriesAndModelsByProvider(t *testing.T) {
 	if got := choices.Repositories["second"]; len(got) != 2 || got[0] != "alpha/web" || got[1] != "zeta/api" {
 		t.Fatalf("second repositories = %v", got)
 	}
-	if got, ok := choices.Repositories["first"]; !ok || len(got) != 0 {
-		t.Fatalf("connection without a fixed list = %v, present %v", got, ok)
+	if got := choices.Repositories["first"]; len(got) != 1 || got[0] != "local/repo" {
+		t.Fatalf("first repositories = %v", got)
+	}
+	if got := choices.RepositoriesByEnvironment["production"]; len(got) != 1 || len(got["second"]) != 1 || got["second"][0] != "alpha/web" {
+		t.Fatalf("environment repository choices = %v", got)
 	}
 	if len(choices.Providers) != 2 || choices.Providers[0] != "anthropic" || choices.Providers[1] != "zai" {
 		t.Fatalf("providers = %v", choices.Providers)

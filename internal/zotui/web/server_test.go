@@ -40,7 +40,7 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	response = serve(handler, http.MethodGet, "/workers", "")
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("Software Factory")) || !bytes.Contains(body, []byte(`id="provider-grid"`)) || bytes.Contains(body, []byte("const outputSets")) {
+	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("Software Factory")) || !bytes.Contains(body, []byte(`id="provider-grid"`)) || !bytes.Contains(body, []byte(`id="edit-delete"`)) || !bytes.Contains(body, []byte(`<dialog class="delete-dialog"`)) || bytes.Contains(body, []byte("const outputSets")) {
 		t.Fatalf("web app status=%d body=%q", response.StatusCode, body[:min(len(body), 200)])
 	}
 	// A released zotui binary must render without reaching a public CDN.
@@ -92,6 +92,9 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	}
 	if got := statePayload.Choices.Repositories["acme"]; len(got) != 1 || got[0] != "acme/api" {
 		t.Fatalf("repository choices did not reach the browser: %v", got)
+	}
+	if got := statePayload.Choices.RepositoriesByEnvironment["go"]["acme"]; len(got) != 1 || got[0] != "acme/api" {
+		t.Fatalf("environment repository choices did not reach the browser: %v", got)
 	}
 	if len(statePayload.Choices.Providers) != 1 || statePayload.Choices.Providers[0] != "zai" || len(statePayload.Choices.Models["zai"]) != 1 || statePayload.Choices.Models["zai"][0] != "glm" {
 		t.Fatalf("provider model choices did not reach the browser: %+v", statePayload.Choices)

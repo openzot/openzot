@@ -113,9 +113,8 @@ func (a *App) MintToken(ctx context.Context, repos []string) (*repo.Token, error
 }
 
 // ListRepositories discovers the repositories this installation can access, as
-// "owner/name" strings. This is the set offered when no explicit lockdown list is
-// configured - the installation is scoped to a single organization and whatever
-// repositories the App has been granted.
+// "owner/name" strings. The app layer intersects this set with any configured
+// lockdown, so configuration can narrow installation access but never widen it.
 func (a *App) ListRepositories(ctx context.Context) ([]string, error) {
 	issued, err := a.exchange(ctx, nil)
 	if err != nil {

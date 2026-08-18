@@ -118,7 +118,7 @@
           <div class="field-grid">
             <div class="field full"><label for="instance-name">Worker name</label><input id="instance-name" name="name" value="zot-product-builder" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required /></div>
             <div class="field"><label for="repo">Code source</label><select id="repo" name="repo" required></select><span class="field-hint">The account or local checkout that provides the code.</span></div>
-            <div class="field"><label id="repository-label" for="repository">Repository</label><select id="repository" name="repository" required></select><input id="repository-manual" placeholder="owner/name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" hidden disabled required /><span class="field-hint" id="repository-hint"></span></div>
+            <div class="field"><label id="repository-label" for="repository">Repository</label><select id="repository" name="repository" required></select><span class="field-hint" id="repository-hint"></span></div>
             <div class="field full"><label id="provider-label">Model provider</label><div class="provider-grid" id="provider-grid" role="listbox" aria-labelledby="provider-label"></div></div>
             <div class="field full"><label id="model-label">Model</label><input id="model" name="model" type="hidden"/><div class="model-grid" id="model-grid" role="listbox" aria-labelledby="model-label"></div></div>
             <div class="field full"><label for="max-iterations">Iteration budget</label><input id="max-iterations" name="iterations" type="number" value="1000000" min="1" max="1000000" required /></div>
@@ -126,7 +126,8 @@
           </div>
         </section>
       </div>
-      <footer class="dialog-foot">
+      <footer class="dialog-foot worker-dialog-foot">
+        <button class="action danger" id="edit-delete" type="button" aria-haspopup="dialog" aria-controls="delete-dialog" hidden>Delete worker</button>
         <div class="dialog-actions"><button class="action" id="dialog-cancel" type="button">Cancel</button><button class="action primary" id="create-submit" value="default">Create worker</button></div>
       </footer>
     </form>
@@ -164,6 +165,29 @@
       <footer class="dialog-foot">
         <button class="action" id="schedule-clear" type="button" hidden>Remove schedule</button>
         <div class="dialog-actions"><button class="action" id="schedule-cancel" type="button">Cancel</button><button class="action primary" id="schedule-apply" type="button">Apply schedule</button></div>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="delete-dialog" id="delete-dialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description">
+    <form method="dialog" id="delete-form">
+      <header class="dialog-head">
+        <div><small>Destructive operation</small><h2 id="delete-dialog-title">Delete ZOT worker_</h2></div>
+        <button class="dialog-close" id="delete-dialog-close" type="button" aria-label="Close delete confirmation">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="delete-confirmation">
+          <span class="delete-mark" aria-hidden="true">!</span>
+          <div>
+            <small>Worker selected for permanent removal</small>
+            <strong id="delete-worker-name"></strong>
+            <p id="delete-dialog-description">The worker configuration, run history, and captured output will be permanently deleted.</p>
+          </div>
+        </div>
+        <div class="delete-boundary"><span>Safety interlock</span><p>This operation cannot be undone. Active workers must be stopped before deletion.</p></div>
+      </div>
+      <footer class="dialog-foot">
+        <div class="dialog-actions"><button class="action" id="delete-cancel" type="button">Keep worker</button><button class="action danger" id="delete-confirm" value="default">Delete permanently</button></div>
       </footer>
     </form>
   </dialog>
