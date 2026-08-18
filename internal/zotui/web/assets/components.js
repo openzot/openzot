@@ -195,7 +195,7 @@
 
     render() {
       if (!this._configuration) return;
-      const { instance, active, state, stateLabel } = this._configuration;
+      const { instance, active, state, stateLabel, deletable } = this._configuration;
       const activeRun = instance.runs.find((run) =>
         ["running", "paused"].includes(run.state),
       );
@@ -204,13 +204,19 @@
         ? `iteration ${activeRun.iteration}`
         : instance.schedule?.short || "manual";
       const scope = `${instance.environment} / ${instance.repo} / ${instance.model}`;
+      const deleteLabel = deletable
+        ? `Delete worker ${instance.name}`
+        : `Stop the active run before deleting worker ${instance.name}`;
       this.innerHTML = `
-        <button class="instance-card${active ? " active" : ""}" data-instance="${escapeHTML(instance.id)}" aria-pressed="${active}">
-          <div class="card-row"><span>${escapeHTML(instance.id)}</span><span class="status ${escapeHTML(state)}">${escapeHTML(stateLabel)}</span></div>
-          <div class="instance-name">${escapeHTML(instance.name.toUpperCase())}</div>
-          <div class="instance-meta"><span>${escapeHTML(recordLabel)}</span><span>${escapeHTML(progressLabel)}</span></div>
-          <div class="instance-scope">${escapeHTML(scope)}</div>
-        </button>`;
+        <div class="instance-card${active ? " active" : ""}" data-instance="${escapeHTML(instance.id)}">
+          <button type="button" class="instance-select" aria-pressed="${active}">
+            <div class="card-row"><span>${escapeHTML(instance.id)}</span><span class="status ${escapeHTML(state)}">${escapeHTML(stateLabel)}</span></div>
+            <div class="instance-name">${escapeHTML(instance.name.toUpperCase())}</div>
+            <div class="instance-meta"><span>${escapeHTML(recordLabel)}</span><span>${escapeHTML(progressLabel)}</span></div>
+            <div class="instance-scope">${escapeHTML(scope)}</div>
+          </button>
+          <button type="button" class="instance-delete" data-delete-worker aria-label="${escapeHTML(deleteLabel)}" title="${escapeHTML(deleteLabel)}"${deletable ? "" : " disabled"}>DELETE</button>
+        </div>`;
     }
   }
 

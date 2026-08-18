@@ -408,15 +408,23 @@ body::before {
   position: relative;
   width: 100%;
   min-height: 104px;
-  padding: 11px 11px 10px;
   color: var(--muted);
-  text-align: left;
   border: 1px solid var(--line);
   background: rgba(8, 9, 8, 0.82);
-  cursor: pointer;
   transition:
     border-color 0.3s,
     background 0.3s;
+}
+.instance-select {
+  display: block;
+  width: 100%;
+  min-height: 102px;
+  padding: 11px 11px 10px;
+  color: inherit;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 .instance-card:hover {
   border-color: rgba(var(--signal-rgb), 0.45);
@@ -443,6 +451,28 @@ body::before {
   width: 2px;
   background: var(--signal);
   box-shadow: 0 0 16px var(--signal);
+}
+.instance-delete {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  padding: 2px 4px;
+  color: var(--muted-2);
+  font-family: var(--mono);
+  font-size: var(--font-xs);
+  letter-spacing: 0.1em;
+  border: 1px solid transparent;
+  background: rgba(8, 9, 8, 0.78);
+  cursor: pointer;
+}
+.instance-delete:hover,
+.instance-delete:focus-visible {
+  color: var(--danger);
+  border-color: currentColor;
+}
+.instance-delete:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 .card-row {
   display: flex;
@@ -500,6 +530,7 @@ body::before {
   text-transform: uppercase;
 }
 .instance-scope {
+  padding-right: 50px;
   margin-top: 5px;
   overflow: hidden;
   color: var(--muted-2);

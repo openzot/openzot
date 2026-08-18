@@ -115,6 +115,24 @@ func TestCommandCenterAPIAndAssets(t *testing.T) {
 	if got := read(response); got != "live output" {
 		t.Fatalf("output = %q", got)
 	}
+	response = serve(handler, http.MethodDelete, "/api/workers/"+created["id"], "")
+	if response.StatusCode != http.StatusConflict || !strings.Contains(read(response), "active run") {
+		t.Fatal("expected active run to prevent worker deletion")
+	}
+	response = serve(handler, http.MethodPost, "/api/runs/"+runID+"/stop", "")
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("stop status = %d: %s", response.StatusCode, read(response))
+	}
+	response.Body.Close()
+	response = serve(handler, http.MethodDelete, "/api/workers/"+created["id"], "")
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d: %s", response.StatusCode, read(response))
+	}
+	response.Body.Close()
+	response = serve(handler, http.MethodGet, "/api/state", "")
+	if got := read(response); strings.Contains(got, `"name":"builder"`) {
+		t.Fatalf("deleted worker remains in state: %s", got)
+	}
 }
 
 func TestAPIRejectsUnknownFields(t *testing.T) {

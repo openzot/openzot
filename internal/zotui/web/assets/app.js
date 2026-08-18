@@ -164,7 +164,11 @@ function renderWorkers() {
     (item) => item.id,
     () => {
       const card = document.createElement("zot-instance-card");
-      card.addEventListener("click", () => {
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("[data-delete-worker]")) {
+          deleteWorker(card.dataset.key);
+          return;
+        }
         const index = state.workers.findIndex((item) => item.id === card.dataset.key);
         if (index < 0) return;
         selectedWorker = index;
@@ -184,6 +188,7 @@ function renderWorkers() {
         active: index === selectedWorker,
         state: stateClass(record?.status || "idle"),
         stateLabel: stateLabel(record?.status || "idle"),
+        deletable: !record,
       };
     },
   );
@@ -191,6 +196,23 @@ function renderWorkers() {
   $("#active-count").textContent = String(allRuns.filter((item) => item.status === "running").length).padStart(2, "0");
   $("#paused-count").textContent = String(allRuns.filter((item) => item.status === "paused").length).padStart(2, "0");
   $("#run-count").textContent = String(allRuns.length).padStart(2, "0");
+}
+
+async function deleteWorker(id) {
+  const item = state.workers.find((worker) => worker.id === id);
+  if (!item) return;
+  if (activeRun(item)) {
+    showToast("DELETE BLOCKED", "Stop the active run before deleting this worker.");
+    return;
+  }
+  if (!window.confirm(`Delete worker "${item.name}" and all of its run history and output? This cannot be undone.`)) return;
+  try {
+    await request(`/api/workers/${id}`, { method: "DELETE" });
+    showToast("WORKER DELETED", item.name.toUpperCase());
+    await refresh({ quiet: false });
+  } catch (error) {
+    showToast("DELETE FAILED", error.message);
+  }
 }
 
 function renderRuns() {
