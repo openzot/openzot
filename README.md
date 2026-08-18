@@ -39,6 +39,18 @@ fixes what it broke - on its own, from that one brief to a recorded outcome. Whe
 it stops you have a changed working tree and a full session log of every step it
 took. No chat loop, no approving each edit: one brief in, finished work out.
 
+## zotui
+
+The release also includes **zotui**, a browser command center for operating zot
+as reusable workers. Choose a repository, environment, provider and model, give
+the worker its mission, then launch runs on demand or on a schedule and follow
+their output and history from the browser. Workers can run in disposable local
+Docker containers or on configured remote compute.
+
+zotui keeps the same autonomy boundary: it dispatches and observes complete
+runs; it does not turn zot into a chat-driven coding agent. See
+[Configuring zotui](docs/zotui-configuration.md) for setup and deployment.
+
 ## Why zot exists
 
 Most coding tools optimize the conversation between a developer and an agent.
@@ -60,7 +72,7 @@ required:
 ```bash
 VERSION=vX.Y.Z; OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
 curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
-mv "zot-${VERSION}-${OS}-${ARCH}/zot" ~/.local/bin/   # or any directory on your PATH
+mv "zot-${VERSION}-${OS}-${ARCH}"/{zot,zotui} ~/.local/bin/   # or any directory on your PATH
 ```
 
 zot defaults to the **`zai`** provider running **`glm-5.2`**. Export a key and
