@@ -13,6 +13,7 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 		// exact entries win
 		{"gpt-5.4-mini", 400_000},
 		{"gpt-5.4", 1_050_000},
+		{"glm-5.3", 1_000_000},
 		{"glm-5.2", 1_000_000},
 		{"kimi-k3", 1_000_000},
 		{"claude-5-sonnet", 1_000_000},
@@ -50,10 +51,25 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 	}
 }
 
+// Vercel advertises a much smaller output ceiling for GLM 5.3 than GLM 5.2;
+// treating the 12.8K value as 128K would compact the thread 115.2K tokens early.
+func TestGLM53UsesGatewayMetadata(t *testing.T) {
+	entry := Lookup("vercel/zai/glm-5.3")
+	if entry.Provider != "zai" || entry.ContextWindow != 1_000_000 || entry.MaxOutputTokens != 12_800 {
+		t.Fatalf("GLM 5.3 metadata = %+v", entry)
+	}
+	if !entry.SupportsTools || !entry.SupportsReasoning {
+		t.Fatalf("GLM 5.3 capabilities = %+v", entry)
+	}
+	if got := entry.InputBudget(); got != 987_200 {
+		t.Errorf("GLM 5.3 input budget = %d, want 987200", got)
+	}
+}
+
 func TestReasoningModelsAreFlagged(t *testing.T) {
 	// the loop exempts reasoning from the runaway backstop, and the provider
 	// prefers the Responses API where reasoning state can survive a tool round
-	for _, model := range []string{"deepseek-r2", "gpt-5.4-mini", "glm-5.2", "kimi-k3", "claude-5-opus"} {
+	for _, model := range []string{"deepseek-r2", "gpt-5.4-mini", "glm-5.3", "kimi-k3", "claude-5-opus"} {
 		if !Lookup(model).SupportsReasoning {
 			t.Errorf("%s should be flagged as a reasoning model", model)
 		}
@@ -89,7 +105,7 @@ func TestModelsWithoutToolsAreFlagged(t *testing.T) {
 }
 
 func TestKnownReportsCoverage(t *testing.T) {
-	for _, model := range []string{"glm-5.2", "gpt-5.4-mini-2026-01-01", "claude-5-sonnet", "qwen-3.8-max"} {
+	for _, model := range []string{"glm-5.3", "gpt-5.4-mini-2026-01-01", "claude-5-sonnet", "qwen-3.8-max"} {
 		if !Known(model) {
 			t.Errorf("%s should be recognised", model)
 		}

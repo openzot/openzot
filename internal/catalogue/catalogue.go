@@ -132,6 +132,7 @@ var models = map[string]Model{
 
 	// -------------------------------------------------------------------- ZAI
 
+	"glm-5.3":       {Provider: "zai", ContextWindow: 1_000_000, MaxOutputTokens: 12_800, SupportsTools: true, SupportsReasoning: true},
 	"glm-5.2":       {Provider: "zai", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
 	"glm-5.1":       {Provider: "zai", ContextWindow: 202_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
 	"glm-5-turbo":   {Provider: "zai", ContextWindow: 202_800, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},

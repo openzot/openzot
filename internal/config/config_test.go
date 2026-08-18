@@ -279,6 +279,9 @@ func TestProviderModelsUsesCustomListOrCatalogue(t *testing.T) {
 	if len(builtin) == 0 || !sort.StringsAreSorted(builtin) {
 		t.Fatalf("built-in ZAI models = %v", builtin)
 	}
+	if index := sort.SearchStrings(builtin, "glm-5.3"); index == len(builtin) || builtin[index] != "glm-5.3" {
+		t.Fatalf("built-in ZAI models do not include glm-5.3: %v", builtin)
+	}
 }
 
 // Scrubbing removes every resolved credential - Bearer secrets and provider

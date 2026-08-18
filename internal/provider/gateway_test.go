@@ -279,6 +279,7 @@ func TestBareModelIsQualifiedPerGateway(t *testing.T) {
 		// the headline case: same bare name, gateway-specific prefix
 		{provider: OpenRouter, model: "glm-5.2", want: "z-ai/glm-5.2"},
 		{provider: Vercel, model: "glm-5.2", want: "zai/glm-5.2"},
+		{provider: Vercel, model: "glm-5.3", want: "zai/glm-5.3"},
 
 		// a provider whose slug matches our name needs no alias
 		{provider: OpenRouter, model: "gpt-4o", want: "openai/gpt-4o"},
