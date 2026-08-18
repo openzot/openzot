@@ -96,10 +96,11 @@ repos:
       - openzot/openzot
 ```
 
-The path is mounted at `/workspace` inside the worker container. A local repo
-therefore works only with `type: docker` compute. It cannot be mounted into a
-remote Vercel or Cloudflare machine; zotui rejects that pairing when a worker is
-created.
+For each run, Zotui creates a Git bundle containing the checkout's committed
+refs, copies the bundle into Docker, and clones it at `/workspace`. The host
+checkout is never mounted, and uncommitted or ignored host files are not copied.
+A local repo therefore works only with `type: docker` compute; Zotui rejects a
+remote Vercel or Cloudflare pairing when a worker is created.
 
 ### Public GitHub repository
 
@@ -187,7 +188,10 @@ environments:
 
 `make dev-ui` builds and embeds release-mode Linux worker binaries automatically.
 Each run gets a fresh container, receives the matching executable and private
-configuration, and is removed afterward, including after cancellation.
+configuration, seeds its own isolated `/workspace`, and is removed afterward,
+including after cancellation. A remote repository is shallow-cloned inside the
+container. A local repository connection is copied as a Git bundle and cloned;
+Docker never receives a host bind mount.
 
 ### Vercel Sandbox
 
@@ -266,7 +270,7 @@ image: go-environment:latest
 The Vercel driver creates a non-persistent sandbox, seeds the selected remote
 Git repository, installs Zot and its private configuration, runs from that
 repository directory, streams raw ANSI output to the browser, and stops the
-sandbox at the end. Local host mounts are not supported.
+sandbox at the end. Local repository connections are Docker-only.
 
 ### Cloudflare status
 
@@ -502,8 +506,8 @@ names.
 
 ### `local repo ... requires docker compute`
 
-A local checkout cannot be mounted into a remote sandbox. Select a Docker
-environment or configure a remote GitHub repo connection.
+A local checkout can only be bundled by Docker compute on the Zotui host. Select
+a Docker environment or configure a remote GitHub repo connection.
 
 ### Vercel reports an unknown or invalid image
 

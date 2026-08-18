@@ -147,7 +147,7 @@ func TestCreateRejectsUnsupportedOrIncompleteSpecs(t *testing.T) {
 		{},
 		{Image: "image"},
 		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}},
-		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}, Mounts: []compute.Mount{{Source: "/local", Target: "/workspace"}}},
+		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}, Source: compute.Source{LocalPath: "/local"}},
 		{Image: "image", Model: compute.ModelSpec{Provider: "p", Model: "m"}, Source: compute.Source{Directory: "../outside"}},
 	}
 	for _, spec := range tests {

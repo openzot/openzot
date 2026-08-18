@@ -201,8 +201,8 @@ func TestLocalRepoResolvesDockerCompute(t *testing.T) {
 	if provider.Type() != "docker" || spec.Image != "golang:1.26.5-bookworm" || spec.MaxIterations != 27 {
 		t.Fatalf("resolved compute = %s, %+v", provider.Type(), spec)
 	}
-	if len(spec.Mounts) != 1 || spec.Mounts[0].Source != "/workspaces/openzot" || spec.Mounts[0].Target != "/workspace" {
-		t.Fatalf("local checkout mount = %+v", spec.Mounts)
+	if spec.Source.LocalPath != "/workspaces/openzot" || spec.Source.URL != "" {
+		t.Fatalf("local checkout source = %+v", spec.Source)
 	}
 	if spec.Model.Provider != "zai" || spec.Model.APIKey != "secret" {
 		t.Fatalf("provider name was not used as the default driver: %+v", spec.Model)

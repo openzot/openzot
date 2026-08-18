@@ -34,8 +34,9 @@ repos:
     base_url: https://gitlab.example.com
     token: $LABS_GITLAB_TOKEN
 
-  # A checkout already present on the zotui host. Docker compute mounts it into
-  # the worker container at /workspace and does not mint a remote credential.
+  # A checkout already present on the zotui host. Docker compute copies its
+  # committed Git refs as a bundle and clones them into an isolated /workspace.
+  # It does not mount the host checkout or mint a remote credential.
   # development:
   #   type: local
   #   path: $ZOTUI_REPO_PATH

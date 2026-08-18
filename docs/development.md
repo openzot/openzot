@@ -42,9 +42,11 @@ make dev-ui
 The second command serves the command center on port 8080, which the container
 forwards to the host. It uses `.devcontainer/zotui.dev.yaml`: a credential-free
 fixture whose local repo points at this checkout and whose `development` compute
-launches an ephemeral Docker container per run. The checkout is mounted at
-`/workspace`; the model credential, if supplied, is written into the container's
-temporary zot config and the container is removed when the run ends.
+launches an ephemeral Docker container per run. Zotui bundles the checkout's
+committed Git refs and clones that bundle into the container's isolated
+`/workspace`; the host checkout is never mounted. The model credential, if
+supplied, is written into the container's temporary zot config and the container
+is removed when the run ends.
 
 The dev container builds the Linux amd64 and arm64 Zot worker artifacts during
 setup. Zotui embeds those compressed executables and transfers the matching one

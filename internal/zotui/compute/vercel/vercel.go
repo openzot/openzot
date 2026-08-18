@@ -146,8 +146,8 @@ func (d *Driver) validate(spec compute.Spec) error {
 	if len(spec.Worker.Data) == 0 {
 		return errors.New("vercel: worker binary is required")
 	}
-	if len(spec.Mounts) != 0 {
-		return errors.New("vercel: local host mounts are not supported; use a remote repo connection")
+	if strings.TrimSpace(spec.Source.LocalPath) != "" {
+		return errors.New("vercel: local sources are not supported; use a remote repo connection")
 	}
 	if directory := spec.Source.Directory; directory != "" && (path.IsAbs(directory) || path.Clean(directory) != directory || directory == ".") {
 		return errors.New("vercel: source directory must be a clean relative path")

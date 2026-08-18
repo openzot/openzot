@@ -455,10 +455,9 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 	default:
 		return nil, compute.Spec{}, fmt.Errorf("compute type %q not supported yet", provider.Type)
 	}
-	var mounts []compute.Mount
 	var source compute.Source
 	if rc := a.cfg.Repos[execution.Repo]; rc.Type == "local" {
-		mounts = []compute.Mount{{Source: rc.Path, Target: "/workspace"}}
+		source = compute.Source{LocalPath: rc.Path}
 	} else if rc.Type == "" || rc.Type == "github" {
 		parts := strings.Split(execution.Repository, "/")
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -467,7 +466,7 @@ func (a *App) Resolve(execution dispatch.Execution) (compute.Provider, compute.S
 		source = compute.Source{URL: "https://github.com/" + execution.Repository + ".git",
 			Username: "x-access-token", Directory: parts[1]}
 	}
-	return driver, compute.Spec{Image: env.Image, Platform: driver.Platform(), Env: env.Env, Mounts: mounts, Source: source, MaxIterations: execution.MaxIterations,
+	return driver, compute.Spec{Image: env.Image, Platform: driver.Platform(), Env: env.Env, Source: source, MaxIterations: execution.MaxIterations,
 		Model: compute.ModelSpec{Provider: modelDriver, Model: modelID, APIKey: modelProvider.APIKey, BaseURL: modelProvider.BaseURL}}, nil
 }
 

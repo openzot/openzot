@@ -16,7 +16,6 @@ type Spec struct {
 	Image         string
 	Platform      string
 	Env           map[string]string
-	Mounts        []Mount
 	Source        Source
 	Worker        Worker
 	Model         ModelSpec
@@ -31,16 +30,12 @@ type Worker struct {
 	Data     []byte
 }
 
-// Mount exposes a host path inside a sandbox.
-type Mount struct {
-	Source   string
-	Target   string
-	ReadOnly bool
-}
-
-// Source is a remote Git checkout a compute provider can place in the sandbox.
-// Password is populated only after the repo provider mints a per-run token.
+// Source is the isolated checkout a compute provider places in the sandbox.
+// LocalPath is bundled from the host and cloned inside local compute. URL is
+// cloned remotely; Password is populated only after the repo provider mints a
+// per-run token. Exactly one of LocalPath and URL may be set.
 type Source struct {
+	LocalPath string
 	URL       string
 	Username  string
 	Password  string

@@ -1,6 +1,6 @@
 # Safe fixture configuration for developing the zotui web command center.
-# It contains no credentials. Runs execute in ephemeral Docker containers with
-# the current checkout mounted at /workspace.
+# It contains no credentials. Runs execute in ephemeral Docker containers; the
+# current checkout's committed Git refs are copied and cloned into /workspace.
 repos:
   openzot:
     type: local

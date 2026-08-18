@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -86,13 +87,6 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 	for _, key := range sortedKeys(env) {
 		args = append(args, "--env", key+"="+env[key])
 	}
-	for _, mount := range spec.Mounts {
-		value := "type=bind,source=" + mount.Source + ",target=" + mount.Target
-		if mount.ReadOnly {
-			value += ",readonly"
-		}
-		args = append(args, "--mount", value)
-	}
 	image := strings.TrimSpace(spec.Image)
 	if image == "" {
 		image = defaultImage
@@ -108,6 +102,16 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 	if code, runErr := d.runner.Run(ctx, nil, &output, d.binary, "start", name); runErr != nil || code != 0 {
 		s.cleanup()
 		return nil, commandError("start", code, runErr, output.String())
+	}
+	output.Reset()
+	prepareWorkspace := fmt.Sprintf("mkdir -p %s; chown -R %d:%d %s", workspace, os.Getuid(), os.Getgid(), workspace)
+	if code, runErr := d.runner.Run(ctx, nil, &output, d.binary, "exec", "--user", "0", name, "sh", "-c", prepareWorkspace); runErr != nil || code != 0 {
+		s.cleanup()
+		return nil, commandError("prepare workspace", code, runErr, output.String())
+	}
+	if err := d.seedSource(ctx, s, spec.Source); err != nil {
+		s.cleanup()
+		return nil, err
 	}
 	output.Reset()
 	installWorker := "umask 077; mkdir -p /tmp/zotui-worker; cat > " + workerPath + "; chmod 755 " + workerPath
@@ -128,6 +132,78 @@ func (d *Driver) Create(ctx context.Context, spec compute.Spec) (compute.Sandbox
 		return nil, commandError("configure", code, runErr, output.String())
 	}
 	return s, nil
+}
+
+func (d *Driver) seedSource(ctx context.Context, s *sandbox, source compute.Source) error {
+	if source.LocalPath != "" {
+		return d.cloneLocal(ctx, s, source.LocalPath)
+	}
+	if source.URL == "" {
+		return nil
+	}
+	return d.cloneRemote(ctx, s, source)
+}
+
+func (d *Driver) cloneLocal(ctx context.Context, s *sandbox, localPath string) error {
+	tempDir, err := os.MkdirTemp("", "zotui-source-")
+	if err != nil {
+		return fmt.Errorf("docker bundle local source: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+	bundlePath := filepath.Join(tempDir, "source.bundle")
+
+	var output bytes.Buffer
+	if code, runErr := d.runner.Run(ctx, nil, &output, "git", "-C", localPath, "bundle", "create", bundlePath, "--all"); runErr != nil || code != 0 {
+		return commandError("bundle local source", code, runErr, output.String())
+	}
+	output.Reset()
+	if code, runErr := d.runner.Run(ctx, nil, &output, d.binary, "cp", bundlePath, s.name+":/tmp/zotui-source.bundle"); runErr != nil || code != 0 {
+		return commandError("copy local source", code, runErr, output.String())
+	}
+	output.Reset()
+	clone := `git clone --no-local /tmp/zotui-source.bundle /workspace; clone_status=$?; rm -f /tmp/zotui-source.bundle; exit "$clone_status"`
+	if code, runErr := d.runner.Run(ctx, nil, &output, d.binary, "exec", s.name, "sh", "-c", clone); runErr != nil || code != 0 {
+		return commandError("clone local source", code, runErr, output.String())
+	}
+	return nil
+}
+
+func (d *Driver) cloneRemote(ctx context.Context, s *sandbox, source compute.Source) error {
+	var output bytes.Buffer
+	if source.Password == "" {
+		if code, runErr := d.runner.Run(ctx, nil, &output, d.binary, "exec", s.name,
+			"git", "clone", "--depth", "1", source.URL, workspace); runErr != nil || code != 0 {
+			return commandError("clone remote source", code, runErr, output.String())
+		}
+		return nil
+	}
+
+	credential := source.Username + "\n" + source.Password + "\n"
+	installCredential := `umask 077
+mkdir -p /tmp/zotui-git
+IFS= read -r username
+IFS= read -r password
+printf '%s' "$username" > /tmp/zotui-git/username
+printf '%s' "$password" > /tmp/zotui-git/password
+cat > /tmp/zotui-git/askpass <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) cat /tmp/zotui-git/username ;;
+  *) cat /tmp/zotui-git/password ;;
+esac
+EOF
+chmod 700 /tmp/zotui-git/askpass`
+	if code, runErr := d.runner.Run(ctx, strings.NewReader(credential), &output, d.binary,
+		"exec", "-i", s.name, "sh", "-c", installCredential); runErr != nil || code != 0 {
+		return commandError("install Git credential", code, runErr, output.String())
+	}
+	output.Reset()
+	clone := `trap 'rm -rf /tmp/zotui-git' EXIT; GIT_ASKPASS=/tmp/zotui-git/askpass GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$1" /workspace`
+	if code, runErr := d.runner.Run(ctx, nil, &output, d.binary,
+		"exec", s.name, "sh", "-c", clone, "sh", source.URL); runErr != nil || code != 0 {
+		return commandError("clone remote source", code, runErr, output.String())
+	}
+	return nil
 }
 
 type sandbox struct {
@@ -183,13 +259,14 @@ func validateSpec(spec compute.Spec) error {
 	if len(spec.Worker.Data) == 0 {
 		return fmt.Errorf("docker: worker binary is required")
 	}
-	for _, mount := range spec.Mounts {
-		if mount.Source == "" || mount.Target == "" {
-			return fmt.Errorf("docker: mount source and target are required")
-		}
-		if strings.Contains(mount.Source, ",") || strings.Contains(mount.Target, ",") {
-			return fmt.Errorf("docker: mount paths cannot contain commas")
-		}
+	if spec.Source.LocalPath != "" && spec.Source.URL != "" {
+		return fmt.Errorf("docker: source cannot contain both a local path and remote URL")
+	}
+	if spec.Source.Password != "" && strings.TrimSpace(spec.Source.Username) == "" {
+		return fmt.Errorf("docker: source username is required with a password")
+	}
+	if strings.ContainsAny(spec.Source.Username, "\r\n") || strings.ContainsAny(spec.Source.Password, "\r\n") {
+		return fmt.Errorf("docker: source credentials cannot contain newlines")
 	}
 	return nil
 }

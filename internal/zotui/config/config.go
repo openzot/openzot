@@ -54,7 +54,7 @@ type Config struct {
 // within the connection). It can only restrict reach, never widen it.
 type Repo struct {
 	Type string `yaml:"type"` // github, gitlab, local
-	Path string `yaml:"path"` // local: checkout path mounted into the sandbox
+	Path string `yaml:"path"` // local: Git checkout bundled and cloned into Docker
 
 	// github: a GitHub App installation
 	AppID          int64  `yaml:"app_id"`
