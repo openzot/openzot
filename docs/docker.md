@@ -257,12 +257,12 @@ make image
 docker run --rm openzot/zot:local --version
 ```
 
-`make image` stamps the current Git description into the binary. When invoking
-Docker directly, `--build-arg VERSION=...` controls what `--version` reports;
-without it the build produces `dev` and the update check is skipped. Note that
-`go.work` is excluded from the build context by `.dockerignore` - a workspace
-file someone created locally must not leak into an image build and cap the
-toolchain below what `go.mod` requires.
+`make image` stamps the version from the `VERSION` file into the binary. When
+invoking Docker directly, `--build-arg VERSION=...` controls what `--version`
+reports; without it the build produces `dev` and the update check is skipped.
+Note that `go.work` is excluded from the build context by `.dockerignore` - a
+workspace file someone created locally must not leak into an image build and cap
+the toolchain below what `go.mod` requires.
 
 Images are always built without `-tags dev`, so a published image never reads a
 `.env` from the directory you mounted. See

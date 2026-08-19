@@ -71,5 +71,5 @@ VOLUME ["/workspace", "/home/zot/.config/zot"]
 
 EXPOSE 8080
 
-# No HEALTHCHECK: zot is a one-shot CLI (or a stdio ACP server), not a daemon.
+# No HEALTHCHECK: zot is a one-shot CLI, not a daemon.
 ENTRYPOINT ["zot"]
