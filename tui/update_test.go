@@ -234,6 +234,7 @@ func TestExitEventSetsTheStatus(t *testing.T) {
 	}{
 		{"a settled run", agent.AgentExitEvent{Code: 0, Reason: "settled", Message: "done"}, statusDone},
 		{"a budget-exhausted run", agent.AgentExitEvent{Code: 1, Reason: "iterations", Message: "gave up"}, statusFailed},
+		{"a run the model declared failed", agent.AgentExitEvent{Code: 1, Reason: "failed", Message: "cannot reach the host"}, statusFailed},
 	}
 
 	for _, test := range tests {
@@ -250,6 +251,25 @@ func TestExitEventSetsTheStatus(t *testing.T) {
 				t.Error("the exit message should be retained for the footer")
 			}
 		})
+	}
+}
+
+// A run the model declared a failure is not a crash and not a budget cut: it
+// reached a conclusion. Reporting it as "exited (code 1)" reads as a harness
+// malfunction, which sends the operator looking in the wrong place.
+func TestDeclaredFailureRendersAsAnOutcomeNotACrash(t *testing.T) {
+	m := sized(t, 100, 30)
+
+	m.handleEvent(agent.AgentExitEvent{Code: 1, Reason: "failed", Message: "cannot reach the host"})
+
+	log := stripANSI(strings.Join(m.entries, "\n"))
+
+	if !strings.Contains(log, "cannot reach the host") {
+		t.Errorf("log %q should carry the model's stated reason", log)
+	}
+
+	if strings.Contains(log, "code 1") {
+		t.Errorf("log %q reports a declared failure as a process exit code", log)
 	}
 }
 
@@ -533,6 +553,11 @@ func TestRenderToolStartCoversTheBuiltInTools(t *testing.T) {
 		{"shell", map[string]any{"command": "go test ./..."}, "go test"},
 		{"skill", map[string]any{"name": "deploy"}, "deploy"},
 
+		// edit has a diff panel (see diffForTool) but had no header of its own,
+		// so it fell through to the generic branch and dumped both versions of
+		// the file inline, directly above the diff that renders them properly
+		{"edit", map[string]any{"path": "main.go", "oldString": "before", "newString": "after"}, "main.go"},
+
 		// a caller's own tool still renders, just generically
 		{"custom", map[string]any{"thing": "value"}, "thing=value"},
 	}
@@ -543,6 +568,15 @@ func TestRenderToolStartCoversTheBuiltInTools(t *testing.T) {
 		if !strings.Contains(got, test.want) {
 			t.Errorf("renderToolStart(%q) = %q, want it to contain %q", test.tool, got, test.want)
 		}
+	}
+
+	// the file's contents belong in the diff panel, not in the header line
+	header := stripANSI(renderToolStart("edit", map[string]any{
+		"path": "main.go", "oldString": "the whole previous file", "newString": "the whole new file",
+	}))
+
+	if strings.Contains(header, "the whole previous file") || strings.Contains(header, "the whole new file") {
+		t.Errorf("the edit header dumped the file contents: %q", header)
 	}
 }
 
@@ -825,6 +859,13 @@ func TestTruncateAddsAnEllipsisAndFlattensNewlines(t *testing.T) {
 		{in: "a longer string", max: 8, want: "a longe…"},
 		{in: "two\nlines", max: 20, want: "two lines"},
 		{in: "two\nlines here", max: 6, want: "two l…"},
+
+		// a task or tool argument in CJK or emoji was cut mid-rune, so the meta
+		// bar and the tool lines rendered a replacement character - and the cap
+		// counted bytes, so the line was cut far short of the width it was given
+		{in: "日本語のタスク説明文です", max: 6, want: "日本語のタ…"},
+		{in: "🚀🚀🚀🚀🚀", max: 3, want: "🚀🚀…"},
+		{in: "日本語", max: 10, want: "日本語"},
 	}
 
 	for _, test := range tests {

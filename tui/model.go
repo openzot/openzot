@@ -204,9 +204,6 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 
 	case agent.ToolCallStartEvent:
 		m.flushPending()
-		if e.Name == "exit" {
-			return // The outcome is shown by AgentExitEvent instead.
-		}
 		m.toolCount++
 		if e.Name == "write" || e.Name == "edit" {
 			m.fileEdits++
@@ -241,10 +238,18 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 		m.exitCode = e.Code
 		m.exitMsg = e.Message
 		m.flushPending()
-		if e.Code == 0 {
+		switch {
+		case e.Code == 0:
 			m.status = statusDone
 			m.appendEntry("\n" + okStyle.Render("✓ done") + "  " + taskStyle.Render(e.Message))
-		} else {
+
+		case e.Reason == agent.ReasonFailed:
+			// the model reached a conclusion and the conclusion is "no" - an
+			// outcome, not a malfunction, so it does not get a process exit code
+			m.status = statusFailed
+			m.appendEntry("\n" + errStyle.Render("✗ failed") + "  " + taskStyle.Render(e.Message))
+
+		default:
 			m.status = statusFailed
 			m.appendEntry("\n" + errStyle.Render(fmt.Sprintf("✗ exited (code %d)", e.Code)) + "  " + taskStyle.Render(e.Message))
 		}

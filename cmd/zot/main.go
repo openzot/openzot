@@ -21,10 +21,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/pflag"
@@ -124,20 +126,27 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
 	}
 
-	task, prompt, err := resolveTask(*taskFlag, *taskFile, pflag.Args())
+	var task, prompt string
 
 	// A resumed run inherits its objective from the session it continues; any new
 	// command-line text is a follow-up prompt, not a replacement objective - a
 	// resume is "keep going, and also do this", not "start over". An explicit
 	// --task / --task-file still overrides, for deliberately changing course.
+	//
+	// This is decided before resolveTask is consulted, because a resume with no
+	// new text is a complete invocation: asking resolveTask first meant the
+	// missing-task branch printed the whole usage block to stderr on the way to
+	// working correctly.
 	if resumed != nil && *taskFlag == "" && *taskFile == "" {
 		task = resumed.Meta.Task
 		prompt = strings.TrimSpace(strings.Join(pflag.Args(), " "))
-		err = nil
-	}
+	} else {
+		var err error
 
-	if err != nil {
-		return err
+		task, prompt, err = resolveTask(*taskFlag, *taskFile, pflag.Args())
+		if err != nil {
+			return err
+		}
 	}
 
 	cfg, err := zot.Load(*configPath)
@@ -193,7 +202,48 @@ func run() error {
 
 	options.Prompt = prompt
 
-	return zot.RunWith(context.Background(), cfg, task, options)
+	// The release check runs alongside the whole run and is reported only once
+	// the viewer has released the screen.
+	report := checkForUpdate()
+
+	err = zot.RunWith(context.Background(), cfg, task, options)
+
+	report(os.Stderr)
+
+	return err
+}
+
+// checkForUpdate starts the GitHub release check and returns the function that
+// reports its outcome.
+//
+// The check is a convenience and never more than that: it runs concurrently with
+// the run so it costs no wall-clock time, and every failure - an unreachable
+// GitHub, a rate limit, a malformed body - is dropped rather than surfaced. zot
+// runs unattended, and there is nobody there to act on "the update check
+// failed". A development build makes no call at all (see version.Check), and the
+// notice goes to stderr so it cannot corrupt the transcript on stdout.
+//
+// Reporting waits on the lookup, which the HTTP client bounds to a few seconds -
+// by the time a real run ends the answer has long since arrived.
+func checkForUpdate() func(io.Writer) {
+	notice := make(chan string, 1)
+
+	go func() {
+		result, err := version.Check()
+		if err != nil {
+			notice <- ""
+
+			return
+		}
+
+		notice <- version.FormatUpdateNotice(result)
+	}()
+
+	return func(w io.Writer) {
+		if text := <-notice; text != "" {
+			fmt.Fprintln(w, text)
+		}
+	}
 }
 
 // listSessions prints previous runs, newest first.
@@ -231,11 +281,15 @@ func listSessions(args []string) error {
 
 // oneLine flattens a task to a single truncated line, so a multi-line brief does
 // not turn the listing into a wall of text.
+//
+// The cap counts characters, not bytes: a brief written in CJK or carrying an
+// emoji would otherwise be cut inside a rune and print as a replacement glyph,
+// and would be truncated far earlier than the column it is given.
 func oneLine(text string, width int) string {
 	text = strings.Join(strings.Fields(text), " ")
 
-	if len(text) > width {
-		return text[:width-1] + "\u2026"
+	if utf8.RuneCountInString(text) > width {
+		return string([]rune(text)[:width-1]) + "\u2026"
 	}
 
 	return text
@@ -257,14 +311,6 @@ func loadEnv(dir string) {
 	_ = godotenv.Load(filepath.Join(dir, ".env"))
 }
 
-// resolveTask splits the input into the durable task (the objective, which goes
-// into the system prompt) and an optional opening prompt (a user message).
-//
-// --task / --task-file give the objective explicitly; a bare positional is
-// treated as the objective too, so `zot "do X"` keeps working and stays durable.
-// When an objective is given explicitly, positional text becomes the opening
-// prompt beside it. There is intentionally no interactive input: zot is a
-// viewer, not a chat client.
 // editConfig ensures the config file exists - seeding it from the embedded
 // template on first run - and opens it in the user's editor. This is the setup
 // path: configure the provider, model and key by editing the file.
@@ -331,6 +377,15 @@ func applyOverrides(cfg *zot.Config, o overrides) {
 		cfg.Agent.MaxIterations = o.MaxIterations
 	}
 
+	// A per-model max_iterations is applied when the run resolves, after this,
+	// and would otherwise leave the config file beating the command line: the
+	// engine would stop at the model's cap while the viewer counted up to the
+	// flag's. An explicitly passed --max-iterations is the operator's last word,
+	// so the model's own cap goes.
+	if o.Passed["max-iterations"] {
+		clearModelIterations(cfg)
+	}
+
 	if o.Passed["diff"] {
 		cfg.UI.Diff = o.Diff
 	}
@@ -343,6 +398,26 @@ func applyOverrides(cfg *zot.Config, o overrides) {
 	}
 }
 
+// clearModelIterations drops the per-model iteration cap for the model the run
+// will actually use, so nothing is left to override the command line later. The
+// provider and model have already been overridden by the time this is called, so
+// it looks up the pair the run resolves to.
+func clearModelIterations(cfg *zot.Config) {
+	provider, ok := cfg.Providers[cfg.DefaultProvider]
+	if !ok {
+		return
+	}
+
+	model, ok := provider.Models[cfg.Agent.Model]
+	if !ok {
+		return
+	}
+
+	model.MaxIterations = 0
+
+	provider.Models[cfg.Agent.Model] = model
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -352,6 +427,14 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// resolveTask splits the input into the durable task (the objective, which goes
+// into the system prompt) and an optional opening prompt (a user message).
+//
+// --task / --task-file give the objective explicitly; a bare positional is
+// treated as the objective too, so `zot "do X"` keeps working and stays durable.
+// When an objective is given explicitly, positional text becomes the opening
+// prompt beside it. There is intentionally no interactive input: zot is a
+// viewer, not a chat client.
 func resolveTask(taskFlag, taskFile string, args []string) (task, prompt string, err error) {
 	// The durable objective comes from --task or --task-file; it lands in the
 	// system prompt and stays there for the whole run.
@@ -415,14 +498,4 @@ Commands:
 
 Flags:`)
 	pflag.PrintDefaults()
-}
-
-// stringSlice accumulates a repeatable string flag value (String/Set).
-type stringSlice []string
-
-func (s *stringSlice) String() string { return strings.Join(*s, ",") }
-
-func (s *stringSlice) Set(v string) error {
-	*s = append(*s, strings.TrimSpace(v))
-	return nil
 }

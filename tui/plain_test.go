@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/openzot/openzot/agent"
 	"net/http"
@@ -97,6 +98,10 @@ func plainCall(id, name, arguments string) string {
 
 func plainSuccess(summary string) string {
 	return plainCall("done", "success", fmt.Sprintf(`{"summary":%q}`, summary))
+}
+
+func plainFailure(reason string) string {
+	return plainCall("done", "failure", fmt.Sprintf(`{"reason":%q}`, reason))
 }
 
 // capture runs a function with stdout redirected, returning what it printed.
@@ -211,6 +216,36 @@ func TestRunPlainReturnsAnErrorOnFailure(t *testing.T) {
 
 	if !strings.Contains(output, "failed") {
 		t.Errorf("the transcript must say it failed:\n%s", output)
+	}
+}
+
+// A declared failure is an outcome the model reached - "failed: <reason>" -
+// not a harness crash to be reported by exit code. The viewer already draws
+// that line ("✗ failed" versus "✗ exited (code 1)"); plain mode is the path
+// scripts and CI logs read, where sending the operator hunting for a crash is
+// at least as costly. The exit error and its code are unchanged.
+func TestRunPlainRendersADeclaredFailureAsAnOutcome(t *testing.T) {
+	client := plainServer(t, []string{plainFailure("cannot reach the host")})
+
+	meta := Meta{Task: "deploy", Model: "m", Provider: "b", Workdir: "/w"}
+
+	output, err := capture(t, func() error {
+		return runPlain(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
+	})
+
+	// still a non-zero ending for the shell
+	var exitErr *AgentExitError
+
+	if !errors.As(err, &exitErr) || exitErr.Code == 0 {
+		t.Fatalf("err = %v, want a non-zero exit error", err)
+	}
+
+	if !strings.Contains(output, "failed: cannot reach the host") {
+		t.Errorf("the transcript must name the outcome:\n%s", output)
+	}
+
+	if strings.Contains(output, "(code") {
+		t.Errorf("a declared failure must not read as a crash code:\n%s", output)
 	}
 }
 

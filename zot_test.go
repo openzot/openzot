@@ -293,6 +293,55 @@ providers:
 	}
 }
 
+// The iteration denominator in the meta bar has to be the limit the run will
+// actually stop at. A per-model max_iterations lowers that limit, and a bar
+// counting towards a number the run never reaches - "iter 12/100" on a run the
+// engine ends at 40 - misreports the run to the only person watching it.
+func TestTheViewerShowsTheIterationLimitTheRunEnforces(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DefaultProvider = "openai"
+	cfg.Agent.Model = "capped"
+	cfg.Agent.MaxIterations = 100
+	cfg.Providers = map[string]config.ProviderConfig{
+		"openai": {
+			APIKey: "sk-test",
+			Models: map[string]config.ModelConfig{
+				"capped": {Model: "gpt-5", MaxIterations: 40},
+			},
+		},
+	}
+
+	_, opts, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if opts.MaxIterations != 40 {
+		t.Fatalf("the run resolved to %d iterations, want the model's cap", opts.MaxIterations)
+	}
+
+	meta := viewerMeta(cfg, "a task", "/somewhere", opts)
+
+	if meta.MaxIterations != opts.MaxIterations {
+		t.Errorf("the viewer shows a limit of %d while the engine stops at %d",
+			meta.MaxIterations, opts.MaxIterations)
+	}
+
+	// the default is a 1,000,000 backstop rather than a budget, so there is
+	// nothing worth counting towards and the denominator stays hidden
+	cfg.Agent.MaxIterations = config.Defaults().Agent.MaxIterations
+	cfg.Providers["openai"].Models["capped"] = config.ModelConfig{Model: "gpt-5"}
+
+	_, opts, err = resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if got := viewerMeta(cfg, "a task", "/somewhere", opts).MaxIterations; got != 0 {
+		t.Errorf("the viewer shows a limit of %d, want the backstop hidden", got)
+	}
+}
+
 // Run is the whole thing end to end: config in, a provider call out, a
 // transcript back. With ui.plain set it takes the non-TTY path, which is what CI
 // uses and what can be asserted on.

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,6 +218,10 @@ func TestRunAgentRelaysAFailure(t *testing.T) {
 
 	runAgent(context.Background(), program, client, agent.ExecuteWithToolsOptions{
 		Text: []string{"do the thing"},
+
+		// a persistent outage is retried with a growing backoff; this test is
+		// about the failure reaching the screen, not about waiting it out
+		RetryBackoff: -1,
 	})
 
 	final := stop()
@@ -254,5 +259,71 @@ func TestRunAgentEndsOnCancellation(t *testing.T) {
 
 	if seen.done != 1 {
 		t.Errorf("the done message arrived %d times, want exactly one", seen.done)
+	}
+}
+
+// Quitting the viewer must stop the agent, not merely stop watching it. The
+// agent holds shell and file-write access, so returning from the viewer with the
+// run still going leaves something editing the working tree with nothing on
+// screen reporting what it does. In the zot CLI process exit hides this; in a
+// long-lived embedding process it does not.
+func TestQuittingTheViewerStopsTheAgent(t *testing.T) {
+	streaming := make(chan struct{})
+	cancelled := make(chan struct{})
+
+	var once sync.Once
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		flusher, _ := w.(http.Flusher)
+
+		if flusher != nil {
+			flusher.Flush()
+		}
+
+		once.Do(func() { close(streaming) })
+
+		// hold the turn open, the way a model thinking through a long task does,
+		// and report whether the client ever went away
+		select {
+		case <-r.Context().Done():
+			close(cancelled)
+		case <-time.After(20 * time.Second):
+		}
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := agent.NewClient(agent.ClientOptions{
+		Provider: "custom",
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	m := newModel("zot", "do the thing", "test-model", "custom", t.TempDir(), false)
+
+	// start stands in for the user pressing q: it returns as soon as the agent
+	// is under way, exactly as (*tea.Program).Run does on tea.Quit
+	start := func(p *tea.Program) (tea.Model, error) {
+		<-streaming
+
+		return m, nil
+	}
+
+	if err := runViewer(context.Background(), m, client, agent.ExecuteWithToolsOptions{
+		Text: []string{"do the thing"},
+	}, start); err == nil {
+		t.Error("quitting mid-run should report that the run did not finish")
+	}
+
+	select {
+	case <-cancelled:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the agent was still running after the viewer quit")
 	}
 }

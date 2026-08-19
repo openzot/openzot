@@ -91,9 +91,6 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 			flush()
 		case agent.ToolCallStartEvent:
 			flush()
-			if e.Name == "exit" {
-				continue
-			}
 			fmt.Printf("  %s %s\n", palette.paint("36", e.Name), plainArg(e.Name, e.Args))
 			if meta.ShowDiff {
 				if d := plainDiff(e.Name, e.Args); d != "" {
@@ -114,7 +111,15 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 			flush()
 			status := "done"
 			if e.Code != 0 {
-				status = fmt.Sprintf("failed (code %d)", e.Code)
+				// A declared failure is an outcome the model reached, not a
+				// harness malfunction: "failed: <reason>" mirrors the viewer's
+				// "✗ failed", where an exit code would send the operator
+				// hunting for a crash. The exit code itself is unchanged.
+				if e.Reason == agent.ReasonFailed {
+					status = "failed"
+				} else {
+					status = fmt.Sprintf("failed (code %d)", e.Code)
+				}
 				exitErr = &AgentExitError{Code: e.Code, Message: e.Message}
 			}
 			statusColor := "32"
@@ -141,7 +146,7 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 // "shell command=go test" instead of just the command.
 func plainArg(name string, args map[string]interface{}) string {
 	switch name {
-	case "read", "write", "list":
+	case "read", "write", "list", "edit":
 		return str(args, "path")
 	case "shell":
 		return truncate(str(args, "command"), 200)

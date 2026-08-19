@@ -108,12 +108,12 @@ func withAPI(t *testing.T, handler http.HandlerFunc) {
 
 	server := httptest.NewServer(handler)
 
-	original := apiBase
+	original := APIBase
 
-	apiBase = server.URL
+	APIBase = server.URL
 
 	t.Cleanup(func() {
-		apiBase = original
+		APIBase = original
 
 		server.Close()
 	})
@@ -169,11 +169,11 @@ func TestLatestReleaseFailures(t *testing.T) {
 	})
 
 	t.Run("an unreachable host", func(t *testing.T) {
-		original := apiBase
+		original := APIBase
 
-		apiBase = "http://127.0.0.1:1"
+		APIBase = "http://127.0.0.1:1"
 
-		t.Cleanup(func() { apiBase = original })
+		t.Cleanup(func() { APIBase = original })
 
 		if _, _, err := LatestRelease(); err == nil {
 			t.Error("an unreachable API must report an error")

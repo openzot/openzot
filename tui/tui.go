@@ -92,11 +92,32 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	m.maxIterations = meta.MaxIterations
 	m.maxCalls = meta.MaxCalls
 	m.maxDuration = meta.MaxDuration
+
+	return runViewer(ctx, m, client, opts, func(p *tea.Program) (tea.Model, error) { return p.Run() })
+}
+
+// runViewer owns the viewer's lifetime: it starts the agent, hands the program
+// to start, and shuts the agent down once start returns. start is a seam for
+// tests, which cannot open a terminal - Run passes (*tea.Program).Run.
+func runViewer(
+	ctx context.Context,
+	m model,
+	client *agent.Client,
+	opts agent.ExecuteWithToolsOptions,
+	start func(*tea.Program) (tea.Model, error),
+) error {
+	// Quitting the viewer stops the agent rather than merely stopping watching
+	// it. The agent has shell and file-write access, so an embedding process
+	// that returned from here with the run still going would leave something
+	// editing the working tree with nothing on screen reporting what it does.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	go runAgent(ctx, p, client, opts)
 
-	final, err := p.Run()
+	final, err := start(p)
 	if err != nil {
 		return err
 	}

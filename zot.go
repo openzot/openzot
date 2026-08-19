@@ -247,16 +247,24 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		}
 	}
 
+	return tui.Run(ctx, client, viewerMeta(cfg, task, workdir, opts), opts)
+}
+
+// viewerMeta describes the run to the viewer.
+//
+// The budgets it carries are the ones the run was resolved with, not the raw
+// configuration: a per-model max_iterations lowers the limit the engine
+// enforces, and a meta bar counting up to a number the run will never reach is
+// worse than no number at all.
+func viewerMeta(cfg Config, task, workdir string, opts agent.ExecuteWithToolsOptions) tui.Meta {
 	// Show the iteration progress denominator only for a real user-set limit -
 	// the default is a 1,000,000 backstop, which is not a budget worth displaying.
 	iterLimit := 0
-	if cfg.Agent.MaxIterations != config.Defaults().Agent.MaxIterations {
-		iterLimit = cfg.Agent.MaxIterations
+	if opts.MaxIterations != config.Defaults().Agent.MaxIterations {
+		iterLimit = opts.MaxIterations
 	}
 
-	maxDur, _ := cfg.Agent.MaxDuration() // already validated to parse
-
-	return tui.Run(ctx, client, tui.Meta{
+	return tui.Meta{
 		Task:          task,
 		Model:         cfg.Agent.Model,
 		Provider:      cfg.DefaultProvider,
@@ -266,10 +274,10 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		Color:         cfg.UI.Color,
 		MaxScrollback: cfg.UI.Scrollback,
 		MaxIterations: iterLimit,
-		MaxCalls:      cfg.Agent.MaxCalls,
-		MaxDuration:   maxDur,
+		MaxCalls:      opts.MaxCalls,
+		MaxDuration:   opts.MaxDuration,
 		Stats:         cfg.UI.Stats,
-	}, opts)
+	}
 }
 
 // resolve turns a configuration into a provider client and the agent options a
