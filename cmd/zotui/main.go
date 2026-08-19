@@ -1,30 +1,30 @@
-// Command zotui is the command center over the zot engine. Running it opens a
-// full-screen terminal app to see scheduled tasks, inspect them, cancel one, and
-// create a new one; jobs and their progress live in a store, so you can close the
-// tool and reopen it later to see where things got to.
+// Command zotui serves the browser command center over the zot engine. Workers,
+// runs, and output live in a store, so closing the browser loses no state.
 //
 // The only other command is `zotui config`, which opens the config in $EDITOR
 // (seeding it from an embedded template on first run). The config file locates the
-// repository sources, compute runners, models and environments; override its path
+// repos, compute, model providers and environments; override its path
 // with $ZOTUI_CONFIG.
 //
-// This is an early scaffold: the config, store, scheduling flow and the TUI are in
-// place; the GitHub token exchange and the Cloudflare runner are stubbed, so a
-// dispatched job currently fails fast at those seams.
+// Local Docker and GitHub-backed Vercel Sandbox runs work end to end.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/openzot/openzot/configs"
 	"github.com/openzot/openzot/internal/zotui/app"
 	"github.com/openzot/openzot/internal/zotui/config"
 	"github.com/openzot/openzot/internal/zotui/store"
-	"github.com/openzot/openzot/internal/zotui/tui"
+	"github.com/openzot/openzot/internal/zotui/web"
 )
 
 func main() {
@@ -47,7 +47,7 @@ func run() error {
 		return editConfig()
 	}
 
-	// Everything else opens the command center.
+	// Everything else serves the command center.
 	path := config.DefaultConfigPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("no config at %s - run 'zotui config' to create one", path)
@@ -64,8 +64,40 @@ func run() error {
 	}
 	defer st.Close()
 
-	return tui.Run(app.New(cfg, st))
+	addr := firstNonEmpty(os.Getenv("ZOTUI_ADDR"), "127.0.0.1:8080")
+	// Extra Host-header names the server answers to, beyond loopback and the
+	// bind host. "*" disables the check. Binding a wildcard address does not
+	// widen this: which interfaces accept connections and which names a browser
+	// page may aim at the API are separate questions.
+	allowedHosts := strings.Split(os.Getenv("ZOTUI_ALLOWED_HOSTS"), ",")
+	fmt.Fprintf(os.Stderr, "zotui: command center at http://%s\n", addr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	commandCenter := app.New(cfg, st)
+
+	// Runs a previous process left mid-flight have no sandbox to return to.
+	if reconciled, err := commandCenter.Reconcile(context.Background()); err != nil {
+		return err
+	} else if reconciled > 0 {
+		fmt.Fprintf(os.Stderr, "zotui: failed %d run(s) interrupted by an earlier shutdown\n", reconciled)
+	}
+
+	go commandCenter.RunScheduler(ctx)
+	err = web.Serve(ctx, addr, web.New(commandCenter, addr, allowedHosts...))
+
+	// Draining before exit is what stops a signal from orphaning sandboxes that
+	// still hold the run's repository token.
+	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+	if drainErr := commandCenter.Shutdown(drain); drainErr != nil {
+		fmt.Fprintln(os.Stderr, "zotui: "+drainErr.Error())
+	}
+	return err
 }
+
+// drainTimeout bounds how long a shutdown waits for in-flight runs to tear their
+// sandboxes down before giving up and reporting what is left.
+const drainTimeout = 30 * time.Second
 
 // editConfig ensures the config file exists - seeding it from the embedded
 // template on first run - and opens it in the user's editor.

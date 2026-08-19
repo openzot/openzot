@@ -1,5 +1,7 @@
 /zot
 /zotui
+/.local/
+/internal/zotui/worker/artifacts/*.gz
 
 configs/zot.yaml
 .env

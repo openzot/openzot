@@ -21,10 +21,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/pflag"
@@ -61,14 +63,15 @@ func run() error {
 	}
 
 	configPath := pflag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
-	backend := pflag.String("backend", "", "backend to run against: a provider such as zai (default), openai, anthropic, groq, ollama, or a backend named in the config")
-	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai backend serves)")
+	provider := pflag.String("provider", "", "model provider to run against: zai (default), openai, anthropic, groq, ollama, or a provider named in the config")
+	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai provider serves)")
 	dir := pflag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := pflag.Int("max-iterations", 0, "override the safety cap on agent iterations")
 	taskFlag := pflag.String("task", "", "the durable objective, placed in the system prompt so it survives a long run (overrides a positional task)")
 	taskFile := pflag.String("task-file", "", "read the durable objective from a file")
 	diffFlag := pflag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
 	plainFlag := pflag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
+	colorFlag := pflag.String("color", "", "colorize non-interactive output: auto, always, or never")
 	resume := pflag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
 	sessionDir := pflag.String("session-dir", "", "where session logs are written (default: "+config.DefaultSessionDir()+")")
 	noSession := pflag.Bool("no-session", false, "do not record a session log for this run")
@@ -92,7 +95,7 @@ func run() error {
 
 	// Load credentials from the directory the agent will work in. This must
 	// happen after --dir is parsed but before configuration resolves env-backed
-	// backend secrets - and only on a developer build.
+	// provider secrets - and only on a developer build.
 	loadEnv(*dir)
 
 	sessions := *sessionDir
@@ -123,20 +126,27 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
 	}
 
-	task, prompt, err := resolveTask(*taskFlag, *taskFile, pflag.Args())
+	var task, prompt string
 
 	// A resumed run inherits its objective from the session it continues; any new
 	// command-line text is a follow-up prompt, not a replacement objective - a
 	// resume is "keep going, and also do this", not "start over". An explicit
 	// --task / --task-file still overrides, for deliberately changing course.
+	//
+	// This is decided before resolveTask is consulted, because a resume with no
+	// new text is a complete invocation: asking resolveTask first meant the
+	// missing-task branch printed the whole usage block to stderr on the way to
+	// working correctly.
 	if resumed != nil && *taskFlag == "" && *taskFile == "" {
 		task = resumed.Meta.Task
 		prompt = strings.TrimSpace(strings.Join(pflag.Args(), " "))
-		err = nil
-	}
+	} else {
+		var err error
 
-	if err != nil {
-		return err
+		task, prompt, err = resolveTask(*taskFlag, *taskFile, pflag.Args())
+		if err != nil {
+			return err
+		}
 	}
 
 	cfg, err := zot.Load(*configPath)
@@ -149,11 +159,12 @@ func run() error {
 	pflag.Visit(func(f *pflag.Flag) { passed[f.Name] = true })
 
 	applyOverrides(&cfg, overrides{
-		Backend:       *backend,
+		Provider:      *provider,
 		Model:         *model,
 		MaxIterations: *maxIter,
 		Diff:          *diffFlag,
 		Plain:         *plainFlag,
+		Color:         *colorFlag,
 		Passed:        passed,
 	})
 
@@ -191,7 +202,48 @@ func run() error {
 
 	options.Prompt = prompt
 
-	return zot.RunWith(context.Background(), cfg, task, options)
+	// The release check runs alongside the whole run and is reported only once
+	// the viewer has released the screen.
+	report := checkForUpdate()
+
+	err = zot.RunWith(context.Background(), cfg, task, options)
+
+	report(os.Stderr)
+
+	return err
+}
+
+// checkForUpdate starts the GitHub release check and returns the function that
+// reports its outcome.
+//
+// The check is a convenience and never more than that: it runs concurrently with
+// the run so it costs no wall-clock time, and every failure - an unreachable
+// GitHub, a rate limit, a malformed body - is dropped rather than surfaced. zot
+// runs unattended, and there is nobody there to act on "the update check
+// failed". A development build makes no call at all (see version.Check), and the
+// notice goes to stderr so it cannot corrupt the transcript on stdout.
+//
+// Reporting waits on the lookup, which the HTTP client bounds to a few seconds -
+// by the time a real run ends the answer has long since arrived.
+func checkForUpdate() func(io.Writer) {
+	notice := make(chan string, 1)
+
+	go func() {
+		result, err := version.Check()
+		if err != nil {
+			notice <- ""
+
+			return
+		}
+
+		notice <- version.FormatUpdateNotice(result)
+	}()
+
+	return func(w io.Writer) {
+		if text := <-notice; text != "" {
+			fmt.Fprintln(w, text)
+		}
+	}
 }
 
 // listSessions prints previous runs, newest first.
@@ -229,11 +281,15 @@ func listSessions(args []string) error {
 
 // oneLine flattens a task to a single truncated line, so a multi-line brief does
 // not turn the listing into a wall of text.
+//
+// The cap counts characters, not bytes: a brief written in CJK or carrying an
+// emoji would otherwise be cut inside a rune and print as a replacement glyph,
+// and would be truncated far earlier than the column it is given.
 func oneLine(text string, width int) string {
 	text = strings.Join(strings.Fields(text), " ")
 
-	if len(text) > width {
-		return text[:width-1] + "\u2026"
+	if utf8.RuneCountInString(text) > width {
+		return string([]rune(text)[:width-1]) + "\u2026"
 	}
 
 	return text
@@ -255,17 +311,9 @@ func loadEnv(dir string) {
 	_ = godotenv.Load(filepath.Join(dir, ".env"))
 }
 
-// resolveTask splits the input into the durable task (the objective, which goes
-// into the system prompt) and an optional opening prompt (a user message).
-//
-// --task / --task-file give the objective explicitly; a bare positional is
-// treated as the objective too, so `zot "do X"` keeps working and stays durable.
-// When an objective is given explicitly, positional text becomes the opening
-// prompt beside it. There is intentionally no interactive input: zot is a
-// viewer, not a chat client.
 // editConfig ensures the config file exists - seeding it from the embedded
 // template on first run - and opens it in the user's editor. This is the setup
-// path: configure the backend, model and provider key by editing the file.
+// path: configure the provider, model and key by editing the file.
 func editConfig() error {
 	path := config.DefaultConfigPath()
 
@@ -302,11 +350,12 @@ func editConfig() error {
 // overrides are the command-line values that take precedence over the config
 // file and the environment.
 type overrides struct {
-	Backend       string
+	Provider      string
 	Model         string
 	MaxIterations int
 	Diff          bool
 	Plain         bool
+	Color         string
 
 	// Passed names the flags actually given, so a boolean can tell "false
 	// because it was passed" from "false because it was never set". Without it
@@ -316,8 +365,8 @@ type overrides struct {
 
 // applyOverrides layers command-line values over a loaded configuration.
 func applyOverrides(cfg *zot.Config, o overrides) {
-	if o.Backend != "" {
-		cfg.DefaultBackend = o.Backend
+	if o.Provider != "" {
+		cfg.DefaultProvider = o.Provider
 	}
 
 	if o.Model != "" {
@@ -328,6 +377,15 @@ func applyOverrides(cfg *zot.Config, o overrides) {
 		cfg.Agent.MaxIterations = o.MaxIterations
 	}
 
+	// A per-model max_iterations is applied when the run resolves, after this,
+	// and would otherwise leave the config file beating the command line: the
+	// engine would stop at the model's cap while the viewer counted up to the
+	// flag's. An explicitly passed --max-iterations is the operator's last word,
+	// so the model's own cap goes.
+	if o.Passed["max-iterations"] {
+		clearModelIterations(cfg)
+	}
+
 	if o.Passed["diff"] {
 		cfg.UI.Diff = o.Diff
 	}
@@ -335,6 +393,29 @@ func applyOverrides(cfg *zot.Config, o overrides) {
 	if o.Passed["plain"] {
 		cfg.UI.Plain = o.Plain
 	}
+	if o.Color != "" {
+		cfg.UI.Color = o.Color
+	}
+}
+
+// clearModelIterations drops the per-model iteration cap for the model the run
+// will actually use, so nothing is left to override the command line later. The
+// provider and model have already been overridden by the time this is called, so
+// it looks up the pair the run resolves to.
+func clearModelIterations(cfg *zot.Config) {
+	provider, ok := cfg.Providers[cfg.DefaultProvider]
+	if !ok {
+		return
+	}
+
+	model, ok := provider.Models[cfg.Agent.Model]
+	if !ok {
+		return
+	}
+
+	model.MaxIterations = 0
+
+	provider.Models[cfg.Agent.Model] = model
 }
 
 func firstNonEmpty(values ...string) string {
@@ -346,6 +427,14 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// resolveTask splits the input into the durable task (the objective, which goes
+// into the system prompt) and an optional opening prompt (a user message).
+//
+// --task / --task-file give the objective explicitly; a bare positional is
+// treated as the objective too, so `zot "do X"` keeps working and stays durable.
+// When an objective is given explicitly, positional text becomes the opening
+// prompt beside it. There is intentionally no interactive input: zot is a
+// viewer, not a chat client.
 func resolveTask(taskFlag, taskFile string, args []string) (task, prompt string, err error) {
 	// The durable objective comes from --task or --task-file; it lands in the
 	// system prompt and stays there for the whole run.
@@ -409,14 +498,4 @@ Commands:
 
 Flags:`)
 	pflag.PrintDefaults()
-}
-
-// stringSlice accumulates a repeatable string flag value (String/Set).
-type stringSlice []string
-
-func (s *stringSlice) String() string { return strings.Join(*s, ",") }
-
-func (s *stringSlice) Set(v string) error {
-	*s = append(*s, strings.TrimSpace(v))
-	return nil
 }

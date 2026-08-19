@@ -20,12 +20,53 @@ func isInteractive() bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
-// runPlain streams the agent's activity as plain, unstyled lines. It is used in
-// non-interactive shells and when --plain is set, so zot's output stays usable
-// in pipes, logs, and CI without a TTY or escape codes.
+// runPlain streams the agent's activity as plain, unstyled lines. It is the
+// explicit --plain path; automatic non-TTY output uses runStream so an ANSI-aware
+// consumer can opt into colors without becoming an interactive terminal.
 func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
-	fmt.Printf("%s: %s\n", meta.AppName, meta.Task)
-	fmt.Printf("backend %s · model %s · dir %s\n", meta.Backend, meta.Model, meta.Workdir)
+	return runStream(ctx, client, meta, opts, false)
+}
+
+// streamColorEnabled decides whether a non-interactive transcript may carry
+// ANSI. Auto is conservative for pipes and logs; a renderer that understands
+// ANSI can opt in explicitly through ui.color or either conventional force
+// variable. An explicit Zot mode wins over ambient compatibility variables.
+func streamColorEnabled(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "always":
+		return true
+	case "never":
+		return false
+	}
+	if noColor, ok := os.LookupEnv("NO_COLOR"); ok && noColor != "" {
+		return false
+	}
+	for _, name := range []string{"FORCE_COLOR", "CLICOLOR_FORCE"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" && value != "0" {
+			return true
+		}
+	}
+	return false
+}
+
+type streamPalette struct{ enabled bool }
+
+func (p streamPalette) paint(code, text string) string {
+	if !p.enabled || text == "" {
+		return text
+	}
+	return "\x1b[" + code + "m" + text + "\x1b[0m"
+}
+
+// runStream writes an append-only transcript. Unlike the Bubble Tea viewer it
+// never uses an alternate screen, reads input, or advertises keyboard controls.
+func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions, color bool) error {
+	palette := streamPalette{enabled: color}
+	fmt.Printf("%s: %s\n", palette.paint("1;94", meta.AppName), meta.Task)
+	fmt.Printf("%s %s · %s %s · %s %s\n",
+		palette.paint("2", "provider"), meta.Provider,
+		palette.paint("2", "model"), palette.paint("94", meta.Model),
+		palette.paint("2", "dir"), meta.Workdir)
 
 	events, errs := agent.ExecuteWithTools(ctx, client, opts)
 
@@ -43,17 +84,14 @@ func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.E
 		switch e := ev.(type) {
 		case agent.IterationEvent:
 			flush()
-			fmt.Printf("\n── iteration %d ──\n", e.Iteration)
+			fmt.Printf("\n%s\n", palette.paint("2", fmt.Sprintf("── iteration %d ──", e.Iteration)))
 		case agent.TokenAgentEvent:
 			pending.WriteString(e.Token)
 		case agent.ResultAgentEvent:
 			flush()
 		case agent.ToolCallStartEvent:
 			flush()
-			if e.Name == "exit" {
-				continue
-			}
-			fmt.Printf("  %s %s\n", e.Name, plainArg(e.Name, e.Args))
+			fmt.Printf("  %s %s\n", palette.paint("36", e.Name), plainArg(e.Name, e.Args))
 			if meta.ShowDiff {
 				if d := plainDiff(e.Name, e.Args); d != "" {
 					fmt.Print(d)
@@ -61,22 +99,34 @@ func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.E
 			}
 		case agent.ToolCallEndEvent:
 			if s := plainToolEnd(e.Name, e.Result); s != "" {
-				fmt.Println(s)
+				fmt.Println(palette.paint("2", s))
 			}
 		case agent.ToolCallErrorEvent:
-			fmt.Printf("    error: %s: %s\n", e.Name, e.Error)
+			fmt.Printf("    %s: %s: %s\n", palette.paint("31", "error"), e.Name, e.Error)
 		case agent.CompactionEvent:
 			flush()
-			fmt.Printf("  … %s\n", e.Detail)
+			fmt.Printf("  %s %s\n", palette.paint("33", "…"), e.Detail)
 		case agent.AgentExitEvent:
 			sawExit = true
 			flush()
 			status := "done"
 			if e.Code != 0 {
-				status = fmt.Sprintf("failed (code %d)", e.Code)
+				// A declared failure is an outcome the model reached, not a
+				// harness malfunction: "failed: <reason>" mirrors the viewer's
+				// "✗ failed", where an exit code would send the operator
+				// hunting for a crash. The exit code itself is unchanged.
+				if e.Reason == agent.ReasonFailed {
+					status = "failed"
+				} else {
+					status = fmt.Sprintf("failed (code %d)", e.Code)
+				}
 				exitErr = &AgentExitError{Code: e.Code, Message: e.Message}
 			}
-			fmt.Printf("\n%s: %s\n", status, e.Message)
+			statusColor := "32"
+			if e.Code != 0 {
+				statusColor = "31"
+			}
+			fmt.Printf("\n%s: %s\n", palette.paint(statusColor, status), e.Message)
 		}
 	}
 
@@ -96,7 +146,7 @@ func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.E
 // "shell command=go test" instead of just the command.
 func plainArg(name string, args map[string]interface{}) string {
 	switch name {
-	case "read", "write", "list":
+	case "read", "write", "list", "edit":
 		return str(args, "path")
 	case "shell":
 		return truncate(str(args, "command"), 200)

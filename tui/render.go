@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -23,6 +24,11 @@ func renderToolStart(name string, args map[string]interface{}) string {
 		return toolReadStyle.Render("  read   ") + dimPath(args, "path") + lineRange(args)
 	case "write":
 		return toolWriteStyle.Render("  write  ") + dimPath(args, "path") + lineRange(args)
+	case "edit":
+		// the before/after text is what diffForTool renders; naming the file is
+		// all this line has to do, and the generic branch would print both whole
+		// versions of it here instead
+		return toolWriteStyle.Render("  edit   ") + dimPath(args, "path")
 	case "list":
 		return toolReadStyle.Render("  list   ") + dimPath(args, "path")
 	case "shell":
@@ -269,12 +275,20 @@ func intish(v interface{}) (int, bool) {
 	}
 }
 
+// truncate flattens a string to one line and caps it at max characters.
+//
+// Characters, not bytes: slicing bytes cuts a multi-byte rune in half, so a task
+// or tool argument in CJK or emoji rendered a replacement character - and the
+// cap bit far earlier than the width it was given, since one glyph can be four
+// bytes.
 func truncate(s string, max int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= max {
+
+	if utf8.RuneCountInString(s) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+
+	return string([]rune(s)[:max-1]) + "…"
 }
 
 func pad(s string, n int) string {

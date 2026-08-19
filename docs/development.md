@@ -20,7 +20,51 @@ and `dev` produce binaries that differ in what they will read from disk. `make
 build` stamps the version in; `make test`, `make race`, `make cover`, `make vet`
 and `make cross GOOS=… GOARCH=…` are also available.
 
-To bake a configuration - model, backend, even the provider key - _into_ the
+## Development container
+
+The repository uses Microsoft's prebuilt
+[Dev Container](https://containers.dev/) `base:bookworm` image directly from
+[`.devcontainer/`](../.devcontainer/), the same default base used by local ZotUI
+workers. There is no project-specific development Dockerfile to publish. Open
+the checkout in a compatible editor and choose **Reopen in Container**. Standard
+features add the pinned Go toolchain, Git LFS, and Docker-in-Docker; the base
+provides Git and curl. Go's build and module caches, Docker data, and zotui's
+SQLite state live in named volumes, so rebuilding the container does not throw
+them away.
+
+Once the container is ready:
+
+```bash
+make test
+make dev-ui
+```
+
+Use `ZOT_CONFIG=/path/to/zotui.yaml make dev-ui` to select the config for this
+development target. It takes precedence over the Dev Container's fixture path.
+When running the `zotui` executable directly, use `ZOTUI_CONFIG` instead.
+
+The second command serves the command center on port 8080, which the container
+forwards to the host. It uses `.devcontainer/zotui.dev.yaml`: a credential-free
+fixture whose local repo points at this checkout and whose `development` compute
+launches an ephemeral Docker container per run. Zotui bundles the checkout's
+committed Git refs and clones that bundle into the container's isolated
+`/workspace`; the host checkout is never mounted. The model credential, if
+supplied, is written into the container's temporary zot config and the container
+is removed when the run ends.
+
+The dev container builds the Linux amd64 and arm64 Zot worker artifacts during
+setup. Zotui embeds those compressed executables and transfers the matching one
+into every sandbox it creates. Environment images therefore contain only their
+toolchain and dependencies; they do not need to install or track Zot.
+
+`make dev-ui` generates the worker artifacts automatically and also works
+outside the container when a Docker daemon is available. The local SQLite
+database is kept under the ignored `.local/` directory unless
+`ZOTUI_STORE_DSN` overrides it.
+See [zotui-configuration.md](zotui-configuration.md) for complete local Docker
+and Vercel Sandbox configurations, model credentials, and repository setup.
+
+To bake a configuration - model, provider, even the provider key - _into_ the
 binary so it needs nothing at the destination, build with `-tags portable`. The
 compiled-in config overrides the runtime file and environment, which is the
 point: nothing at the destination can redirect it. See
@@ -52,6 +96,7 @@ which kind you have.
 | Path                   | Responsibility                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------ |
 | `cmd/zot/`             | the binary: flag parsing, sessions, working dir, then `zot.Run`                |
+| `cmd/zotui/`           | browser command center entrypoint and HTTP server lifecycle                    |
 | `zot.go`               | embeddable core: builds the provider client + agent options and runs it        |
 | `agent/`               | the public harness: `ExecuteWithTools`, tools, skills, events                  |
 | `internal/loop/`       | the agentic loop: budgets, guards, settle mode, message hygiene                |
@@ -64,6 +109,7 @@ which kind you have.
 | `internal/config/`     | layered config (defaults < file < env < compiled-in), XDG paths, env overrides |
 | `internal/buildinfo/`  | release vs developer build, and what that changes                              |
 | `internal/version/`    | build-time version stamping and GitHub update checks                           |
+| `internal/zotui/`      | workers, runs, schedules, dispatch, persistence, and embedded browser app      |
 | `tui/`                 | public Bubble Tea read-only viewer (themeable; embeddable over any `agent` run) |
 | `configs/`             | example configuration                                                          |
 

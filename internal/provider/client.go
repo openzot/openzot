@@ -2,7 +2,11 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -18,12 +22,108 @@ type Client struct {
 	transport Transport
 }
 
-// requestTimeout bounds a single turn.
+// The bounds on a turn.
 //
-// Generous, because a reasoning model can think for minutes before emitting its
-// first token. The context the caller passes is the real cancellation path; this
-// is only a backstop against a connection that hangs forever.
-const requestTimeout = 10 * time.Minute
+// None of them is a wall-clock cap on the exchange, and that is deliberate: an
+// http.Client.Timeout covers the body read as well, so it kills a stream that is
+// actively producing tokens - and it does so with "Client.Timeout exceeded while
+// reading body", which no retry classifier recognises, ending the run. A
+// reasoning model can think for minutes before its first token and stream for
+// many more after it; a turn that is still producing is working, not hung.
+//
+// What is bounded instead is silence: how long to wait for a connection, for the
+// response head, and - see stallReader - between two reads of the body.
+const (
+	dialTimeout           = 30 * time.Second
+	responseHeaderTimeout = 10 * time.Minute
+)
+
+// streamStallTimeout is how long a stream may say nothing at all before it is
+// treated as hung.
+//
+// As generous as the whole-request cap it replaces, deliberately: this is the
+// same backstop, applied to the thing that actually indicates a hang. A model
+// that has been silent for ten minutes mid-stream is not thinking - keep-alive
+// comments, in-progress frames and reasoning deltas all count as progress.
+//
+// A variable rather than a constant only so tests can drive it without waiting
+// minutes; it is not a configuration knob.
+var streamStallTimeout = 10 * time.Minute
+
+// newHTTPClient builds the shared transport, bounding the phases that can hang
+// without bounding the one that legitimately takes a long time.
+func newHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+
+	transport.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSHandshakeTimeout = dialTimeout
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+
+	return &http.Client{Transport: transport}
+}
+
+// stallReader fails a stream that has gone silent, without bounding one that is
+// still producing.
+//
+// The deadline moves forward on every read that returns data, so a turn is only
+// ever cut off once it stops saying anything at all. Firing closes the body,
+// which unblocks the read the consumer is parked in; the error that surfaces is
+// replaced with one naming the stall, because "use of closed network connection"
+// is neither true nor recognisable as transient.
+type stallReader struct {
+	inner   io.ReadCloser
+	timeout time.Duration
+	timer   *time.Timer
+
+	mu      sync.Mutex
+	stalled bool
+}
+
+func newStallReader(inner io.ReadCloser, timeout time.Duration) *stallReader {
+	reader := &stallReader{inner: inner, timeout: timeout}
+
+	reader.timer = time.AfterFunc(timeout, reader.fire)
+
+	return reader
+}
+
+func (r *stallReader) Read(p []byte) (int, error) {
+	n, err := r.inner.Read(p)
+
+	if n > 0 {
+		r.timer.Reset(r.timeout)
+	}
+
+	if err != nil && r.didStall() {
+		return n, &Error{Status: 0, Message: fmt.Sprintf(
+			"the stream stalled: nothing arrived for %s", r.timeout)}
+	}
+
+	return n, err
+}
+
+// stop releases the watchdog once the turn is over.
+func (r *stallReader) stop() {
+	r.timer.Stop()
+}
+
+func (r *stallReader) fire() {
+	r.mu.Lock()
+
+	r.stalled = true
+
+	r.mu.Unlock()
+
+	_ = r.inner.Close()
+}
+
+func (r *stallReader) didStall() bool {
+	r.mu.Lock()
+
+	defer r.mu.Unlock()
+
+	return r.stalled
+}
 
 // New creates a client, validating the configuration and resolving its
 // transport.
@@ -33,7 +133,7 @@ func New(config Config) (*Client, error) {
 		return nil, err
 	}
 
-	httpClient := &http.Client{Timeout: requestTimeout}
+	httpClient := newHTTPClient()
 
 	name := TransportChatCompletions
 
@@ -71,6 +171,7 @@ func (c *Client) Complete(ctx context.Context, request Request) (ChatMessage, st
 		text      textBuilder
 		reasoning textBuilder
 		calls     []ToolCall
+		items     []ReasoningItem
 		finish    string
 		usage     *Usage
 	)
@@ -91,6 +192,12 @@ func (c *Client) Complete(ctx context.Context, request Request) (ChatMessage, st
 			calls = event.ToolCalls
 		}
 
+		// the opaque state travels with the message, because that is what the
+		// next request has to replay it alongside
+		if len(event.ReasoningItems) > 0 {
+			items = event.ReasoningItems
+		}
+
 		if event.Usage != nil {
 			usage = event.Usage
 		}
@@ -101,6 +208,7 @@ func (c *Client) Complete(ctx context.Context, request Request) (ChatMessage, st
 		Content:          text.String(),
 		ReasoningContent: reasoning.String(),
 		ToolCalls:        calls,
+		ReasoningItems:   items,
 	}
 
 	return message, finish, usage, nil

@@ -25,15 +25,18 @@ type Meta struct {
 	Task string
 	// Model is the model name driving the agent.
 	Model string
-	// Backend is the name of the backend the run targets.
-	Backend string
+	// Provider is the name of the model provider the run targets.
+	Provider string
 	// Workdir is the directory the agent's tools operate in.
 	Workdir string
 	// ShowDiff renders a syntax-highlighted diff panel under each edit/write.
 	ShowDiff bool
-	// Plain forces the unstyled streaming renderer even in a terminal. Plain mode
-	// is also selected automatically when stdout is not a TTY.
+	// Plain forces the unstyled streaming renderer even in a terminal. Without a
+	// TTY Zot also streams, with styling controlled independently by Color.
 	Plain bool
+	// Color controls ANSI styling for a non-interactive stream: auto, always, or
+	// never. It does not make the stream interactive or start the full-screen UI.
+	Color string
 
 	// Theme is the colour identity for the view. The zero value is zot's neutral
 	// DefaultTheme; an embedding application passes its own accent (see Theme).
@@ -71,13 +74,17 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 		meta.AppName = "zot"
 	}
 
-	// Without a usable terminal (or when forced), stream plain text instead of
-	// trying to start an alt-screen program that would fail or garble.
-	if meta.Plain || !isInteractive() {
+	// --plain is an explicit request for an unstyled transcript. Without a
+	// terminal, stream too, but keep ANSI styling when the consumer declared
+	// that it supports color (a browser terminal is the main example).
+	if meta.Plain {
 		return runPlain(ctx, client, meta, opts)
 	}
+	if !isInteractive() {
+		return runStream(ctx, client, meta, opts, streamColorEnabled(meta.Color))
+	}
 
-	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Backend, meta.Workdir, meta.ShowDiff)
+	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Provider, meta.Workdir, meta.ShowDiff)
 	if meta.MaxScrollback > 0 {
 		m.maxEntries = meta.MaxScrollback
 	}
@@ -85,11 +92,32 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	m.maxIterations = meta.MaxIterations
 	m.maxCalls = meta.MaxCalls
 	m.maxDuration = meta.MaxDuration
+
+	return runViewer(ctx, m, client, opts, func(p *tea.Program) (tea.Model, error) { return p.Run() })
+}
+
+// runViewer owns the viewer's lifetime: it starts the agent, hands the program
+// to start, and shuts the agent down once start returns. start is a seam for
+// tests, which cannot open a terminal - Run passes (*tea.Program).Run.
+func runViewer(
+	ctx context.Context,
+	m model,
+	client *agent.Client,
+	opts agent.ExecuteWithToolsOptions,
+	start func(*tea.Program) (tea.Model, error),
+) error {
+	// Quitting the viewer stops the agent rather than merely stopping watching
+	// it. The agent has shell and file-write access, so an embedding process
+	// that returned from here with the run still going would leave something
+	// editing the working tree with nothing on screen reporting what it does.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	go runAgent(ctx, p, client, opts)
 
-	final, err := p.Run()
+	final, err := start(p)
 	if err != nil {
 		return err
 	}

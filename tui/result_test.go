@@ -27,7 +27,7 @@ func TestModelRunErrorReportsFailedAgentExit(t *testing.T) {
 }
 
 func TestModelRunErrorReportsStreamError(t *testing.T) {
-	want := errors.New("backend unavailable")
+	want := errors.New("provider unavailable")
 	m := newModel("zot", "task", "model", "openai", "/tmp", false)
 	m.err = want
 

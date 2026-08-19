@@ -12,6 +12,20 @@ plans, edits, runs, and verifies until the work is done.
   <img width="1504" height="1080" alt="zot demo" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 </p>
 
+## The point
+
+zot is not another coding agent you sit with and steer prompt by prompt. Its
+reason to exist is **fully autonomous software work**: give it a goal, walk away,
+and come back to a finished result. It will sometimes fall short of that ideal,
+especially while it is 0.x, but the ideal is the design constraint. We are not
+building workflows or features that contradict it.
+
+If what you want is an interactive coding agent, use
+[Codex](https://openai.com/codex/),
+[Claude Code](https://www.anthropic.com/claude-code),
+[Cursor](https://www.cursor.com/), or one of the other excellent tools built for
+that way of working.
+
 ## What you get
 
 Give it a brief and walk away:
@@ -24,6 +38,20 @@ zot reads the repo, writes and edits the code, runs the build and the tests, and
 fixes what it broke - on its own, from that one brief to a recorded outcome. When
 it stops you have a changed working tree and a full session log of every step it
 took. No chat loop, no approving each edit: one brief in, finished work out.
+
+## zotui
+
+The release also includes **zotui**, a browser command center for operating zot
+as reusable workers. Choose a repository, environment, provider and model, give
+the worker its mission, then launch runs on demand or on a schedule and follow
+their output and history from the browser. Workers can run in disposable local
+Docker containers or on configured remote compute.
+
+https://github.com/user-attachments/assets/304b4f32-c634-4936-a1ec-66bdd792bd66
+
+zotui keeps the same autonomy boundary: it dispatches and observes complete
+runs; it does not turn zot into a chat-driven coding agent. See
+[Configuring zotui](docs/zotui-configuration.md) for setup and deployment.
 
 ## Why zot exists
 
@@ -46,10 +74,10 @@ required:
 ```bash
 VERSION=vX.Y.Z; OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
 curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
-mv "zot-${VERSION}-${OS}-${ARCH}/zot" ~/.local/bin/   # or any directory on your PATH
+mv "zot-${VERSION}-${OS}-${ARCH}"/{zot,zotui} ~/.local/bin/   # or any directory on your PATH
 ```
 
-zot defaults to the **`zai`** backend running **`glm-5.2`**. Export a key and
+zot defaults to the **`zai`** provider running **`glm-5.2`**. Export a key and
 give it a job:
 
 ```bash
@@ -57,9 +85,9 @@ export ZAI_API_KEY="…"
 zot "add input validation to the signup handler and a test"
 ```
 
-Any OpenAI-compatible provider works - `--backend anthropic --model
-claude-5-sonnet`, a local `--backend ollama`, gateways, or a custom endpoint; see
-[docs/backends.md](docs/backends.md). To build from source or run the container
+Any OpenAI-compatible provider works - `--provider anthropic --model
+claude-5-sonnet`, a local `--provider ollama`, gateways, or a custom endpoint; see
+[docs/providers.md](docs/providers.md). To build from source or run the container
 image, see [docs/development.md](docs/development.md) and
 [docs/docker.md](docs/docker.md).
 
@@ -68,7 +96,7 @@ image, see [docs/development.md](docs/development.md) and
 The harness is zot's own, in the [`agent`](agent) package:
 
 - `agent.ExecuteWithTools` runs the model in a loop - it calls tools, sees the
-  results, and goes again - until it records an outcome (`_success` / `_failure`)
+  results, and goes again - until it records an outcome (`success` / `failure`)
   or a budget or guard stops it.
 - `agent.DefaultTools()` gives it the toolbox: `read`, `write`, `list` and
   `shell` for the work, plus `plan` and `progress` to structure and narrate it.
@@ -144,7 +172,7 @@ filesystem sandbox**. Absolute paths and shell commands retain all permissions
 of the zot process. Point it at a scratch directory or a disposable git checkout
 you are happy for it to change - not your home directory.
 
-Configured backend credentials are resolved into zot's in-memory configuration
+Configured provider credentials are resolved into zot's in-memory configuration
 and then removed from the process environment before the agent starts, so its
 shell commands do not inherit those API keys. Other secrets already present in
 the environment or readable from disk remain accessible to those commands.
@@ -163,8 +191,9 @@ upgrading.
 
 ## Documentation
 
-- [docs/backends.md](docs/backends.md) - providers, credentials, gateways, custom endpoints, the Responses API
+- [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints, the Responses API
 - [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENT.md` & skills
+- [docs/zotui-configuration.md](docs/zotui-configuration.md) - zotui repos, compute, models, environments, Vercel Sandbox, and local Docker setup
 - [docs/development.md](docs/development.md) - building from source, release vs developer builds, the codebase map
 - [docs/portable-config.md](docs/portable-config.md) - baking the configuration into the binary
 - [docs/docker.md](docs/docker.md) - running the container image
@@ -172,9 +201,10 @@ upgrading.
 
 ## Ecosystem
 
-| Project                                       | Role                                                             |
-| --------------------------------------------- | ---------------------------------------------------------------- |
-| [Rook](https://github.com/pdparchitect/rook)  | An AI bug-hunting and security-audit agent built on zot's engine |
-| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use   |
-| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands        |
-| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP   |
+| Project                                       | Role                                                                               |
+| --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                                       |
+| [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic mornitoring, and incident prevention |
+| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use                     |
+| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands                          |
+| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP                     |

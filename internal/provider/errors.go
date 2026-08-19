@@ -1,11 +1,16 @@
 package provider
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Error is a provider failure carrying the HTTP status that produced it.
@@ -15,6 +20,13 @@ type Error struct {
 
 	// Message is the provider's description of what went wrong.
 	Message string
+
+	// retryAfter is the delay the provider's Retry-After header advised, and
+	// retryAdvised whether it advised anything at all. Two fields rather than a
+	// sentinel because zero is a real answer - a Retry-After already in the past
+	// means "try now", which is not the same as no advice.
+	retryAfter   time.Duration
+	retryAdvised bool
 
 	cause error
 }
@@ -51,6 +63,9 @@ var retriablePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\boverloaded\b`),
 	regexp.MustCompile(`(?i)connection reset`),
 	regexp.MustCompile(`(?i)EOF`),
+	// zot's own wordings for a stream that died mid-turn - a truncated or
+	// stalled body is the textbook case for trying again
+	regexp.MustCompile(`(?i)the stream (?:ended|stalled)`),
 }
 
 // trailingStatusPattern matches the status some providers append to a message.
@@ -119,6 +134,113 @@ func IsRateLimited(err error) bool {
 	var providerErr *Error
 
 	return errors.As(err, &providerErr) && providerErr.Status == 429
+}
+
+// RetryAfter reports the delay the provider advised before trying again, and
+// whether it advised one at all.
+//
+// This is the half of the rate-limit contract that makes excluding 429 from
+// IsRetriable defensible: the caller does not loop, it waits for as long as the
+// provider asked. Both forms of the header are understood, and a delay of zero
+// with ok true means "now" rather than "no advice".
+func RetryAfter(err error) (time.Duration, bool) {
+	var providerErr *Error
+
+	if !errors.As(err, &providerErr) {
+		return 0, false
+	}
+
+	return providerErr.retryAfter, providerErr.retryAdvised
+}
+
+// parseRetryAfter reads the two forms the Retry-After header takes: a count of
+// seconds, and an HTTP-date to wait until. A date already in the past is advice
+// to retry now, not a negative sleep.
+func parseRetryAfter(header string) (time.Duration, bool) {
+	value := strings.TrimSpace(header)
+
+	if value == "" {
+		return 0, false
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds <= 0 {
+			return 0, true
+		}
+
+		// saturate rather than overflow: a count of seconds too large for the
+		// nanosecond arithmetic would wrap negative, and a negative delay slips
+		// under every "longer than the cap" check - so the hostile header the
+		// caller's cap exists for would strip the backoff to zero instead.
+		// Positive-and-absurd is safe; the caller's cap brings it down.
+		if int64(seconds) > math.MaxInt64/int64(time.Second) {
+			return time.Duration(math.MaxInt64), true
+		}
+
+		return time.Duration(seconds) * time.Second, true
+	}
+
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+
+	if delay := time.Until(when); delay > 0 {
+		return delay, true
+	}
+
+	return 0, true
+}
+
+// readError turns a non-2xx response into a classified error.
+//
+// Shared by every transport, which is also why the Retry-After header is read
+// here: a rate limit arrives the same way whichever wire format asked for it,
+// and a backoff the caller never sees is no better than none.
+func readError(response *http.Response) error {
+	// the same silence bound the streaming path gets. Without it a server that
+	// sends its status and then holds the body open parks this read - and the
+	// run with it - indefinitely: no wall-clock cap bounds it any more, and the
+	// request ctx of an unattended run carries no deadline. A stalled body
+	// costs its text, not the classification - the status already arrived, and
+	// the fallback below still names it.
+	stream := newStallReader(response.Body, streamStallTimeout)
+
+	defer stream.stop()
+
+	body, _ := io.ReadAll(io.LimitReader(stream, 64*1024))
+
+	message := strings.TrimSpace(string(body))
+
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		switch {
+		case parsed.Error.Message != "":
+			message = parsed.Error.Message
+		case parsed.Message != "":
+			message = parsed.Message
+		}
+	}
+
+	if message == "" {
+		message = http.StatusText(response.StatusCode)
+	}
+
+	delay, advised := parseRetryAfter(response.Header.Get("Retry-After"))
+
+	return &Error{
+		Status:       response.StatusCode,
+		Message:      message,
+		retryAfter:   delay,
+		retryAdvised: advised,
+	}
 }
 
 // contextLimitPatterns identify a prompt that exceeded the model's window.

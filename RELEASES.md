@@ -1,6 +1,7 @@
-# Releasing zot
+# Releasing zot and zotui
 
-This document describes how to build, version, and release the `zot` binary.
+This document describes how to build, version, and release the `zot` and
+`zotui` binaries.
 
 ## Overview
 
@@ -9,16 +10,20 @@ triggers an automated pipeline that tags the commit and publishes multi-platform
 binaries as a GitHub Release:
 
 1. Edit `VERSION` (e.g. `0.1.0` → `0.1.1`) and merge it to `main`.
-2. [`tag-release.yaml`](.github/workflows/tag-release.yaml) reads `VERSION` and,
-   if the matching `v*` tag does not already exist, creates and pushes it, then
-   dispatches the Release workflow.
-3. [`release.yaml`](.github/workflows/release.yaml) builds the binary for each
-   target platform, packages each into a `.tar.gz` (with `README.md` and
-   `zot.example.yaml`), publishes a multi-platform container image, generates
+2. CI runs the vulnerability, test, coverage, and build gates for that commit.
+3. After CI succeeds, [`tag-release.yaml`](.github/workflows/tag-release.yaml)
+   reads `VERSION` from the tested commit and, if the matching `v*` tag does not
+   already exist, creates and pushes it, then dispatches the Release workflow.
+4. [`release.yaml`](.github/workflows/release.yaml) verifies CI succeeded for
+   the exact tagged commit, builds both binaries for each target platform,
+   packages them together into a `.tar.gz` (with `README.md`,
+   `zot.example.yaml`, and `zotui.example.yaml`), publishes both commands in a
+   multi-platform container image, generates
    SHA-256 checksums, and creates a GitHub Release with notes taken from the
    latest `CHANGELOG.md` section and the image coordinates on top.
 
-You can also release manually by pushing a tag yourself:
+You can also trigger a release by pushing a tag yourself, but the release will
+still refuse to publish unless that exact commit has passed the `main` push CI:
 
 ```bash
 git tag v0.1.1
@@ -57,8 +62,8 @@ The version is baked into the binary at build time via `-ldflags`:
 -X github.com/openzot/openzot/internal/version.Version=<version>
 ```
 
-The [`Makefile`](Makefile) derives the version from `git describe` for local
-builds; the release workflow uses the pushed tag. Built without ldflags (e.g.
+The [`Makefile`](Makefile) derives the version from the authoritative `VERSION`
+file for local builds; the release workflow uses the matching pushed tag. Built without ldflags (e.g.
 `go run`), the version is `dev` and the GitHub update check is skipped.
 
 Check the embedded version with:

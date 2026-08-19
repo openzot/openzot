@@ -1,26 +1,32 @@
 # zotui configuration.
 #
-# zotui is the command center over the zot engine: you schedule a coding job onto
-# an ephemeral sandbox, then close the tool and come back later to see how it went.
-# Progress is tracked in a store, so the tool is a view over durable state - not a
-# process you have to babysit.
-#
-# The TUI and the (future) web interface both read THIS file. One config, two faces.
+# zotui is the browser command center over the zot engine. You define reusable
+# workers, start or schedule runs on remote environments, and inspect their output.
+# Workers and run history are durable, so closing the browser loses no state.
+# Full setup guide: docs/zotui-configuration.md
 
-# Repository providers - where jobs get their code and how zotui mints per-job
-# credentials. A map, so several connect at once: multiple GitHub orgs, GitHub and
-# GitLab together, self-hosted instances. `type` picks the implementation; a job
-# names which source it targets (--source). Each source has an OPTIONAL lockdown -
-# omit to discover every repository it exposes, or list some to restrict to those.
-sources:
+# Repos are the repository connections workers get their code from and how zotui
+# mints per-run credentials. A map, so several connect at once: multiple GitHub
+# orgs, GitHub and GitLab together, self-hosted instances. `type` picks the
+# implementation; a worker names which repo connection it targets. Each repo has an
+# OPTIONAL lockdown - omit to discover every repository it exposes, or list some
+# to restrict to those.
+repos:
+  # A fixed list of public GitHub repositories needs no credential. This is the
+  # simplest remote connection for testing Vercel Sandbox compute.
+  public:
+    type: github
+    repositories:
+      - openzot/openzot
+
   acme:
     type: github
     app_id: 123456
     installation_id: 7654321
     # PEM private key, inline or a $VAR reference. Held only on the host - never
-    # sent to a sandbox. zotui mints a short-lived, repo-scoped token per job.
+    # sent to a sandbox. zotui mints a short-lived, repo-scoped token per run.
     private_key: $ACME_GITHUB_APP_KEY
-    # repositories:            # optional per-source lockdown (owner/name)
+    # repositories:            # optional per-repo lockdown (owner/name)
     #   - acme-corp/api
 
   labs:
@@ -28,44 +34,84 @@ sources:
     base_url: https://gitlab.example.com
     token: $LABS_GITLAB_TOKEN
 
-# Runners are compute providers - where sandboxes come from. Today: cloudflare.
-# Later: vercel, and your own machines over ssh.
-runners:
-  cf:
-    type: cloudflare
-    account_id: $CLOUDFLARE_ACCOUNT_ID
-    api_token: $CLOUDFLARE_API_TOKEN
+  # A checkout already present on the zotui host. Docker compute copies its
+  # committed Git refs as a bundle and clones them into an isolated /workspace.
+  # It does not mount the host checkout or mint a remote credential.
+  # development:
+  #   type: local
+  #   path: $ZOTUI_REPO_PATH
+  #   repositories:
+  #     - openzot/openzot
 
-# Models zot reasons with. Each names the provider, the model, and the credential
-# to reach it - held on the host and injected into a job's sandbox at dispatch. An
-# environment picks a default; a job can override it with --model at runtime.
-models:
-  glm:
+# Compute is where computers and sandboxes come from. Docker provides local
+# ephemeral compute. Vercel boots an ephemeral Vercel Sandbox and checks out a
+# remote repo into it.
+compute:
+  local:
+    type: docker
+  vercel:
+    type: vercel
+    # A Vercel access token created in Account Settings. The team and project
+    # IDs are shown in the project's Settings page.
+    token: $VERCEL_TOKEN
+    team_id: $VERCEL_TEAM_ID
+    project_id: $VERCEL_PROJECT_ID
+    # Defaults to the Hobby-plan maximum. Pro/Enterprise can use up to 24h.
+    timeout: 45m
+
+# Inference providers are reusable connections. The map key is also the Zot
+# driver unless `driver` says otherwise, which lets an alias such as `corporate`
+# use the `openai` driver. Credentials stay on the host and are injected into a
+# run's sandbox.
+providers:
+  zai:
+    api_key: $ZAI_API_KEY
+    # `models` is optional for built-in providers. When omitted, ZotUI shows
+    # Z.AI models from its built-in catalogue.
+  anthropic:
+    api_key: $ANTHROPIC_API_KEY
+    # A custom list replaces the built-in list for this connection. Map keys are
+    # the names shown in the UI; `model` may alias the provider's real model ID.
+    models:
+      sonnet:
+        model: claude-5-sonnet
+
+# Environments bind compute to runtime settings - the reusable blueprint a run's
+# sandbox is created from: define once, spawn many ephemeral sandboxes. Omit
+# `image` for Zotui's standard environment, or set it as a compute-specific
+# custom-image override.
+# `provider` and `model` are the defaults for workers on this environment.
+environments:
+  # local-development:
+  #   compute: local
+  #   provider: zai
+  #   model: glm-5.2
+  #   # Optional Docker override; Zotui installs Zot at run time.
+  #   # image: golang:1.26.6-bookworm
+  #   repositories:
+  #     - development/openzot/openzot
+  # vercel-development:
+  #   compute: vercel
+  #   provider: zai
+  #   model: glm-5.2
+  #   # Optional Vercel override; it must be in this project's Vercel Container
+  #   # Registry. With no image, Vercel uses its managed default image.
+  #   # image: go-environment:latest
+  #   repositories:
+  #     - public/openzot/openzot
+  go-ubuntu:
+    compute: local
     provider: zai
     model: glm-5.2
-    api_key: $ZAI_API_KEY
-  sonnet:
-    provider: anthropic
-    model: claude-5-sonnet
-    api_key: $ANTHROPIC_API_KEY
-
-# Environments bind a runner to a base image and env vars - the reusable blueprint
-# a job's sandbox is created from: define once, spawn many ephemeral sandboxes.
-# `model` is the default model for jobs here; --model overrides it per run.
-environments:
-  go-ubuntu:
-    runner: cf
-    model: glm
-    image: ghcr.io/openzot/openzot-toolchain:latest # base image: toolchain + the zot binary
     env:
       GOFLAGS: -mod=mod
     # Optional per-environment lockdown: restrict this environment to specific
-    # repositories, source-qualified as "source/owner/repo". Omit to allow any.
+    # repositories, qualified as "repo/owner/name". Omit to allow any.
     # repositories:
     #   - acme/acme-corp/api
 
-# Where scheduled jobs and their progress are stored, so you can schedule, close
-# the tool, and reopen later to see where a job got to. sqlite by default;
+# Where workers, their run history, and output are stored, so you can close the
+# browser and return later without losing state. sqlite by default;
 # postgres and others can slot in.
 store:
   driver: sqlite

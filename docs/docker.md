@@ -9,7 +9,7 @@ without zot having to implement a sandbox of its own.
 This document covers the published image. For the agent itself see the
 [README](../README.md); for flags and config see
 [configuration.md](configuration.md), and for providers
-[backends.md](backends.md).
+[providers.md](providers.md).
 
 ## The image
 
@@ -22,13 +22,14 @@ docker pull ghcr.io/openzot/openzot:latest
 | Registry | `ghcr.io/openzot/openzot` |
 | Tags | `vX.Y.Z`, `X.Y.Z`, `X.Y`, and `latest` for stable releases. Prereleases (`v0.5.0-beta.1`) publish only their exact tags and never move `latest`. |
 | Platforms | `linux/amd64`, `linux/arm64` |
-| Entrypoint | `zot` - arguments after the image name are zot's own |
-| Base | `alpine:3.22` plus `bash`, `ca-certificates`, `curl`, `git`, `openssh-client`, `tzdata` |
+| Commands | `zot` and `zotui`; the default entrypoint is `zot` |
+| Base | `alpine:3.22` plus TLS roots and timezone data |
 
-The runtime packages are there because the agent's `shell` tool runs real
-commands: a task that clones, builds, or commits needs them. Anything else your
-task needs (a language toolchain, a package manager) has to come from an image
-built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
+The published image is deliberately the pure runtime: the Zot and Zotui
+executables and a POSIX shell, without Git, ripgrep, compilers, or language
+toolchains. It is useful for a mounted workspace whose task needs no extra
+executable, or as a Zotui command center using remote compute. Zotui deploys its
+embedded Zot worker into whichever toolchain image an environment selects.
 
 ### Layout
 
@@ -37,26 +38,48 @@ built `FROM ghcr.io/openzot/openzot` - see [Extending](#extending-the-image).
 | `/workspace` | Working directory. Mount your checkout here. |
 | `/home/zot/.config/zot/config.yaml` | Config file, pointed at by `ZOT_CONFIG`. Absent by default - zot runs on defaults plus env vars. |
 | `/usr/local/share/zot/zot.example.yaml` | The documented example config, for copying out. |
+| `/usr/local/share/zot/zotui.example.yaml` | The Zotui example config, for copying out. |
 | `/usr/local/bin/zot` | The binary. |
+| `/usr/local/bin/zotui` | The browser command-center binary. |
 
 `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
 `XDG_RUNTIME_DIR` are all set under `/home/zot`. The image user is `zot`
 (uid/gid 10001).
 
+## Running Zotui
+
+Select `zotui` as the entrypoint, publish port 8080, and persist its config and
+state directories:
+
+```bash
+docker run --rm \
+  --entrypoint zotui \
+  --publish 8080:8080 \
+  --env-file ./zotui.env \
+  --volume "$HOME/.config/zotui":/home/zot/.config/zotui \
+  --volume zotui-state:/home/zot/.local/state/zotui \
+  ghcr.io/openzot/openzot:latest
+```
+
+The image sets `ZOTUI_ADDR=0.0.0.0:8080`. Its lean runtime does not include a
+Docker client, so use a configured remote compute environment when running
+Zotui from this image. Local Docker compute remains intended for a host install
+or a purpose-built deployment that supplies Docker explicitly.
+
 ## Running a task
 
 zot talks straight to a model provider, so a run needs nothing but that
-provider's key. These examples use the default pair - the `zai` backend running
+provider's key. These examples use the default pair - the `zai` provider running
 `glm-5.2` - so they need no flags at all. For any other provider, pass the
-variable it reads along with `--backend` **and** `--model`, since the default
-model only means something on its own backend:
+variable it reads along with `--provider` **and** `--model`, since the default
+model only means something on its own provider:
 
 ```bash
 docker run --rm -it --env OPENAI_API_KEY --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --backend openai --model gpt-5.4-mini "…"
+  ghcr.io/openzot/openzot:latest --provider openai --model gpt-5.4-mini "…"
 ```
 
-See [backends.md](backends.md) for the full list.
+See [providers.md](providers.md) for the full list.
 
 ```bash
 docker run --rm -it \
@@ -90,12 +113,12 @@ docker run --rm -it \
 ```
 
 That is the safest shape available: the run cannot see your filesystem at all.
-Retrieve the result with `docker cp`, or seed the volume first from a git clone
-the agent performs itself.
+Retrieve the result with `docker cp`. Seed the volume separately when the task
+needs existing source; the lean image does not include Git.
 
 ### Credentials
 
-The backend credential is an environment variable - never bake it into an image
+The provider credential is an environment variable - never bake it into an image
 or a config file you push anywhere:
 
 ```bash
@@ -114,7 +137,7 @@ commands. Pass credentials with `--env` or `--env-file`, where the value comes
 from your secret store. (A developer build, `make dev`, does read `.env`; see
 [release vs developer builds](development.md#release-vs-developer-builds).)
 
-After zot loads its configuration, configured backend credentials are removed
+After zot loads its configuration, configured provider credentials are removed
 from the environment inherited by agent shell commands, so the task itself
 cannot read the key that is paying for it.
 
@@ -140,7 +163,7 @@ docker run --rm -it \
 
 `ZOT_CONFIG` already points at `/home/zot/.config/zot/config.yaml`; a missing
 file there is not an error. Single settings are easier as environment
-variables - `ZOT_AGENT_MODEL`, `ZOT_AGENT_MAX_ITERATIONS`, `ZOT_DEFAULT_BACKEND`
+variables - `ZOT_AGENT_MODEL`, `ZOT_AGENT_MAX_ITERATIONS`, `ZOT_DEFAULT_PROVIDER`
 - and they override the file.
 
 ### Terminal or not
@@ -212,18 +235,34 @@ USER zot
 Pin the base tag rather than tracking `latest`, so an agent's behaviour does not
 change under a build you did not intend.
 
+Zotui environments work differently. With no `image`, Zotui starts its small,
+version-pinned standard environment containing a shell, Git, and curl, then
+deploys Zot into it. Set `image` when a project needs a different toolchain; for
+example, a Go environment can use the upstream Go image directly:
+
+```yaml
+environments:
+  go-development:
+    image: golang:1.26.6-bookworm
+```
+
+The command center transfers the matching Linux Zot executable into each new
+sandbox before starting the run. A custom environment image is needed only when
+the task needs tools absent from its upstream language image.
+
 ## Building locally
 
 ```bash
-docker build --build-arg VERSION=v0.4.1 --tag openzot/zot:local .
+make image
 docker run --rm openzot/zot:local --version
 ```
 
-`VERSION` is what gets stamped into the binary and reported by `--version`;
-without it the build produces `dev` and the update check is skipped. Note that
-`go.work` is excluded from the build context by `.dockerignore` - a workspace
-file someone created locally must not leak into an image build and cap the
-toolchain below what `go.mod` requires.
+`make image` stamps the version from the `VERSION` file into the binary. When
+invoking Docker directly, `--build-arg VERSION=...` controls what `--version`
+reports; without it the build produces `dev` and the update check is skipped.
+Note that `go.work` is excluded from the build context by `.dockerignore` - a
+workspace file someone created locally must not leak into an image build and cap
+the toolchain below what `go.mod` requires.
 
 Images are always built without `-tags dev`, so a published image never reads a
 `.env` from the directory you mounted. See
@@ -238,7 +277,7 @@ and smoke-tests the same Dockerfile on every code push. See
 
 - [README](../README.md) - what zot is
 - [configuration.md](configuration.md) - flags, config, sessions
-- [backends.md](backends.md) - providers and credentials
+- [providers.md](providers.md) - providers and credentials
 - [Pantalk deployment](https://github.com/pantalk/pantalk/blob/main/docs/deployment.md) -
   putting a containerised agent into chat
 - [MCPShim deployment](https://github.com/mcpshim/mcpshim/blob/main/docs/deployment.md) -

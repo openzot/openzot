@@ -20,29 +20,72 @@ type Migration struct {
 	Statements []string
 }
 
-// baselineSchema is migration 1: the jobs table and its indexes, as individual
-// statements. BIGINT holds unix epochs; it has INTEGER affinity in sqlite and a
-// 64-bit integer in postgres, so the same DDL is portable.
+// baselineSchema is deliberately the current pre-1.0 schema. The old jobs-only
+// database is not migrated: workers and runs replace that model outright.
 var baselineSchema = []string{
-	`CREATE TABLE IF NOT EXISTS jobs (
-	id          TEXT PRIMARY KEY,
-	source      TEXT NOT NULL,
-	repository  TEXT NOT NULL,
-	task        TEXT NOT NULL,
-	environment TEXT NOT NULL,
-	model       TEXT NOT NULL,
-	status      TEXT NOT NULL,
-	exit_code   BIGINT,
-	created_at  BIGINT NOT NULL,
-	updated_at  BIGINT NOT NULL
+	`DROP TABLE IF EXISTS jobs`,
+	`CREATE TABLE IF NOT EXISTS workers (
+	id              TEXT PRIMARY KEY,
+	name            TEXT NOT NULL,
+	repo            TEXT NOT NULL,
+	repository      TEXT NOT NULL,
+	environment     TEXT NOT NULL,
+	model           TEXT NOT NULL,
+	mission         TEXT NOT NULL,
+	max_iterations  BIGINT NOT NULL,
+	schedule_cron   TEXT NOT NULL,
+	schedule_tz     TEXT NOT NULL,
+	runtime_minutes BIGINT NOT NULL,
+	created_at      BIGINT NOT NULL,
+	updated_at      BIGINT NOT NULL
 )`,
-	`CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)`,
-	`CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)`,
+	`CREATE INDEX IF NOT EXISTS idx_workers_updated_at ON workers(updated_at)`,
+	`CREATE TABLE IF NOT EXISTS runs (
+	id             TEXT PRIMARY KEY,
+	worker_id      TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+	status         TEXT NOT NULL,
+	mission        TEXT NOT NULL,
+	model          TEXT NOT NULL,
+	max_iterations BIGINT NOT NULL,
+	iteration      BIGINT NOT NULL,
+	tool           TEXT NOT NULL,
+	action         TEXT NOT NULL,
+	exit_code      BIGINT,
+	error          TEXT NOT NULL,
+	output         TEXT NOT NULL,
+	created_at     BIGINT NOT NULL,
+	updated_at     BIGINT NOT NULL,
+	started_at     BIGINT,
+	finished_at    BIGINT
+)`,
+	`CREATE INDEX IF NOT EXISTS idx_runs_worker_created ON runs(worker_id, created_at DESC)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_worker ON runs(worker_id)
+	WHERE status IN ('scheduled', 'running', 'paused')`,
 }
 
 // migrations is the ordered, authoritative schema history.
 var migrations = []Migration{
-	{Version: 1, Name: "initial schema", Statements: baselineSchema},
+	{Version: 2, Name: "replace jobs with workers and runs", Statements: baselineSchema},
+	{Version: 3, Name: "persist model provider", Statements: []string{
+		`ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
+	}},
+	// A single growing TEXT column made every append rewrite the whole buffer and
+	// every poll re-ship it. Chunks are written once and addressed by byte offset,
+	// so an append costs one row and a poll transfers only what is new. The old
+	// column is dropped outright: accumulated output is a live tail, not a record.
+	{Version: 4, Name: "store run output in append-only chunks", Statements: []string{
+		`ALTER TABLE runs DROP COLUMN output`,
+		`CREATE TABLE IF NOT EXISTS run_output (
+	run_id     TEXT   NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+	seq        BIGINT NOT NULL,
+	byte_start BIGINT NOT NULL,
+	byte_end   BIGINT NOT NULL,
+	data       BLOB   NOT NULL,
+	PRIMARY KEY (run_id, seq)
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_run_output_range ON run_output(run_id, byte_end)`,
+	}},
 }
 
 // MigrationState reports how the database's schema compares to the code.

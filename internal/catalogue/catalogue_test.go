@@ -1,6 +1,7 @@
 package catalogue
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -13,6 +14,7 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 		// exact entries win
 		{"gpt-5.4-mini", 400_000},
 		{"gpt-5.4", 1_050_000},
+		{"glm-5.3", 1_000_000},
 		{"glm-5.2", 1_000_000},
 		{"kimi-k3", 1_000_000},
 		{"claude-5-sonnet", 1_000_000},
@@ -50,10 +52,54 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 	}
 }
 
+// A gateway-qualified name names the creator's model: "vercel/zai/glm-5.3" has
+// to reach the same entry as "glm-5.3", and a resolver that stopped at the first
+// slash would budget a million-token model on the default 128K window instead.
+func TestGatewayQualifiedNameResolvesToTheCreatorEntry(t *testing.T) {
+	qualified := Lookup("vercel/zai/glm-5.3")
+	direct := Lookup("glm-5.3")
+
+	if qualified != direct {
+		t.Fatalf("vercel/zai/glm-5.3 = %+v, glm-5.3 = %+v", qualified, direct)
+	}
+
+	if qualified.Provider != "zai" {
+		t.Errorf("provider = %q, want the creator rather than the gateway", qualified.Provider)
+	}
+
+	if qualified.ContextWindow <= DefaultContextWindow {
+		t.Errorf("context window %d did not beat the default %d - the name fell through to Default",
+			qualified.ContextWindow, DefaultContextWindow)
+	}
+
+	if !qualified.SupportsTools || !qualified.SupportsReasoning {
+		t.Errorf("GLM 5.3 capabilities = %+v", qualified)
+	}
+}
+
+// The budget is derived from the entry, not carried alongside it: raise or lower
+// a model's output ceiling and the input budget has to move with it, or the
+// thread builder trims to a number the catalogue no longer says.
+func TestInputBudgetTracksTheEntry(t *testing.T) {
+	for _, name := range []string{"glm-5.3", "glm-5.2", "gpt-5.4", "claude-5-opus", "sonar-pro"} {
+		entry := Lookup(name)
+
+		want := entry.ContextWindow - entry.MaxOutputTokens
+		if half := entry.ContextWindow / 2; want < half {
+			want = half
+		}
+
+		if got := entry.InputBudget(); got != want {
+			t.Errorf("%s: input budget = %d, want %d for a %d window with a %d output ceiling",
+				name, got, want, entry.ContextWindow, entry.MaxOutputTokens)
+		}
+	}
+}
+
 func TestReasoningModelsAreFlagged(t *testing.T) {
 	// the loop exempts reasoning from the runaway backstop, and the provider
 	// prefers the Responses API where reasoning state can survive a tool round
-	for _, model := range []string{"deepseek-r2", "gpt-5.4-mini", "glm-5.2", "kimi-k3", "claude-5-opus"} {
+	for _, model := range []string{"deepseek-r2", "gpt-5.4-mini", "glm-5.3", "kimi-k3", "claude-5-opus"} {
 		if !Lookup(model).SupportsReasoning {
 			t.Errorf("%s should be flagged as a reasoning model", model)
 		}
@@ -89,7 +135,7 @@ func TestModelsWithoutToolsAreFlagged(t *testing.T) {
 }
 
 func TestKnownReportsCoverage(t *testing.T) {
-	for _, model := range []string{"glm-5.2", "gpt-5.4-mini-2026-01-01", "claude-5-sonnet", "qwen-3.8-max"} {
+	for _, model := range []string{"glm-5.3", "gpt-5.4-mini-2026-01-01", "claude-5-sonnet", "qwen-3.8-max"} {
 		if !Known(model) {
 			t.Errorf("%s should be recognised", model)
 		}
@@ -188,6 +234,48 @@ func TestNamesIsSorted(t *testing.T) {
 		if names[index-1] > names[index] {
 			t.Fatalf("names are not sorted at %d: %q > %q", index, names[index-1], names[index])
 		}
+	}
+}
+
+// Direct providers expose only their own catalogue section, while model
+// gateways expose the whole catalogue they can route.
+func TestNamesForProvider(t *testing.T) {
+	openai := NamesForProvider(" openai ")
+	if len(openai) == 0 {
+		t.Fatal("OpenAI has no built-in models")
+	}
+	for _, name := range openai {
+		if models[name].Provider != "openai" {
+			t.Fatalf("OpenAI list contains %q from %q", name, models[name].Provider)
+		}
+	}
+	if unknown := NamesForProvider("custom"); len(unknown) != 0 {
+		t.Fatalf("unknown provider models = %v", unknown)
+	}
+}
+
+// A gateway originates nothing, so grouping by Provider would leave it with an
+// empty list - and an empty list is not "no models known", it is a connection
+// whose every model config validation rejects and whose listing UI shows
+// nothing. Every gateway that routes by a creator-qualified name has to be
+// offered the whole catalogue.
+func TestGatewaysExposeTheWholeCatalogue(t *testing.T) {
+	for _, gateway := range []string{"openrouter", "vercel", "cloudflare"} {
+		t.Run(gateway, func(t *testing.T) {
+			names := NamesForProvider(gateway)
+
+			if len(names) != len(Names()) {
+				t.Fatalf("%s lists %d models, want the whole catalogue (%d)", gateway, len(names), len(Names()))
+			}
+
+			// models from creators the gateway is not, which is the point of a
+			// gateway and what grouping by Provider would drop
+			for _, want := range []string{"gpt-5.4", "claude-5-sonnet", "glm-5.3"} {
+				if !slices.Contains(names, want) {
+					t.Errorf("%s cannot route %q", gateway, want)
+				}
+			}
+		})
 	}
 }
 

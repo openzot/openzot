@@ -8,7 +8,7 @@
 # TOP of the runtime config file and environment, so every field you set here is
 # authoritative: the deployment environment cannot override it. Fields you leave
 # out still fall through to the config file, the environment, and the built-in
-# defaults - so you can bake the model and backend but still take the key from
+# defaults - so you can bake the model and provider but still take the key from
 # the environment, if that is what you want.
 #
 # See docs/portable-config.md for the full recipe and the trade-offs. In short:
@@ -22,13 +22,13 @@
 # to pin.
 
 agent:
-  # Bake the model/backend pair so the binary runs one specific configuration.
+  # Bake the model/provider pair so the binary runs one specific configuration.
   model: 'glm-5.2'
 
-# Pin which backend a run targets when --backend is not given.
-default_backend: zai
+# Pin which provider a run targets when --provider is not given.
+default_provider: zai
 
-backends:
+providers:
   # Bake a credential to make the binary fully self-contained (no key needed at
   # the destination). Anything you write here is compiled in verbatim.
   zai:
@@ -36,6 +36,6 @@ backends:
 
   # A $ENV_VAR reference is compiled in as the reference, NOT its current value:
   # the binary still reads the variable at runtime. Use this to bake the model
-  # and backend while leaving the key to the environment.
+  # and provider while leaving the key to the environment.
   # openai:
   #   api_key: '$OPENAI_API_KEY'

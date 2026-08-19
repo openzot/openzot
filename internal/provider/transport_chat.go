@@ -46,15 +46,19 @@ func (t *chatTransport) Stream(ctx context.Context, config Config, request Reque
 
 		response, err := httpPost(ctx, t.http, config, config.completionsURL(), body)
 		if err != nil {
-			events <- Event{Err: err}
+			sendTerminal(events, Event{Err: err})
 
 			return
 		}
 
 		defer response.Body.Close()
 
-		if err := consumeSSE(ctx, response.Body, events); err != nil {
-			events <- Event{Err: err}
+		stream := newStallReader(response.Body, streamStallTimeout)
+
+		defer stream.stop()
+
+		if err := consumeSSE(ctx, stream, events); err != nil {
+			sendTerminal(events, Event{Err: err})
 		}
 	}()
 
@@ -137,6 +141,10 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 
 	finishReason := ""
 
+	// whether the provider said the turn was over, rather than the body simply
+	// stopping - see the check after the loop
+	terminal := false
+
 	var usage *Usage
 
 	for scanner.Scan() {
@@ -155,6 +163,8 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
 		if payload == "[DONE]" {
+			terminal = true
+
 			break
 		}
 
@@ -177,17 +187,27 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 		for _, choice := range parsed.Choices {
 			if choice.FinishReason != "" {
 				finishReason = choice.FinishReason
+
+				// the model said why it stopped, so the turn is complete even if
+				// the connection drops before [DONE]
+				terminal = true
 			}
 
 			if choice.Delta.Content != "" {
-				events <- Event{Token: choice.Delta.Content}
+				if !send(ctx, events, Event{Token: choice.Delta.Content}) {
+					return ctx.Err()
+				}
 			}
 
 			// providers disagree on the reasoning field name
 			if reasoning := choice.Delta.ReasoningContent; reasoning != "" {
-				events <- Event{ReasoningToken: reasoning}
+				if !send(ctx, events, Event{ReasoningToken: reasoning}) {
+					return ctx.Err()
+				}
 			} else if reasoning := choice.Delta.Reasoning; reasoning != "" {
-				events <- Event{ReasoningToken: reasoning}
+				if !send(ctx, events, Event{ReasoningToken: reasoning}) {
+					return ctx.Err()
+				}
 			}
 
 			for _, delta := range choice.Delta.ToolCalls {
@@ -222,6 +242,10 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 		return err
 	}
 
+	if !terminal {
+		return errTruncatedStream
+	}
+
 	final := Event{FinishReason: finishReason, Usage: usage}
 
 	for _, index := range order {
@@ -230,46 +254,22 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 
 	// @note some providers omit finish_reason when the turn ends in tool calls;
 	// infer it so the loop does not read the turn as a plain stop
-	if final.FinishReason == "" && len(final.ToolCalls) > 0 {
-		final.FinishReason = FinishToolCalls
-	}
+	if final.FinishReason == "" {
+		final.FinishReason = FinishStop
 
-	events <- final
-
-	return nil
-}
-
-// readError turns a non-2xx response into a classified error.
-func readError(response *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
-
-	message := strings.TrimSpace(string(body))
-
-	var parsed struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-
-		Message string `json:"message"`
-	}
-
-	if err := json.Unmarshal(body, &parsed); err == nil {
-		switch {
-		case parsed.Error.Message != "":
-			message = parsed.Error.Message
-		case parsed.Message != "":
-			message = parsed.Message
+		if len(final.ToolCalls) > 0 {
+			final.FinishReason = FinishToolCalls
 		}
 	}
 
-	if message == "" {
-		message = http.StatusText(response.StatusCode)
+	// a final frame lost to cancellation is a cancelled turn, not a finished
+	// one: report it so the caller's terminal send says so
+	if !send(ctx, events, final) {
+		return ctx.Err()
 	}
 
-	return &Error{Status: response.StatusCode, Message: message}
+	return nil
 }
-
-// Complete runs a non-streaming completion, collecting the stream.
 
 // DecodeArguments parses a tool call's JSON arguments.
 //

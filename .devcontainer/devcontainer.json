@@ -1,0 +1,63 @@
+{
+  "name": "openzot",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.26.6"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:4": {},
+    "ghcr.io/devcontainers/features/git-lfs:1": {}
+  },
+  "workspaceFolder": "/workspaces/openzot",
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "GOTOOLCHAIN": "auto",
+    "ZOTUI_ADDR": "0.0.0.0:8080",
+    "ZOTUI_CONFIG": "/workspaces/openzot/.devcontainer/zotui.dev.yaml",
+    "ZOTUI_REPO_PATH": "/workspaces/openzot",
+    "ZOTUI_STORE_DSN": "/home/vscode/.local/state/zotui/zotui.db"
+  },
+  "mounts": [
+    "source=openzot-go-build-cache,target=/home/vscode/.cache/go-build,type=volume",
+    "source=openzot-go-module-cache,target=/home/vscode/go/pkg/mod,type=volume",
+    "source=openzot-zotui-state,target=/home/vscode/.local/state/zotui,type=volume"
+  ],
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "zotui command center",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.cache/go-build /home/vscode/go/pkg/mod /home/vscode/.local/state/zotui && go mod download && make worker-assets",
+  "runArgs": ["--init"],
+  "shutdownAction": "stopContainer",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "Anthropic.claude-code",
+        "golang.go",
+        "openai.chatgpt",
+        "redhat.vscode-yaml"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "go.toolsManagement.autoUpdate": true,
+        "workbench.colorCustomizations": {
+          "activityBar.background": "#050505",
+          "statusBar.background": "#090A09",
+          "statusBar.foreground": "#E6E6E6",
+          "statusBarItem.remoteBackground": "#2DD4A7",
+          "statusBarItem.remoteForeground": "#050505",
+          "titleBar.activeBackground": "#090A09",
+          "titleBar.activeForeground": "#E6E6E6",
+          "titleBar.border": "#56C2FF",
+          "titleBar.inactiveBackground": "#050505",
+          "titleBar.inactiveForeground": "#7A7A7A",
+          "window.activeBorder": "#56C2FF",
+          "window.inactiveBorder": "#6B7280"
+        }
+      }
+    }
+  }
+}

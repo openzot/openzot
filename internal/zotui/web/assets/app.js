@@ -1,0 +1,686 @@
+const $ = (selector) => document.querySelector(selector);
+
+let state = { choices: { repos: [], repositories: {}, repositoriesByEnvironment: {}, environments: [], providers: [], models: {}, defaultMaxIterations: 1000000 }, workers: [] };
+let selectedWorker = 0;
+let selectedRun = 0;
+let editingID = "";
+let deletingID = "";
+let schedule = { cron: "", timezone: "", runtimeMinutes: 0 };
+let poll;
+let outputRequest = 0;
+let outputRunID = "";
+let outputOffset = 0;
+let outputTail = "";
+let outputWritten = 0;
+let renderedPlaceholder = null;
+let terminal;
+let terminalFallback = true;
+let followOutput = true;
+
+async function request(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: options.body ? { "Content-Type": "application/json", ...options.headers } : options.headers,
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try { message = (await response.json()).error || message; } catch (_) {}
+    throw new Error(message);
+  }
+  if (response.status === 204) return null;
+  return response.headers.get("content-type")?.includes("application/json") ? response.json() : response.text();
+}
+
+function worker() { return state.workers[selectedWorker]; }
+function run() { return worker()?.runs[selectedRun]; }
+function dialogOpen() { return Boolean(document.querySelector("dialog[open]")); }
+function activeRun(item = worker()) {
+  return item?.runs.find((record) => ["scheduled", "running", "paused"].includes(record.status));
+}
+function stateClass(status) {
+  return ({ succeeded: "done", failed: "error", scheduled: "provisioning" })[status] || status || "idle";
+}
+function stateLabel(status) {
+  return ({ succeeded: "COMPLETE", failed: "FAILED", scheduled: "STARTING" })[status] || (status || "idle").toUpperCase();
+}
+function elapsed(record) {
+  if (!record?.startedAt) return "00:00";
+  const end = record.finishedAt ? new Date(record.finishedAt) : new Date();
+  const seconds = Math.max(0, Math.floor((end - new Date(record.startedAt)) / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+function scheduleText(value) {
+  if (!value?.cron) return "Manual start";
+  return `${value.cron} · ${value.timezone} · ${value.runtimeMinutes}m runtime`;
+}
+
+function clearTerminal() {
+  followOutput = true;
+  const viewport = $("#terminal");
+  viewport.scrollTop = 0;
+  if (terminalFallback) viewport.textContent = "";
+  else if (terminal) terminal.write("\x1bc\x1b[3J\x1b[2J\x1b[H");
+}
+
+function writeTerminal(text, precedingText = "") {
+  if (!text) return;
+  const viewport = $("#terminal");
+  if (terminalFallback) {
+    viewport.textContent += text.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r/g, "");
+  } else if (terminal) {
+    terminal.write(text.replace(/\n/g, (_, index) => {
+      const previous = index > 0 ? text[index - 1] : precedingText.at(-1);
+      return previous === "\r" ? "\n" : "\r\n";
+    }));
+  }
+  if (followOutput) {
+    requestAnimationFrame(() => { viewport.scrollTop = viewport.scrollHeight; });
+  }
+}
+
+function replaceTerminal(text) {
+  clearTerminal();
+  writeTerminal(text);
+}
+
+async function initTerminal() {
+  const viewport = $("#terminal");
+  viewport.dataset.renderer = "loading-wterm";
+  try {
+    const { WTerm } = await import("/vendor/wterm/dom/index.js");
+    if (typeof WTerm !== "function") throw new Error("WTerm module unavailable");
+    terminal = new WTerm(viewport, { cols: 100, rows: 26, autoResize: true, cursorBlink: false, onData() {} });
+    await terminal.init();
+    if (!viewport.classList.contains("wterm") || !viewport.querySelector(".term-grid")) {
+      throw new Error("WTerm did not create its terminal grid");
+    }
+    terminalFallback = false;
+    viewport.dataset.renderer = "wterm";
+  } catch (error) {
+    terminalFallback = true;
+    viewport.className = "terminal fallback-terminal";
+    viewport.dataset.renderer = "text-fallback";
+    console.error("WTerm could not initialize; using emergency text rendering.", error);
+  }
+  viewport.addEventListener("wheel", () => { followOutput = false; }, { passive: true });
+  viewport.addEventListener("scroll", () => {
+    if (viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 18) followOutput = true;
+  }, { passive: true });
+}
+
+function reconcileChildren(list, selector, items, keyFor, create, update) {
+  const existing = new Map(
+    [...list.querySelectorAll(`:scope > ${selector}`)].map((node) => [node.dataset.key, node]),
+  );
+  items.forEach((item, index) => {
+    const key = keyFor(item);
+    let node = existing.get(key);
+    if (!node) {
+      node = create();
+      node.dataset.key = key;
+    }
+    update(node, item, index);
+    const position = list.children[index];
+    if (position !== node) list.insertBefore(node, position || null);
+    existing.delete(key);
+  });
+  existing.forEach((node) => node.remove());
+}
+
+async function refresh({ quiet = true } = {}) {
+  try {
+    const nextState = await request("/api/state");
+    const previousWorker = worker()?.id;
+    const previousRun = run()?.id;
+    state = nextState;
+    if (previousWorker) {
+      const index = state.workers.findIndex((item) => item.id === previousWorker);
+      selectedWorker = index < 0 ? 0 : index;
+    }
+    const current = worker();
+    if (previousRun && current) {
+      const index = current.runs.findIndex((item) => item.id === previousRun);
+      selectedRun = index < 0 ? 0 : index;
+    } else {
+      selectedRun = Math.min(selectedRun, Math.max(0, (current?.runs.length || 1) - 1));
+    }
+    render();
+  } catch (error) {
+    if (!quiet) showToast("COMMAND FAILED", error.message);
+    $("zot-topbar").setAttribute("state", "FACTORY CONTROL / DISCONNECTED");
+  }
+}
+
+function render() {
+  $("zot-topbar").setAttribute("state", "FACTORY CONTROL / CONNECTED");
+  renderWorkers();
+  renderRuns();
+  renderHeader();
+  renderTelemetry();
+  loadOutput();
+}
+
+function renderWorkers() {
+  const list = $("#instance-list");
+  reconcileChildren(
+    list,
+    "zot-instance-card",
+    state.workers,
+    (item) => item.id,
+    () => {
+      const card = document.createElement("zot-instance-card");
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("[data-delete-worker]")) {
+          requestDelete(card.dataset.key);
+          return;
+        }
+        const index = state.workers.findIndex((item) => item.id === card.dataset.key);
+        if (index < 0) return;
+        selectedWorker = index;
+        selectedRun = 0;
+        render();
+      });
+      return card;
+    },
+    (card, item, index) => {
+      const record = activeRun(item);
+      card.configuration = {
+        instance: {
+          ...item,
+          runs: item.runs.map((entry) => ({ ...entry, state: stateClass(entry.status), iteration: entry.iteration })),
+          schedule: { short: item.schedule?.cron || "manual" },
+        },
+        active: index === selectedWorker,
+        state: stateClass(record?.status || "idle"),
+        stateLabel: stateLabel(record?.status || "idle"),
+        deletable: !record,
+      };
+    },
+  );
+  const allRuns = state.workers.flatMap((item) => item.runs);
+  $("#active-count").textContent = String(allRuns.filter((item) => item.status === "running").length).padStart(2, "0");
+  $("#paused-count").textContent = String(allRuns.filter((item) => item.status === "paused").length).padStart(2, "0");
+  $("#run-count").textContent = String(allRuns.length).padStart(2, "0");
+}
+
+function requestDelete(id) {
+  const item = state.workers.find((worker) => worker.id === id);
+  if (!item) return;
+  if (activeRun(item)) {
+    showToast("DELETE BLOCKED", "Stop the active run before deleting this worker.");
+    return;
+  }
+  deletingID = id;
+  $("#delete-worker-name").textContent = `${item.name.toUpperCase()} / ${item.id}`;
+  $("#delete-dialog").showModal();
+}
+
+async function confirmDelete(event) {
+  event.preventDefault();
+  const id = deletingID;
+  const item = state.workers.find((worker) => worker.id === id);
+  if (!item) {
+    $("#delete-dialog").close();
+    return;
+  }
+  const button = $("#delete-confirm");
+  button.disabled = true;
+  button.textContent = "Deleting…";
+  try {
+    await request(`/api/workers/${id}`, { method: "DELETE" });
+    $("#delete-dialog").close();
+    if (editingID === id && $("#create-dialog").open) $("#create-dialog").close();
+    editingID = "";
+    showToast("WORKER DELETED", item.name.toUpperCase());
+    await refresh({ quiet: false });
+  } catch (error) {
+    showToast("DELETE FAILED", error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Delete permanently";
+  }
+}
+
+function renderRuns() {
+  const item = worker();
+  const list = $("#run-list");
+  $("#run-list-count").textContent = `${item?.runs.length || 0} records`;
+  if (!item?.runs.length) {
+    const empty = `<div class="run-empty"><strong>${item?.schedule?.cron ? "Schedule armed" : "Worker not launched"}</strong><span>${item?.schedule?.cron ? scheduleText(item.schedule) : "Launch the worker to begin its mission."}</span></div>`;
+    if (list.innerHTML !== empty) list.innerHTML = empty;
+    return;
+  }
+  list.querySelector(".run-empty")?.remove();
+  reconcileChildren(
+    list,
+    "zot-run-row",
+    item.runs,
+    (record) => record.id,
+    () => {
+      const row = document.createElement("zot-run-row");
+      row.addEventListener("click", () => {
+        const index = worker()?.runs.findIndex((record) => record.id === row.dataset.key) ?? -1;
+        if (index < 0) return;
+        selectedRun = index;
+        renderRuns();
+        renderTelemetry();
+        loadOutput();
+      });
+      return row;
+    },
+    (row, record, index) => {
+      row.configuration = {
+        run: { ...record, state: stateClass(record.status), task: record.mission, elapsed: elapsed(record) },
+        active: index === selectedRun,
+        stateLabel: stateLabel(record.status),
+      };
+    },
+  );
+}
+
+function renderHeader() {
+  const item = worker();
+  const current = activeRun(item);
+  $("#instance-title").textContent = item ? item.name.toUpperCase() : "NO WORKERS";
+  $("#instance-id").textContent = item?.id || "—";
+  $("#header-kicker").textContent = item ? `${item.repo} / ${item.repository}` : "Create a worker to begin";
+  $("#environment-value").textContent = item?.environment || "—";
+  $("#schedule-value").textContent = item ? scheduleText(item.schedule) : "—";
+  $("#objective-value").textContent = item?.mission || "—";
+  $("#edit-worker").disabled = !item;
+  $("#run-start").disabled = !item || Boolean(current);
+  $("#run-pause").disabled = !current;
+  $("#run-stop").disabled = !current;
+  $("#run-pause").textContent = current?.status === "paused" ? "Resume run" : "Pause run";
+  $("#view-topology").disabled = !run();
+}
+
+function renderTelemetry() {
+  const record = run();
+  const status = record?.status || "idle";
+  $("#metric-state").innerHTML = `${stateLabel(status)} <small>/ ITERATION ${record?.iteration || 0}</small>`;
+  $("#metric-tool").innerHTML = `${(record?.tool || "WAITING").toUpperCase()} <small>/ ${escapeText(record?.action || "no active action")}</small>`;
+  $("#metric-iterations").innerHTML = `${record?.iteration || 0} <small>/ ${record?.maxIterations || worker()?.maxIterations || 0}</small>`;
+  $("#metric-elapsed").textContent = elapsed(record);
+  const percent = record?.maxIterations ? Math.min(100, record.iteration / record.maxIterations * 100) : 0;
+  $("#iteration-bar").style.setProperty("--value", `${percent}%`);
+  $("#state-bar").style.setProperty("--value", status === "running" ? "60%" : status === "succeeded" ? "100%" : "12%");
+}
+
+function resetOutput(id) {
+  outputRunID = id;
+  outputOffset = 0;
+  outputTail = "";
+  outputWritten = 0;
+  renderedPlaceholder = null;
+}
+
+// The API is a cursor, not a snapshot: each poll asks for the bytes after the
+// offset it last saw, so a long run is not re-shipped in full every 1.5 seconds.
+async function fetchOutput(id, offset) {
+  const response = await fetch(`/api/runs/${encodeURIComponent(id)}/output?offset=${offset}`);
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try { message = (await response.json()).error || message; } catch (_) {}
+    throw new Error(message);
+  }
+  return {
+    text: await response.text(),
+    start: Number(response.headers.get("X-Output-Start") ?? offset),
+    next: Number(response.headers.get("X-Output-Next") ?? offset),
+  };
+}
+
+function showPlaceholder(text) {
+  if (text === renderedPlaceholder) return;
+  replaceTerminal(text);
+  renderedPlaceholder = text;
+}
+
+async function loadOutput() {
+  const record = run();
+  const requestID = ++outputRequest;
+  $("#output-run-id").textContent = record?.id || "NO RUN SELECTED";
+  $("#tail-state").textContent = record?.status === "running" ? "LIVE TAIL" : "RUN RECORD";
+  if (!record) {
+    resetOutput("");
+    showPlaceholder("Select or start a run to inspect its output.");
+    return;
+  }
+  if (outputRunID !== record.id) {
+    resetOutput(record.id);
+    showPlaceholder(record.status === "running" ? "Waiting for live worker output…" : "Loading run output…");
+  }
+  try {
+    const slice = await fetchOutput(record.id, outputOffset);
+    if (requestID !== outputRequest || run()?.id !== record.id) return;
+    if (slice.start !== outputOffset) {
+      // The store capped the run and dropped what we were tailing; restart from
+      // the oldest bytes it still holds rather than splicing over a hole.
+      outputTail = "";
+      outputWritten = 0;
+      renderedPlaceholder = null;
+      clearTerminal();
+    }
+    outputOffset = slice.next;
+    if (slice.text) {
+      if (renderedPlaceholder !== null) {
+        renderedPlaceholder = null;
+        clearTerminal();
+      }
+      outputWritten += slice.text.length;
+      writeTerminal(slice.text, outputTail);
+      outputTail = slice.text;
+      return;
+    }
+    if (!outputWritten) {
+      showPlaceholder(record.error || (record.status === "running" ? "Waiting for live worker output…" : "Run did not emit output."));
+    }
+  } catch (error) {
+    if (requestID !== outputRequest || run()?.id !== record.id) return;
+    // A transient poll failure must not clear the terminal: the cursor has
+    // already moved past the rendered bytes, so a wiped tail could never be
+    // refilled. Keep the output, flag the stall where the tail state already
+    // lives, and let the next poll retry from the same offset.
+    if (outputWritten) {
+      $("#tail-state").textContent = "TAIL STALLED — RETRYING";
+      return;
+    }
+    showPlaceholder(error.message);
+  }
+}
+
+function fillChoices(selectedRepo = "", selectedRepository = "", preferredProvider = "", selectedModel = "", preferredEnvironment = "") {
+  const selectedEnvironment = state.choices.environments.includes(preferredEnvironment)
+    ? preferredEnvironment
+    : (state.choices.environments[0] || "");
+  $("#environment-grid").innerHTML = state.choices.environments.map((value) => {
+    const active = value === selectedEnvironment;
+    return `<button type="button" class="environment-option${active ? " active" : ""}" data-environment="${escapeAttribute(value)}" role="option" aria-selected="${active}"><span>CONFIGURED</span><strong>${escapeText(value.toUpperCase())}</strong><small>Reusable runtime<br/>from zotui config</small></button>`;
+  }).join("");
+  fillRepoChoices(selectedEnvironment, selectedRepo, selectedRepository);
+  const selectedProvider = state.choices.providers.includes(preferredProvider)
+    ? preferredProvider
+    : (state.choices.providers.find((provider) => state.choices.models?.[provider]?.includes(selectedModel)) || state.choices.providers[0] || "");
+  $("#provider-grid").innerHTML = state.choices.providers.map((value) => {
+    const active = value === selectedProvider;
+    return `<button type="button" class="choice${active ? " active" : ""}" data-provider="${escapeAttribute(value)}" role="option" aria-selected="${active}"><strong>${escapeText(value)}</strong><small>CONFIGURED PROVIDER</small></button>`;
+  }).join("");
+  fillModels(selectedProvider, selectedModel);
+  $("#environment-label").textContent = (selectedEnvironment || "NO ENVIRONMENT").toUpperCase();
+  bindChoiceButtons();
+}
+
+function fillRepoChoices(environment, preferredRepo = "", preferredRepository = "") {
+  const allowed = state.choices.repositoriesByEnvironment?.[environment] || {};
+  const repos = state.choices.repos.filter((value) => (allowed[value] || []).length > 0);
+  const selected = repos.includes(preferredRepo) ? preferredRepo : (repos[0] || "");
+  $("#repo").innerHTML = repos.length
+    ? repos.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`).join("")
+    : '<option value="">No repositories available</option>';
+  $("#repo").value = selected;
+  $("#repo").disabled = repos.length === 0;
+  $("#create-submit").disabled = repos.length === 0;
+  fillRepositories(preferredRepository, environment);
+}
+
+function fillModels(provider, preferred = "") {
+  const models = state.choices.models?.[provider] || [];
+  const selected = models.includes(preferred) ? preferred : (models[0] || "");
+  $("#model-grid").innerHTML = models.map((value) => {
+    const active = value === selected;
+    return `<button type="button" class="choice${active ? " active" : ""}" data-model="${escapeAttribute(value)}" role="option" aria-selected="${active}"><strong>${escapeText(value)}</strong><small>CONFIGURED MODEL</small></button>`;
+  }).join("");
+  $("#model").value = selected;
+  bindModelButtons();
+}
+
+function fillRepositories(preferred = "", environment = document.querySelector("[data-environment].active")?.dataset.environment) {
+  const connection = $("#repo").value;
+  const repositories = state.choices.repositoriesByEnvironment?.[environment]?.[connection] || [];
+  const select = $("#repository");
+  const label = $("#repository-label");
+  const hint = $("#repository-hint");
+
+  if (repositories.length) {
+    const options = repositories.length > 1 ? ['<option value="">Select a repository…</option>'] : [];
+    options.push(...repositories.map((value) => `<option value="${escapeAttribute(value)}">${escapeText(value)}</option>`));
+    select.innerHTML = options.join("");
+    select.hidden = false;
+    select.disabled = false;
+    label.htmlFor = "repository";
+    select.value = repositories.includes(preferred) ? preferred : (repositories.length === 1 ? repositories[0] : "");
+    hint.textContent = repositories.length === 1
+      ? `Selected automatically from ${connection}.`
+      : `Choose one of ${repositories.length} repositories available through ${connection}.`;
+    return;
+  }
+
+  select.innerHTML = '<option value="">No repositories allowed on this environment</option>';
+  select.hidden = false;
+  select.disabled = true;
+  label.htmlFor = "repository";
+  hint.textContent = environment
+    ? `No configured repositories are allowed on ${environment}.`
+    : "Choose an environment first.";
+}
+
+function repositoryValue() {
+  return $("#repository").value;
+}
+
+function bindChoiceButtons() {
+  document.querySelectorAll("[data-environment]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll("[data-environment]").forEach((item) => {
+      item.classList.toggle("active", item === button);
+      item.setAttribute("aria-selected", item === button);
+    });
+    $("#environment-label").textContent = button.dataset.environment.toUpperCase();
+    fillRepoChoices(button.dataset.environment, $("#repo").value, repositoryValue());
+  }));
+  document.querySelectorAll("[data-provider]").forEach((button) => button.addEventListener("click", () => {
+    choose("[data-provider]", "provider", button.dataset.provider);
+    fillModels(button.dataset.provider);
+  }));
+}
+
+function bindModelButtons() {
+  document.querySelectorAll("[data-model]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll("[data-model]").forEach((item) => {
+      item.classList.toggle("active", item === button);
+      item.setAttribute("aria-selected", item === button);
+    });
+    $("#model").value = button.dataset.model;
+  }));
+}
+
+function choose(selector, dataName, value) {
+  const buttons = [...document.querySelectorAll(selector)];
+  buttons.forEach((button) => {
+    const active = button.dataset[dataName] === value;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active);
+  });
+}
+
+function openCreate() {
+  editingID = "";
+  fillChoices();
+  $("#dialog-kicker").textContent = "Provision autonomous runtime";
+  $("#dialog-title").textContent = "Create ZOT worker_";
+  $("#create-submit").textContent = "Create worker";
+  $("#edit-delete").hidden = true;
+  $("#instance-name").value = "";
+  $("#objective").value = "";
+  $("#max-iterations").value = String(state.choices.defaultMaxIterations ?? 1000000);
+  schedule = { cron: "", timezone: "UTC", runtimeMinutes: 90 };
+  updateScheduleSummary();
+  $("#create-dialog").showModal();
+}
+
+function openEdit() {
+  const item = worker();
+  if (!item) return;
+  editingID = item.id;
+  fillChoices(item.repo, item.repository, item.provider, item.model, item.environment);
+  $("#dialog-kicker").textContent = `Update ${item.id} · history retained`;
+  $("#dialog-title").textContent = "Edit ZOT worker_";
+  $("#create-submit").textContent = "Save worker";
+  const deleteButton = $("#edit-delete");
+  const deleteBlocked = Boolean(activeRun(item));
+  deleteButton.hidden = false;
+  deleteButton.disabled = deleteBlocked;
+  deleteButton.title = deleteBlocked ? "Stop the active run before deleting this worker" : "Delete this worker";
+  $("#instance-name").value = item.name;
+  $("#objective").value = item.mission;
+  $("#max-iterations").value = item.maxIterations;
+  schedule = { ...item.schedule };
+  updateScheduleSummary();
+  $("#create-dialog").showModal();
+}
+
+async function saveWorker(event) {
+  event.preventDefault();
+  const environment = document.querySelector("[data-environment].active")?.dataset.environment;
+  const payload = {
+    name: $("#instance-name").value,
+    repo: $("#repo").value,
+    repository: repositoryValue(),
+    environment,
+    provider: document.querySelector("[data-provider].active")?.dataset.provider,
+    model: $("#model").value,
+    mission: $("#objective").value,
+    maxIterations: Number($("#max-iterations").value),
+    schedule,
+  };
+  try {
+    await request(editingID ? `/api/workers/${editingID}` : "/api/workers", { method: editingID ? "PUT" : "POST", body: JSON.stringify(payload) });
+    $("#create-dialog").close();
+    showToast(editingID ? "WORKER UPDATED" : "WORKER REGISTERED", payload.name.toUpperCase());
+    await refresh({ quiet: false });
+  } catch (error) { showToast("SAVE FAILED", error.message); }
+}
+
+async function startRun() {
+  if (!worker()) return;
+  try {
+    const created = await request(`/api/workers/${worker().id}/runs`, { method: "POST" });
+    await refresh({ quiet: false });
+    const index = worker()?.runs.findIndex((record) => record.id === created.id) ?? -1;
+    if (index >= 0) {
+      selectedRun = index;
+      render();
+    }
+  } catch (error) { showToast("LAUNCH FAILED", error.message); }
+}
+
+async function pauseResume() {
+  const record = activeRun();
+  if (!record) return;
+  const action = record.status === "paused" ? "resume" : "pause";
+  try {
+    await request(`/api/runs/${record.id}/${action}`, { method: "POST" });
+    await refresh({ quiet: false });
+  } catch (error) { showToast(`${action.toUpperCase()} FAILED`, error.message); }
+}
+
+async function stopRun() {
+  const record = activeRun();
+  if (!record) return;
+  try {
+    await request(`/api/runs/${record.id}/stop`, { method: "POST" });
+    await refresh({ quiet: false });
+  } catch (error) { showToast("STOP FAILED", error.message); }
+}
+
+function updateScheduleSummary() {
+  const configured = Boolean(schedule.cron);
+  $("#schedule-label").textContent = configured ? "SCHEDULED" : "NO SCHEDULE";
+  $("#schedule-cron").textContent = configured ? schedule.cron : "Not configured";
+  $("#schedule-human").textContent = configured ? schedule.cron : "Starts manually";
+  $("#schedule-meta").textContent = configured ? `${schedule.timezone} · ${schedule.runtimeMinutes} minute limit` : "Open to add a cron schedule";
+  $("#open-schedule-dialog").querySelector("i").textContent = configured ? "EDIT ↗" : "ADD ↗";
+}
+
+function openSchedule() {
+  $("#cron-expression").value = schedule.cron || "0 */4 * * *";
+  $("#cron-timezone").value = schedule.timezone || "UTC";
+  $("#cron-runtime").value = schedule.runtimeMinutes || 90;
+  $("#schedule-clear").hidden = !schedule.cron;
+	updateCronPreview();
+  $("#schedule-dialog").showModal();
+}
+
+function updateCronPreview() {
+	$("#cron-description").textContent = $("#cron-expression").value.trim() || "No expression";
+	$("#cron-next").textContent = `${$("#cron-timezone").value} · ${$("#cron-runtime").value} minute runtime limit`;
+}
+
+function applySchedule() {
+  schedule = { cron: $("#cron-expression").value.trim(), timezone: $("#cron-timezone").value, runtimeMinutes: Number($("#cron-runtime").value) };
+  updateScheduleSummary();
+  $("#schedule-dialog").close();
+}
+
+function showToast(label, message) {
+  $("#toast small").textContent = label;
+  $("#toast-result").textContent = message;
+  $("#toast").classList.add("show");
+  setTimeout(() => $("#toast").classList.remove("show"), 3600);
+}
+
+function escapeText(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+}
+function escapeAttribute(value) { return escapeText(value); }
+
+$("#new-instance").addEventListener("click", openCreate);
+$("#edit-worker").addEventListener("click", openEdit);
+$("#edit-delete").addEventListener("click", () => requestDelete(editingID));
+$("#repo").addEventListener("change", () => fillRepositories());
+$("#create-form").addEventListener("submit", saveWorker);
+$("#dialog-close").addEventListener("click", () => $("#create-dialog").close());
+$("#dialog-cancel").addEventListener("click", () => $("#create-dialog").close());
+$("#run-start").addEventListener("click", startRun);
+$("#run-pause").addEventListener("click", pauseResume);
+$("#run-stop").addEventListener("click", stopRun);
+$("#view-topology").addEventListener("click", () => showToast("PR VIEW UNAVAILABLE", "Run metadata does not expose pull requests yet."));
+$("#open-schedule-dialog").addEventListener("click", openSchedule);
+$("#schedule-apply").addEventListener("click", applySchedule);
+$("#schedule-clear").addEventListener("click", () => { schedule = { cron: "", timezone: "UTC", runtimeMinutes: 0 }; updateScheduleSummary(); $("#schedule-dialog").close(); });
+$("#schedule-dialog-close").addEventListener("click", () => $("#schedule-dialog").close());
+$("#schedule-cancel").addEventListener("click", () => $("#schedule-dialog").close());
+$("#delete-form").addEventListener("submit", confirmDelete);
+$("#delete-dialog-close").addEventListener("click", () => $("#delete-dialog").close());
+$("#delete-cancel").addEventListener("click", () => $("#delete-dialog").close());
+$("#delete-dialog").addEventListener("close", () => { deletingID = ""; });
+$("#generate-cron").addEventListener("click", () => showToast("AI SCHEDULE UNAVAILABLE", "Enter the cron expression directly for now."));
+$("#cron-expression").addEventListener("input", updateCronPreview);
+$("#cron-timezone").addEventListener("change", updateCronPreview);
+$("#cron-runtime").addEventListener("input", updateCronPreview);
+$("#cron-direct-tab").addEventListener("click", () => {
+	$("#cron-direct-panel").hidden = false; $("#cron-ai-panel").hidden = true;
+	$("#cron-direct-tab").classList.add("active"); $("#cron-ai-tab").classList.remove("active");
+	$("#cron-direct-tab").setAttribute("aria-selected", "true"); $("#cron-ai-tab").setAttribute("aria-selected", "false");
+});
+$("#cron-ai-tab").addEventListener("click", () => {
+	$("#cron-direct-panel").hidden = true; $("#cron-ai-panel").hidden = false;
+	$("#cron-ai-tab").classList.add("active"); $("#cron-direct-tab").classList.remove("active");
+	$("#cron-ai-tab").setAttribute("aria-selected", "true"); $("#cron-direct-tab").setAttribute("aria-selected", "false");
+});
+$("#create-dialog").addEventListener("close", () => { if ($("#schedule-dialog").open) $("#schedule-dialog").close(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() === "n" && !dialogOpen()) openCreate();
+  if (event.key.toLowerCase() === "r" && !dialogOpen()) startRun();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if ($("#delete-dialog").open) $("#delete-dialog").close();
+    else if ($("#schedule-dialog").open) $("#schedule-dialog").close();
+    else if ($("#create-dialog").open) $("#create-dialog").close();
+  }
+});
+
+await initTerminal();
+await refresh({ quiet: false });
+poll = setInterval(() => refresh(), 1500);
+addEventListener("beforeunload", () => clearInterval(poll));

@@ -34,7 +34,7 @@ type model struct {
 	appName  string
 	task     string
 	model    string
-	backend  string
+	provider string
 	workdir  string
 	showDiff bool
 
@@ -77,7 +77,7 @@ type model struct {
 	elapsed   time.Duration
 }
 
-func newModel(appName, task, modelName, backend, workdir string, showDiff bool) model {
+func newModel(appName, task, modelName, provider, workdir string, showDiff bool) model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(colYellow)
@@ -86,7 +86,7 @@ func newModel(appName, task, modelName, backend, workdir string, showDiff bool) 
 		appName:    appName,
 		task:       task,
 		model:      modelName,
-		backend:    backend,
+		provider:   provider,
 		workdir:    workdir,
 		showDiff:   showDiff,
 		spinner:    sp,
@@ -204,9 +204,6 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 
 	case agent.ToolCallStartEvent:
 		m.flushPending()
-		if e.Name == "exit" {
-			return // The outcome is shown by AgentExitEvent instead.
-		}
 		m.toolCount++
 		if e.Name == "write" || e.Name == "edit" {
 			m.fileEdits++
@@ -241,10 +238,18 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 		m.exitCode = e.Code
 		m.exitMsg = e.Message
 		m.flushPending()
-		if e.Code == 0 {
+		switch {
+		case e.Code == 0:
 			m.status = statusDone
 			m.appendEntry("\n" + okStyle.Render("✓ done") + "  " + taskStyle.Render(e.Message))
-		} else {
+
+		case e.Reason == agent.ReasonFailed:
+			// the model reached a conclusion and the conclusion is "no" - an
+			// outcome, not a malfunction, so it does not get a process exit code
+			m.status = statusFailed
+			m.appendEntry("\n" + errStyle.Render("✗ failed") + "  " + taskStyle.Render(e.Message))
+
+		default:
 			m.status = statusFailed
 			m.appendEntry("\n" + errStyle.Render(fmt.Sprintf("✗ exited (code %d)", e.Code)) + "  " + taskStyle.Render(e.Message))
 		}
@@ -397,10 +402,10 @@ func (m model) badge() string {
 // KnownStats is every field the header meta bar can show. A caller's stat list
 // (Meta.Stats / ui.stats) is validated against it, and new stats are added here
 // as they arrive.
-var KnownStats = []string{"backend", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
+var KnownStats = []string{"provider", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
 
 // DefaultStats is the field set and order used when no stats are configured.
-var DefaultStats = []string{"backend", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
+var DefaultStats = []string{"provider", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
 
 // IsKnownStat reports whether name is a renderable meta-bar field.
 func IsKnownStat(name string) bool {
@@ -436,14 +441,14 @@ func (m model) metaBar() string {
 	// Every renderable field, keyed by its stat name. The keys must match
 	// KnownStats (a test guards this).
 	segments := map[string]string{
-		"backend": seg("backend", m.backend, metaBackend),
-		"model":   seg("model", m.model, metaModel),
-		"dir":     seg("dir", truncate(m.workdir, 36), metaStyle),
-		"iter":    seg("iter", counted(m.iteration, m.maxIterations), metaCount),
-		"tools":   seg("tools", counted(m.toolCount, m.maxCalls), metaTools),
-		"edits":   seg("edits", fmt.Sprintf("%d", m.fileEdits), metaEdits),
-		"elapsed": seg("elapsed", elapsed, metaStyle),
-		"tokens":  seg("tokens", fmt.Sprintf("↑%s ↓%s", fmtTokens(m.inputTokens), fmtTokens(m.outputTokens)), metaModel),
+		"provider": seg("provider", m.provider, metaProvider),
+		"model":    seg("model", m.model, metaModel),
+		"dir":      seg("dir", truncate(m.workdir, 36), metaStyle),
+		"iter":     seg("iter", counted(m.iteration, m.maxIterations), metaCount),
+		"tools":    seg("tools", counted(m.toolCount, m.maxCalls), metaTools),
+		"edits":    seg("edits", fmt.Sprintf("%d", m.fileEdits), metaEdits),
+		"elapsed":  seg("elapsed", elapsed, metaStyle),
+		"tokens":   seg("tokens", fmt.Sprintf("↑%s ↓%s", fmtTokens(m.inputTokens), fmtTokens(m.outputTokens)), metaModel),
 	}
 
 	fields := m.stats

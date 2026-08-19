@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // sseServer stands in for a provider. Each element of turns is one complete
@@ -54,7 +56,13 @@ func stopFrame() string {
 // successFrame records a successful outcome, which is the only way a run ends
 // cleanly: settlement is unconditional.
 func successFrame(summary string) string {
-	return toolFrame("done_1", "_success", fmt.Sprintf(`{"summary":%q}`, summary))
+	return toolFrame("done_1", "success", fmt.Sprintf(`{"summary":%q}`, summary))
+}
+
+// failureFrame records the model giving up: it reached a conclusion, and the
+// conclusion is that the task cannot be done.
+func failureFrame(reason string) string {
+	return toolFrame("done_1", "failure", fmt.Sprintf(`{"reason":%q}`, reason))
 }
 
 // toolFrame requests a tool call.
@@ -138,6 +146,34 @@ func TestExecuteWithToolsPlainAnswer(t *testing.T) {
 	}
 }
 
+// A run the model declared a failure must exit non-zero. It used to share the
+// success tool's stop reason, so `zot "…" && deploy` treated "I could not do
+// this" as a green light.
+func TestExecuteWithToolsFailureExitsNonZero(t *testing.T) {
+	server := sseServer(t,
+		[]string{failureFrame("cannot reach the host")},
+	)
+
+	defer server.Close()
+
+	events, errs := ExecuteWithTools(context.Background(), newTestClient(t, server),
+		ExecuteWithToolsOptions{Text: []string{"hi"}})
+
+	_, exit := collect(t, events, errs)
+
+	if exit.Code == 0 {
+		t.Errorf("exit code = 0 for a declared failure, want non-zero")
+	}
+
+	if exit.Reason != "failed" {
+		t.Errorf("exit reason = %q, want failed", exit.Reason)
+	}
+
+	if exit.Message != "cannot reach the host" {
+		t.Errorf("exit message = %q, want the failure reason", exit.Message)
+	}
+}
+
 func TestExecuteWithToolsRunsATool(t *testing.T) {
 	server := sseServer(t,
 		[]string{toolFrame("call_1", "echo", `{"value":"ping"}`)},
@@ -199,7 +235,7 @@ func TestExecuteWithToolsRunsATool(t *testing.T) {
 func TestSettleModeIgnoresProse(t *testing.T) {
 	server := sseServer(t,
 		[]string{textFrame("All done, the task is completed."), stopFrame()},
-		[]string{toolFrame("call_1", "_success", `{"summary":"actually finished"}`)},
+		[]string{toolFrame("call_1", "success", `{"summary":"actually finished"}`)},
 	)
 
 	defer server.Close()
@@ -434,7 +470,7 @@ func TestTerminalToolsAreAlwaysOffered(t *testing.T) {
 		seen[name] = true
 	}
 
-	for _, want := range []string{"_success", "_failure"} {
+	for _, want := range []string{"success", "failure"} {
 		if !seen[want] {
 			t.Errorf("%s was not offered to the model; offered: %v", want, offered)
 		}
@@ -737,3 +773,212 @@ func (failingRecorder) RecordEvent(_, _, _ string, _ int) error { return errTest
 func (failingRecorder) RecordResult(Summary) error              { return errTest }
 
 var errTest = errors.New("disk full")
+
+// lockedRecorder is a recordingRecorder that can be read while the run is still
+// going, which is the only way to see what a crash would have left behind.
+type lockedRecorder struct {
+	mu    sync.Mutex
+	inner recordingRecorder
+}
+
+func (r *lockedRecorder) RecordMessage(message Message) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.inner.RecordMessage(message)
+}
+
+func (r *lockedRecorder) RecordEvent(kind, tool, text string, iteration int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.inner.RecordEvent(kind, tool, text, iteration)
+}
+
+func (r *lockedRecorder) RecordReset() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.inner.RecordReset()
+}
+
+func (r *lockedRecorder) RecordResult(summary Summary) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.inner.RecordResult(summary)
+}
+
+func (r *lockedRecorder) snapshot() []Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]Message(nil), r.inner.messages...)
+}
+
+// The session log promises that "a crashed run still leaves everything up to the
+// crash" and that replaying the messages is enough to continue. The conversation
+// was written only once the run had ended, so a run killed at iteration 500 left
+// a log holding the seed and nothing else, and --resume started the task again
+// from scratch - discarding hours of work in exactly the case the log exists for.
+func TestTheConversationIsRecordedAsTheRunGoes(t *testing.T) {
+	recorder := &lockedRecorder{}
+
+	// captured from inside the second tool call: what the log would hold if the
+	// process died right there
+	var midRun []Message
+
+	round := 0
+
+	tools := map[string]ToolDefinition{
+		"echo": {
+			Description: "echo",
+			Parameters:  map[string]any{"type": "object"},
+			Handler: func(context.Context, map[string]any) (any, error) {
+				round++
+
+				if round == 2 {
+					midRun = recorder.snapshot()
+				}
+
+				return "ok", nil
+			},
+		},
+	}
+
+	server := sseServer(t,
+		[]string{toolFrame("call_1", "echo", `{"value":"one"}`)},
+		[]string{toolFrame("call_2", "echo", `{"value":"two"}`)},
+		[]string{successFrame("finished")},
+	)
+
+	defer server.Close()
+
+	events, errs := ExecuteWithTools(context.Background(), newTestClient(t, server),
+		ExecuteWithToolsOptions{Text: []string{"go"}, Tools: tools, Recorder: recorder})
+
+	collect(t, events, errs)
+
+	if round < 2 {
+		t.Fatalf("the run made %d tool rounds, want at least 2", round)
+	}
+
+	// the seed is one user message; anything beyond it is work that survived
+	if len(midRun) <= 1 {
+		t.Fatalf("mid-run the log held %d messages, want the first round's work already durable", len(midRun))
+	}
+
+	var sawActivity bool
+
+	for _, message := range midRun {
+		if message.Type == TypeActivity {
+			sawActivity = true
+		}
+	}
+
+	if !sawActivity {
+		t.Error("the first round's tool call and result were not in the log a crash would have left")
+	}
+}
+
+// endlessToolRounds is a run that never finishes on its own: the (repeated)
+// last scripted turn keeps requesting the same tool, so the run is still going
+// whenever a cancellation test needs it to be.
+func endlessToolRounds(t *testing.T) (*httptest.Server, Tools) {
+	t.Helper()
+
+	server := sseServer(t, []string{toolFrame("call_1", "echo", `{}`)})
+
+	tools := Tools{
+		"echo": {
+			Description: "echo",
+			Parameters:  map[string]any{"type": "object"},
+			Handler: func(context.Context, map[string]any) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+
+	return server, tools
+}
+
+// The events channel is documented as streaming until the run ends - but an
+// embedder that cancels the run and walks away from the channel must not leave
+// the run goroutine parked forever on a send nobody will ever receive. The
+// goroutine ending is observable as errs closing, which it only does on return.
+func TestAnAbandonedConsumerDoesNotLeakTheRun(t *testing.T) {
+	server, tools := endlessToolRounds(t)
+
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	defer cancel()
+
+	events, errs := ExecuteWithTools(ctx, newTestClient(t, server),
+		ExecuteWithToolsOptions{Text: []string{"go"}, Tools: tools})
+
+	// the run is genuinely under way before the consumer walks away
+	<-events
+
+	cancel()
+
+	// the consumer never reads events again; the run goroutine must still end
+	finished := make(chan struct{})
+
+	go func() {
+		for range errs {
+			// a cancelled run reports its context error here - expected
+		}
+
+		close(finished)
+	}()
+
+	select {
+	case <-finished:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the run goroutine is still parked on an event send nobody will receive")
+	}
+}
+
+// The flip side of not leaking: a consumer that keeps draining - the documented
+// contract, and what the TUI does - must still receive the exit event when the
+// run is cancelled. Cancellation changes how the run ends, never whether that
+// ending is reported.
+func TestACancelledRunStillDeliversTheExitEvent(t *testing.T) {
+	server, tools := endlessToolRounds(t)
+
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	defer cancel()
+
+	events, errs := ExecuteWithTools(ctx, newTestClient(t, server),
+		ExecuteWithToolsOptions{Text: []string{"go"}, Tools: tools})
+
+	var (
+		sawExit bool
+		first   = true
+	)
+
+	for event := range events {
+		if first {
+			first = false
+
+			cancel()
+		}
+
+		if _, ok := event.(AgentExitEvent); ok {
+			sawExit = true
+		}
+	}
+
+	for range errs {
+		// the cancellation surfaces here too; the exit event is what is under test
+	}
+
+	if !sawExit {
+		t.Fatal("a draining consumer must still receive the exit event after cancellation")
+	}
+}

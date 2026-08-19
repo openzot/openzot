@@ -120,12 +120,34 @@ type RunawayEvent struct {
 
 func (RunawayEvent) agentEventType() string { return "runaway" }
 
+// Stop reasons, as they appear in ResultAgentEvent.EndReason and
+// AgentExitEvent.Reason. A caller branching on how a run ended compares against
+// these rather than against a string literal.
+//
+// ReasonSettled and ReasonStop are the endings that exit 0. ReasonFailed is the
+// model's own verdict that the task cannot be done - a conclusion, not a
+// malfunction, but not a success either; everything else means a guard cut the
+// run short.
+const (
+	ReasonSettled       = string(loop.StopSettled)
+	ReasonFailed        = string(loop.StopFailed)
+	ReasonStop          = string(loop.StopStop)
+	ReasonIterations    = string(loop.StopIterations)
+	ReasonCalls         = string(loop.StopCalls)
+	ReasonTime          = string(loop.StopTime)
+	ReasonContinuations = string(loop.StopContinuations)
+	ReasonCycle         = string(loop.StopCycle)
+	ReasonEmpty         = string(loop.StopEmpty)
+	ReasonUnsettled     = string(loop.StopUnsettled)
+	ReasonAborted       = string(loop.StopAborted)
+	ReasonError         = string(loop.StopError)
+)
+
 // ResultAgentEvent carries the final answer and why the run ended.
 type ResultAgentEvent struct {
 	Text string
 
-	// EndReason is the stop reason: "settled", "stop", "iterations", "calls",
-	// "cycle", "empty", "unsettled", "aborted", "error".
+	// EndReason is the stop reason, one of the Reason constants above.
 	EndReason string
 }
 
@@ -133,12 +155,13 @@ func (ResultAgentEvent) agentEventType() string { return "result" }
 
 // AgentExitEvent is always the last event.
 type AgentExitEvent struct {
-	// Code is 0 when the agent reached a conclusion, non-zero when the run was
-	// cut short by a budget or a failure.
+	// Code is 0 when the agent concluded the task was done, non-zero when it
+	// declared the task impossible or a guard cut the run short.
 	Code int
 
-	// Reason is the machine-readable stop reason: "settled", "stop",
-	// "iterations", "calls", "cycle", "empty", "unsettled", "aborted", "error".
+	// Reason is the machine-readable stop reason, one of the Reason constants
+	// above. It is what separates a declared failure from a budget cut, which
+	// Code alone cannot express.
 	Reason string
 
 	// Message explains the ending in prose.

@@ -6,6 +6,7 @@ import (
 	"github.com/openzot/openzot/internal/buildinfo"
 	"github.com/openzot/openzot/internal/config"
 	"github.com/openzot/openzot/internal/session"
+	"github.com/openzot/openzot/internal/version"
 	"github.com/spf13/pflag"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -290,26 +292,6 @@ func TestFlagsAfterThePositionalTaskAreParsed(t *testing.T) {
 	}
 }
 
-func TestStringSliceFlag(t *testing.T) {
-	var slice stringSlice
-
-	if err := slice.Set(" first "); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	if err := slice.Set("second"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	if len(slice) != 2 || slice[0] != "first" || slice[1] != "second" {
-		t.Errorf("slice = %v, want trimmed and accumulated", slice)
-	}
-
-	if got := slice.String(); got != "first,second" {
-		t.Errorf("String = %q", got)
-	}
-}
-
 // Command-line values win over the file and the environment - but a boolean that
 // was never passed must not overwrite one the config enabled.
 func TestApplyOverrides(t *testing.T) {
@@ -325,13 +307,14 @@ func TestApplyOverrides(t *testing.T) {
 		cfg := base()
 
 		applyOverrides(&cfg, overrides{
-			Backend:       "groq",
+			Provider:      "groq",
 			Model:         "glm-5.2",
 			MaxIterations: 12,
+			Color:         "always",
 		})
 
-		if cfg.DefaultBackend != "groq" {
-			t.Errorf("backend = %q", cfg.DefaultBackend)
+		if cfg.DefaultProvider != "groq" {
+			t.Errorf("provider = %q", cfg.DefaultProvider)
 		}
 
 		if cfg.Agent.Model != "glm-5.2" {
@@ -340,6 +323,10 @@ func TestApplyOverrides(t *testing.T) {
 
 		if cfg.Agent.MaxIterations != 12 {
 			t.Errorf("max iterations = %d", cfg.Agent.MaxIterations)
+		}
+
+		if cfg.UI.Color != "always" {
+			t.Errorf("color = %q", cfg.UI.Color)
 		}
 	})
 
@@ -516,7 +503,7 @@ func TestRunEndToEnd(t *testing.T) {
 		frames := [][]string{
 			{`{"choices":[{"delta":{"content":"on it"}}]}`,
 				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
-			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`},
+			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`},
 		}
 
 		index := turn
@@ -546,11 +533,11 @@ agent:
 ui:
   plain: true
 
-default_backend: local
+default_provider: local
 
-backends:
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)
@@ -573,13 +560,80 @@ backends:
 	}
 }
 
+// An explicitly passed --max-iterations is the operator's last word. A per-model
+// max_iterations is applied when the run resolves - after the command line has
+// been layered into the config - so the file used to quietly win: `zot
+// --max-iterations 4` against a model capped at 1 stopped after a single
+// iteration. Counting provider calls is the only honest way to ask which limit
+// the engine enforced.
+func TestExplicitMaxIterationsBeatsAPerModelCap(t *testing.T) {
+	t.Setenv("ZOT_SESSION_DIR", t.TempDir())
+
+	var requests atomic.Int32
+
+	// never finishes on its own: every turn is a non-terminal tool call, so the
+	// run ends only when it runs out of iterations
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		step := requests.Add(1)
+
+		fmt.Fprintf(w, "data: %s\n\n", fmt.Sprintf(
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c%d","type":"function","function":{"name":"progress","arguments":"{\"current\":\"step %d\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			step, step))
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
+agent:
+  model: capped
+  max_iterations: 9
+ui:
+  plain: true
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+    models:
+      capped:
+        model: test-model
+        max_iterations: 1
+`, server.URL)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--max-iterations", "4", "a task")
+
+	// exhausting the iteration budget is how this run ends, so the error is the
+	// expected outcome - what matters is the budget it exhausted
+	_, err := captureStdout(t, run)
+	if err == nil {
+		t.Fatal("a run that never records an outcome must end on its iteration cap")
+	}
+
+	if !strings.Contains(err.Error(), "stopped after 4 iterations") {
+		t.Errorf("run stopped with %v, want the command-line cap of 4 to be the one enforced", err)
+	}
+
+	if got := requests.Load(); got != 4 {
+		t.Errorf("the run made %d provider calls, want the 4 the command line allowed", got)
+	}
+}
+
 func TestRunRejectsAnInvalidConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 
-	// a backend that names no known provider and has no endpoint
+	// a provider that names no known driver and has no endpoint
 	if err := os.WriteFile(configPath, []byte(`
-default_backend: nowhere
-backends:
+default_provider: nowhere
+providers:
   nowhere: {}
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -588,7 +642,7 @@ backends:
 	withArgs(t, "--config", configPath, "a task")
 
 	if err := run(); err == nil {
-		t.Error("an unreachable backend must fail before any request")
+		t.Error("an unreachable provider must fail before any request")
 	}
 }
 
@@ -600,18 +654,205 @@ func TestRunRejectsAMissingConfigFile(t *testing.T) {
 	}
 }
 
-// captureStdout collects what a function prints.
+// withReleaseAPI makes the process look like a released binary of the given
+// version and points the update check at a local server, so the wiring can be
+// exercised without reaching GitHub.
+func withReleaseAPI(t *testing.T, current string, handler http.HandlerFunc) {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
+
+	originalVersion, originalAPI := version.Version, version.APIBase
+
+	version.Version, version.APIBase = current, server.URL
+
+	t.Cleanup(func() {
+		version.Version, version.APIBase = originalVersion, originalAPI
+
+		server.Close()
+	})
+}
+
+// A released binary that is behind has to say so, and the notice belongs on
+// stderr: stdout is the run's transcript, and a nag folded into it would corrupt
+// whatever is reading the output.
+func TestAnOutdatedReleaseIsReportedOnStderr(t *testing.T) {
+	withReleaseAPI(t, "v1.0.0", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"tag_name":"v2.0.0","html_url":"https://example.com/releases/v2.0.0"}`)
+	})
+
+	notice, err := captureStderr(t, func() error {
+		report := checkForUpdate()
+
+		report(os.Stderr)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"v1.0.0", "v2.0.0", "https://example.com/releases/v2.0.0"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("the update notice is missing %q:\n%s", want, notice)
+		}
+	}
+}
+
+// The check is a convenience that must never cost the operator anything: an
+// up-to-date build must not nag, a development build must not call GitHub at
+// all, and a failed lookup must be swallowed - zot runs unattended, and there is
+// nobody there to act on "the update check failed".
+func TestTheUpdateCheckStaysSilentWhenItHasNothingToSay(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		handler http.HandlerFunc
+	}{
+		{
+			name:    "already on the latest release",
+			current: "v2.0.0",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, `{"tag_name":"v2.0.0","html_url":"https://example.com/releases/v2.0.0"}`)
+			},
+		},
+		{
+			name:    "a rate-limited api",
+			current: "v1.0.0",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+			},
+		},
+		{
+			name:    "an unparseable response",
+			current: "v1.0.0",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprint(w, "not json")
+			},
+		},
+		{
+			name:    "a development build",
+			current: "dev",
+			handler: func(_ http.ResponseWriter, _ *http.Request) {
+				t.Error("a development build must not call the release API at all")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withReleaseAPI(t, test.current, test.handler)
+
+			notice, err := captureStderr(t, func() error {
+				report := checkForUpdate()
+
+				report(os.Stderr)
+
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if notice != "" {
+				t.Errorf("wrote %q, want nothing", notice)
+			}
+		})
+	}
+}
+
+// The check has to be wired into a real run, on the far side of it: the notice
+// only reaches the operator if `zot "do X"` reports it once the viewer has
+// released the screen.
+func TestARunReportsAnAvailableUpdate(t *testing.T) {
+	t.Setenv("ZOT_SESSION_DIR", t.TempDir())
+
+	withReleaseAPI(t, "v1.0.0", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"tag_name":"v9.9.9","html_url":"https://example.com/releases/v9.9.9"}`)
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		fmt.Fprintf(w, "data: %s\n\n",
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(configPath, fmt.Appendf(nil, `
+agent:
+  model: test-model
+ui:
+  plain: true
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, server.URL), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "a task")
+
+	var transcript string
+
+	notice, err := captureStderr(t, func() error {
+		var runErr error
+
+		transcript, runErr = captureStdout(t, run)
+
+		return runErr
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !strings.Contains(notice, "v9.9.9") {
+		t.Errorf("the run did not report the available update:\n%s", notice)
+	}
+
+	// and the transcript is still only the transcript
+	if strings.Contains(transcript, "v9.9.9") {
+		t.Errorf("the update notice leaked into stdout:\n%s", transcript)
+	}
+}
+
+// captureStdout collects what a function prints to stdout.
 func captureStdout(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 
-	original := os.Stdout
+	return capture(t, &os.Stdout, fn)
+}
+
+// captureStderr collects what a function prints to stderr. Stdout and stderr are
+// worth telling apart: stdout is the transcript, stderr is where zot talks about
+// itself, and something that belongs on one must not leak onto the other.
+func captureStderr(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+
+	return capture(t, &os.Stderr, fn)
+}
+
+// capture redirects one of the process's standard streams for the duration of a
+// call and returns what was written to it.
+func capture(t *testing.T, stream **os.File, fn func() error) (string, error) {
+	t.Helper()
+
+	original := *stream
 
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	os.Stdout = write
+	*stream = write
 
 	done := make(chan string)
 
@@ -637,7 +878,7 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 
 	write.Close()
 
-	os.Stdout = original
+	*stream = original
 
 	return <-done, runErr
 }
@@ -653,7 +894,7 @@ func TestRunRecordsAndResumesASession(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -671,11 +912,11 @@ agent:
 ui:
   plain: true
 
-default_backend: local
+default_provider: local
 
-backends:
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)
@@ -781,7 +1022,10 @@ backends:
 }
 
 // Resuming with no new instruction continues the original brief, which is what
-// restarting an interrupted overnight run means.
+// restarting an interrupted overnight run means - so it is a normal invocation,
+// not a mistake. `zot --resume last` used to print the whole usage block to
+// stderr on its way to working correctly, because the empty-task check ran
+// before the session's objective was inherited.
 func TestResumeWithoutATaskReusesTheOriginal(t *testing.T) {
 	sessions := t.TempDir()
 
@@ -798,7 +1042,7 @@ func TestResumeWithoutATaskReusesTheOriginal(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -812,10 +1056,10 @@ agent:
   model: test-model
 ui:
   plain: true
-default_backend: local
-backends:
+default_provider: local
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)), 0o644); err != nil {
@@ -824,13 +1068,33 @@ backends:
 
 	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--resume", "last")
 
-	output, err := captureStdout(t, run)
+	var output string
+
+	diagnostics, err := captureStderr(t, func() error {
+		var runErr error
+
+		output, runErr = captureStdout(t, run)
+
+		return runErr
+	})
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, output)
 	}
 
 	if !strings.Contains(output, "the original brief") {
 		t.Errorf("the resumed run should carry the original brief:\n%s", output)
+	}
+
+	// the resume line is expected on stderr; the help text is not - printing it
+	// tells the operator their invocation was wrong when it was exactly right
+	if !strings.Contains(diagnostics, "resuming") {
+		t.Errorf("stderr should say which session is being resumed:\n%s", diagnostics)
+	}
+
+	for _, unwanted := range []string{"Usage:", "Commands:", "Examples:"} {
+		if strings.Contains(diagnostics, unwanted) {
+			t.Errorf("a resume with no new task printed the usage block (%q):\n%s", unwanted, diagnostics)
+		}
 	}
 }
 
@@ -853,7 +1117,7 @@ func TestNoSessionWritesNothing(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -867,10 +1131,10 @@ agent:
   model: test-model
 ui:
   plain: true
-default_backend: local
-backends:
+default_provider: local
+providers:
   local:
-    provider: custom
+    driver: custom
     base_url: %s
     api_key: test-key
 `, server.URL)), 0o644); err != nil {
@@ -906,7 +1170,9 @@ func TestSessionsListingWhenThereAreNone(t *testing.T) {
 	}
 }
 
-// A multi-line brief must not turn the listing into a wall of text.
+// A multi-line brief must not turn the listing into a wall of text - and
+// truncating it must not cut a character in half: byte slicing a task written in
+// CJK or carrying an emoji left a mangled rune in the `zot sessions` listing.
 func TestOneLine(t *testing.T) {
 	tests := []struct {
 		in    string
@@ -918,6 +1184,11 @@ func TestOneLine(t *testing.T) {
 		{in: strings.Repeat("x", 20), width: 10, want: strings.Repeat("x", 9) + "\u2026"},
 		{in: "  padded  ", width: 20, want: "padded"},
 		{in: "", width: 10, want: ""},
+		// twelve characters but thirty-six bytes: a byte-width cap would both
+		// truncate a string that fits and split the character it stopped inside
+		{in: "\u65e5\u672c\u8a9e\u306e\u30bf\u30b9\u30af\u8aac\u660e\u6587\u3067\u3059", width: 40, want: "\u65e5\u672c\u8a9e\u306e\u30bf\u30b9\u30af\u8aac\u660e\u6587\u3067\u3059"},
+		{in: "\u65e5\u672c\u8a9e\u306e\u30bf\u30b9\u30af\u8aac\u660e\u6587\u3067\u3059", width: 6, want: "\u65e5\u672c\u8a9e\u306e\u30bf\u2026"},
+		{in: strings.Repeat("\U0001F680", 5), width: 3, want: strings.Repeat("\U0001F680", 2) + "\u2026"},
 	}
 
 	for _, test := range tests {

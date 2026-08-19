@@ -60,6 +60,17 @@ type Options struct {
 	// Skills are rendered into the system prompt.
 	Skills []Skill
 
+	// OnConversation, when set, is called at each iteration boundary with the
+	// conversation as it then stands. It exists so a caller can persist the
+	// conversation as the run goes rather than only when it ends - the whole
+	// point of a session log is that a run killed at iteration 500 is resumable,
+	// which it is not if nothing was written down until iteration 500 finished.
+	//
+	// The engine rewrites its own history when it compacts, so the slice handed
+	// over is the current conversation, not a delta: a consumer that has kept the
+	// previous one must expect the prefix to change.
+	OnConversation func([]Message)
+
 	// MaxIterations, MaxContinuations, MaxCycles, MaxEmpties bound the run. Zero
 	// uses the corresponding default.
 	MaxIterations    int
@@ -74,6 +85,12 @@ type Options struct {
 	// MaxDuration bounds the wall-clock time of a run, checked at each iteration
 	// boundary. Zero is unbounded.
 	MaxDuration time.Duration
+
+	// RetryBackoff is the pause before the first retry of a retriable provider
+	// failure, doubling per consecutive retry up to MaxRetryBackoff. Zero uses
+	// DefaultRetryBackoff; negative disables the wait entirely, which only a test
+	// driving an outage should ask for.
+	RetryBackoff time.Duration
 
 	// MaxSettles enables settle mode when positive: the run finishes only when
 	// the model calls a terminal tool. This is what replaces deciding a task is
@@ -176,6 +193,7 @@ type Engine struct {
 	maxCycles        int
 	maxEmpties       int
 	maxSettles       int
+	retryBackoff     time.Duration
 	checkpoints      []int
 
 	compactStrategy     bool
@@ -251,8 +269,92 @@ func New(options Options) (*Engine, error) {
 		compactMinTokens:    pick(options.CompactMinTokens, DefaultCompactMinTokens),
 		compactMinMessages:  pick(options.CompactMinMessages, DefaultCompactMinMessages),
 		compactTriggerRatio: pickRatio(options.CompactTriggerRatio, DefaultCompactTriggerRatio),
-		inputBudget:         budget,
+		// @note negative means "no wait" and is stored raw, so a test driving an
+		// outage does not have to sleep through it. Zero takes the default.
+		retryBackoff: pickDuration(options.RetryBackoff, DefaultRetryBackoff),
+		inputBudget:  budget,
 	}, nil
+}
+
+// backoffFor is the pause before the attempt'th consecutive retry: base,
+// doubling per attempt, capped at MaxRetryBackoff - including a base that
+// already exceeds the cap, so a generous RetryBackoff cannot make the first
+// retry the longest wait of the run. A non-positive base means the caller asked
+// for no wait at all.
+func backoffFor(base time.Duration, attempt int) time.Duration {
+	if base <= 0 || attempt <= 0 {
+		return 0
+	}
+
+	delay := base
+
+	if delay >= MaxRetryBackoff {
+		return MaxRetryBackoff
+	}
+
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+
+		if delay >= MaxRetryBackoff {
+			return MaxRetryBackoff
+		}
+	}
+
+	return delay
+}
+
+// rateLimitWait is how long to sit out a rate limit: the larger of the delay
+// the provider advised and the ordinary backoff for this retry.
+//
+// The backoff is a floor, not just a fallback. A provider that keeps answering
+// 429 with "Retry-After: 0" (or a date already past) would otherwise be
+// hammered with instant retries - the exact tight loop the backoff exists to
+// prevent - while a genuine large advice still wins over a small backoff.
+//
+// The advice is capped. A run that waits out a real rate-limit window is doing
+// the right thing, but an unattended run must not be parked for hours by a
+// mistaken or hostile header, and no legitimate window needs longer than the cap.
+func rateLimitWait(advised time.Duration, ok bool, fallback time.Duration) time.Duration {
+	if !ok {
+		return fallback
+	}
+
+	if advised > MaxRateLimitWait {
+		advised = MaxRateLimitWait
+	}
+
+	if advised < fallback {
+		return fallback
+	}
+
+	return advised
+}
+
+// wait pauses for d, or until the run is cancelled - whichever comes first. It
+// does not report which: the caller loops back to the cancellation check at the
+// top of Run, so a cancelled wait ends the run there rather than in two places.
+func (e *Engine) wait(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
+// pickDuration returns value when it is set, and the fallback when it is zero.
+// A negative value is kept, meaning "explicitly none".
+func pickDuration(value, fallback time.Duration) time.Duration {
+	if value == 0 {
+		return fallback
+	}
+
+	return value
 }
 
 // nonNegative clamps a budget to zero, so a negative value means the same as
@@ -325,9 +427,9 @@ func (e *Engine) settleMode() bool {
 
 // Run drives the conversation to a conclusion, emitting events as it goes.
 //
-// The returned channel closes when the run ends; the final event carries the
-// Result. Events are delivered synchronously, so a slow consumer throttles the
-// run rather than dropping anything.
+// Run returns the Result; emit sees each event as it happens, and a nil emit is
+// allowed. Events are delivered synchronously on the calling goroutine, so a
+// slow consumer throttles the run rather than dropping anything.
 func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 	if emit == nil {
 		emit = func(Event) {}
@@ -346,9 +448,23 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 	// first turn reports, at which point the estimate stands in.
 	lastInputTokens := 0
 
+	// retries counts *consecutive* retriable provider failures, and is what the
+	// backoff keys off. Deliberately not budget.Continuations: that is a
+	// run-lifetime budget also spent by truncation recoveries and context-limit
+	// compactions, so keying the backoff off it would make an unrelated blip
+	// hours into a run start at an escalated wait - and never come back down.
+	// A successful turn resets this, so each new outage backs off from the base.
+	retries := 0
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return e.finish(messages, budget, StopAborted, "run cancelled", err)
+		}
+
+		// hand the conversation over before spending anything on the next turn,
+		// so what a crash leaves behind is everything the run has actually done
+		if e.options.OnConversation != nil {
+			e.options.OnConversation(messages)
 		}
 
 		// A time cap is checked at the iteration boundary, like every other
@@ -379,7 +495,18 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		// window fills, before the request is built - so the run keeps its early
 		// context as a summary rather than having the thread builder drop it. A
 		// no-op under the truncate strategy, or until the window is actually near.
-		messages = e.maybeCompact(ctx, messages, lastInputTokens, emit)
+		var compacted bool
+
+		messages, compacted = e.maybeCompact(ctx, messages, lastInputTokens, emit)
+
+		// the history just shrank; forget the pre-compaction usage so the next
+		// check re-evaluates on the smaller thread. Without this a turn that
+		// fails right after compacting - an error reports no usage of its own -
+		// leaves the stale over-threshold reading in place, and every retry
+		// compacts the already-compacted thread again.
+		if compacted {
+			lastInputTokens = 0
+		}
 
 		request, err := e.buildRequest(messages, tools)
 		if err != nil {
@@ -444,16 +571,44 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 				}
 			}
 
-			if provider.IsRetriable(err) && budget.Continuations < e.maxContinuations {
+			// A rate limit is recoverable, but on the provider's schedule rather
+			// than ours - which is why 429 is not IsRetriable. Waiting out the
+			// advised delay is the other half of that contract; without it a
+			// single throttle response ends an overnight run outright.
+			limited := provider.IsRateLimited(err)
+
+			if (limited || provider.IsRetriable(err)) && budget.Continuations < e.maxContinuations {
 				budget.Continuations++
+				retries++
 
 				emit(Event{Kind: EventRetry, Text: err.Error()})
+
+				// Space the retries out. Without this the continuation budget is
+				// spent in milliseconds, so a run dies to an outage it would have
+				// outlived by waiting - and the retries land on an endpoint that
+				// is already failing. Cancellation cuts the wait short; the check
+				// at the top of the loop then ends the run.
+				delay := backoffFor(e.retryBackoff, retries)
+
+				if limited {
+					// the advised delay is honoured, but the backoff stays a
+					// floor under it - "Retry-After: 0" must not turn into the
+					// instant-retry loop the backoff exists to prevent
+					advised, ok := provider.RetryAfter(err)
+					delay = rateLimitWait(advised, ok, delay)
+				}
+
+				e.wait(ctx, delay)
 
 				continue
 			}
 
 			return e.finish(messages, budget, StopError, "the provider failed", err)
 		}
+
+		// the provider answered: whatever outage the backoff was pacing is over,
+		// so the next one - if any - starts again from the base delay
+		retries = 0
 
 		// record what the model produced
 
@@ -493,7 +648,7 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		if len(turn.ToolCalls) > 0 {
 			var stop *Result
 
-			messages, stop = e.dispatch(ctx, messages, turn.ToolCalls, &budget, emit)
+			messages, stop = e.dispatch(ctx, messages, turn.ToolCalls, turn.ReasoningItems, &budget, emit)
 
 			if stop != nil {
 				return *stop
@@ -535,7 +690,7 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		}
 
 		// The model produced content but did not act. In settle mode that is not an
-		// ending: nudge it toward _success / _failure, up to max_settles.
+		// ending: nudge it toward success / failure, up to maxSettles.
 
 		if e.settleMode() {
 			if budget.Settles >= e.maxSettles {
@@ -561,6 +716,11 @@ type turnResult struct {
 	ToolCalls    []provider.ToolCall
 	FinishReason string
 
+	// ReasoningItems is the opaque reasoning state the turn produced. It has to
+	// be replayed with the calls it produced: the transport that requests it
+	// tells the provider to store nothing, so this is the only copy there is.
+	ReasoningItems []provider.ReasoningItem
+
 	// InputTokens and OutputTokens are the prompt- and completion-token counts the
 	// provider reported for this turn (zero when it reported none). Provider counts,
 	// not the local estimate: they reflect what the provider actually processed,
@@ -573,6 +733,14 @@ type turnResult struct {
 // runTurn performs a single model call, streaming its output through emit and
 // watching for a runaway.
 func (e *Engine) runTurn(ctx context.Context, request provider.Request, emit func(Event)) (turnResult, error) {
+	// A turn can end while the provider is still streaming - the runaway guard
+	// cuts a degenerate one short - so every exit from here cancels the stream.
+	// Without it the abandoned transport goroutine stays parked on a send nobody
+	// will receive, holding its HTTP response body open for the life of the
+	// process, and a long run leaks one per trip of the guard.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var (
 		text      strings.Builder
 		reasoning strings.Builder
@@ -618,6 +786,10 @@ func (e *Engine) runTurn(ctx context.Context, request provider.Request, emit fun
 			result.ToolCalls = event.ToolCalls
 		}
 
+		if len(event.ReasoningItems) > 0 {
+			result.ReasoningItems = event.ReasoningItems
+		}
+
 		if event.FinishReason != "" {
 			result.FinishReason = event.FinishReason
 		}
@@ -649,7 +821,7 @@ func (e *Engine) terminalCall(calls []provider.ToolCall) (StopReason, string, bo
 		case SuccessTool:
 			return StopSettled, terminalDetail(call, "summary", "task complete"), true
 		case FailureTool:
-			return StopSettled, terminalDetail(call, "reason", "task failed"), true
+			return StopFailed, terminalDetail(call, "reason", "task failed"), true
 		}
 	}
 
@@ -679,9 +851,12 @@ func (e *Engine) dispatch(
 	ctx context.Context,
 	messages []Message,
 	calls []provider.ToolCall,
+	reasoningItems []provider.ReasoningItem,
 	budget *Budget,
 	emit func(Event),
 ) ([]Message, *Result) {
+	first := true
+
 	for _, call := range calls {
 		if e.maxCalls > 0 && budget.Calls >= e.maxCalls {
 			result := e.finish(messages, *budget, StopCalls,
@@ -694,7 +869,17 @@ func (e *Engine) dispatch(
 
 		name := call.Function.Name
 
-		messages = append(messages, activityMessage(ActivityRequest, call, nil, ""))
+		request := activityMessage(ActivityRequest, call, nil, "")
+
+		// the turn's reasoning state rides on its first call, so it is replayed
+		// once ahead of the calls rather than once per call
+		if first {
+			request.Activity.ReasoningItems = reasoningItems
+
+			first = false
+		}
+
+		messages = append(messages, request)
 
 		definition, known := e.options.Tools[name]
 
@@ -844,9 +1029,13 @@ func (e *Engine) compact(messages []Message) ([]Message, bool) {
 // a short thread is cheaper to carry whole than to summarise. inputTokens is the
 // provider's reported prompt count for the previous turn; the local estimate
 // stands in when it is zero (the first turn, or a provider that reports none).
-func (e *Engine) maybeCompact(ctx context.Context, messages []Message, inputTokens int, emit func(Event)) []Message {
+// maybeCompact reports whether it compacted alongside the conversation, because
+// the caller has to forget the usage reading that triggered it: an error carries
+// no usage of its own, so a stale over-threshold count would survive a failed
+// turn and compact the already-compacted thread again on every retry.
+func (e *Engine) maybeCompact(ctx context.Context, messages []Message, inputTokens int, emit func(Event)) ([]Message, bool) {
 	if !e.compactStrategy {
-		return messages
+		return messages, false
 	}
 
 	// The provider's reported prompt-token count drives the trigger. Real usage is
@@ -868,7 +1057,7 @@ func (e *Engine) maybeCompact(ctx context.Context, messages []Message, inputToke
 	threshold := int(float64(e.inputBudget) * e.compactTriggerRatio)
 
 	if used < threshold || used < e.compactMinTokens || len(head) < e.compactMinMessages {
-		return messages
+		return messages, false
 	}
 
 	// Summarise with a model call. Fall back to the no-model structural summary if
@@ -883,7 +1072,7 @@ func (e *Engine) maybeCompact(ctx context.Context, messages []Message, inputToke
 		"compacted %d earlier messages into a checkpoint (~%d input tokens)",
 		len(head), used)})
 
-	return applyCheckpoint(pinned, tail, summary)
+	return applyCheckpoint(pinned, tail, summary), true
 }
 
 // splitForCheckpoint divides a conversation for compaction into three parts:

@@ -1,6 +1,6 @@
 module github.com/openzot/openzot
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/alecthomas/chroma/v2 v2.26.1

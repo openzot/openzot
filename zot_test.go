@@ -104,7 +104,7 @@ func writeCfg(t *testing.T, body string) string {
 //
 // These assert on the Authorization header the provider actually receives,
 // because that is the only thing that proves a credential was resolved rather
-// than merely accepted by the parser. The layering - backend key, per-model
+// than merely accepted by the parser. The layering - provider key, per-model
 // override, key inlined into the model name - is what the README documents and
 // what an older config relies on.
 func TestCredentialResolutionLayers(t *testing.T) {
@@ -116,9 +116,9 @@ func TestCredentialResolutionLayers(t *testing.T) {
 		model  string
 	}{
 		{
-			name:   "a backend api_key",
-			config: "    api_key: sk-backend\n",
-			want:   "Bearer sk-backend",
+			name:   "a provider api_key",
+			config: "    api_key: sk-provider\n",
+			want:   "Bearer sk-provider",
 			model:  "gpt-4",
 		},
 		{
@@ -129,8 +129,8 @@ func TestCredentialResolutionLayers(t *testing.T) {
 			model:  "gpt-4",
 		},
 		{
-			name: "a per-model key overrides the backend's",
-			config: "    api_key: sk-backend\n" +
+			name: "a per-model key overrides the provider's",
+			config: "    api_key: sk-provider\n" +
 				"    models:\n      gpt-4:\n        api_key: sk-for-gpt4\n",
 			want:  "Bearer sk-for-gpt4",
 			model: "gpt-4",
@@ -154,7 +154,7 @@ func TestCredentialResolutionLayers(t *testing.T) {
 				w.Header().Set("Content-Type", "text/event-stream")
 
 				fmt.Fprintf(w, "data: %s\n\n",
-					`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`)
+					`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 				fmt.Fprint(w, "data: [DONE]\n\n")
 			}))
@@ -166,10 +166,10 @@ agent:
   model: %q
 ui:
   plain: true
-default_backend: mybackend
-backends:
-  mybackend:
-    provider: custom
+default_provider: myprovider
+providers:
+  myprovider:
+    driver: custom
     base_url: %s
 %s`, test.model, server.URL, test.config))
 
@@ -205,16 +205,16 @@ backends:
 	}
 }
 
-// A backend that names no provider cannot resolve, and says so rather than
+// A provider that names no provider cannot resolve, and says so rather than
 // sending a request to nowhere.
-func TestABackendWithoutAProviderIsRejected(t *testing.T) {
+func TestAProviderWithoutAProviderIsRejected(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.DefaultBackend = "mybackend"
-	cfg.Backends = map[string]config.Backend{"mybackend": {APIKey: "sk-test"}}
+	cfg.DefaultProvider = "myprovider"
+	cfg.Providers = map[string]config.ProviderConfig{"myprovider": {APIKey: "sk-test"}}
 
 	_, _, err := resolve(cfg, DefaultInstructions)
 	if err == nil {
-		t.Fatal("a backend naming no provider must be rejected")
+		t.Fatal("a provider naming no provider must be rejected")
 	}
 
 	// the error has to be actionable: it names the field and the options
@@ -223,9 +223,9 @@ func TestABackendWithoutAProviderIsRejected(t *testing.T) {
 	}
 }
 
-// A provider backend resolves to its own endpoint and credential, with the model
+// A provider provider resolves to its own endpoint and credential, with the model
 // name passed through untouched.
-func TestResolveProviderBackends(t *testing.T) {
+func TestResolveBuiltInProviders(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ZOT_CONFIG", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
@@ -237,7 +237,7 @@ func TestResolveProviderBackends(t *testing.T) {
 	}
 
 	for _, name := range []string{"openai", "anthropic"} {
-		cfg.DefaultBackend = name
+		cfg.DefaultProvider = name
 
 		client, _, err := resolve(cfg, DefaultInstructions)
 		if err != nil {
@@ -267,10 +267,10 @@ func TestResolveCustomModelAlias(t *testing.T) {
 	path := writeCfg(t, `
 agent:
   model: fast
-default_backend: mygateway
-backends:
+default_provider: mygateway
+providers:
   mygateway:
-    provider: openai
+    driver: openai
     models:
       fast:
         model: gpt-5
@@ -293,6 +293,55 @@ backends:
 	}
 }
 
+// The iteration denominator in the meta bar has to be the limit the run will
+// actually stop at. A per-model max_iterations lowers that limit, and a bar
+// counting towards a number the run never reaches - "iter 12/100" on a run the
+// engine ends at 40 - misreports the run to the only person watching it.
+func TestTheViewerShowsTheIterationLimitTheRunEnforces(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DefaultProvider = "openai"
+	cfg.Agent.Model = "capped"
+	cfg.Agent.MaxIterations = 100
+	cfg.Providers = map[string]config.ProviderConfig{
+		"openai": {
+			APIKey: "sk-test",
+			Models: map[string]config.ModelConfig{
+				"capped": {Model: "gpt-5", MaxIterations: 40},
+			},
+		},
+	}
+
+	_, opts, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if opts.MaxIterations != 40 {
+		t.Fatalf("the run resolved to %d iterations, want the model's cap", opts.MaxIterations)
+	}
+
+	meta := viewerMeta(cfg, "a task", "/somewhere", opts)
+
+	if meta.MaxIterations != opts.MaxIterations {
+		t.Errorf("the viewer shows a limit of %d while the engine stops at %d",
+			meta.MaxIterations, opts.MaxIterations)
+	}
+
+	// the default is a 1,000,000 backstop rather than a budget, so there is
+	// nothing worth counting towards and the denominator stays hidden
+	cfg.Agent.MaxIterations = config.Defaults().Agent.MaxIterations
+	cfg.Providers["openai"].Models["capped"] = config.ModelConfig{Model: "gpt-5"}
+
+	_, opts, err = resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if got := viewerMeta(cfg, "a task", "/somewhere", opts).MaxIterations; got != 0 {
+		t.Errorf("the viewer shows a limit of %d, want the backstop hidden", got)
+	}
+}
+
 // Run is the whole thing end to end: config in, a provider call out, a
 // transcript back. With ui.plain set it takes the non-TTY path, which is what CI
 // uses and what can be asserted on.
@@ -305,7 +354,7 @@ func TestRunEndToEnd(t *testing.T) {
 		frames := [][]string{
 			{`{"choices":[{"delta":{"content":"working on it"}}]}`,
 				`{"choices":[{"delta":{},"finish_reason":"stop"}]}`},
-			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`},
+			{`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`},
 		}
 
 		index := turn
@@ -326,9 +375,9 @@ func TestRunEndToEnd(t *testing.T) {
 
 	cfg := config.Defaults()
 	cfg.UI.Plain = true
-	cfg.DefaultBackend = "local"
-	cfg.Backends = map[string]config.Backend{
-		"local": {Provider: "custom", BaseURL: server.URL, APIKey: "k"},
+	cfg.DefaultProvider = "local"
+	cfg.Providers = map[string]config.ProviderConfig{
+		"local": {Driver: "custom", BaseURL: server.URL, APIKey: "k"},
 	}
 
 	original := os.Stdout
@@ -376,21 +425,21 @@ func TestRunEndToEnd(t *testing.T) {
 	}
 }
 
-// A misconfigured backend fails before any request is made, with a message that
+// A misconfigured provider fails before any request is made, with a message that
 // says what to fix.
-func TestRunRejectsAnUnconfiguredBackend(t *testing.T) {
+func TestRunRejectsAnUnconfiguredProvider(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.DefaultBackend = "nowhere"
-	cfg.Backends = map[string]config.Backend{}
+	cfg.DefaultProvider = "nowhere"
+	cfg.Providers = map[string]config.ProviderConfig{}
 
 	err := Run(context.Background(), cfg, "task")
 
 	if err == nil {
-		t.Fatal("an unconfigured backend must fail")
+		t.Fatal("an unconfigured provider must fail")
 	}
 
 	if !strings.Contains(err.Error(), "nowhere") {
-		t.Errorf("the error should name the backend: %v", err)
+		t.Errorf("the error should name the provider: %v", err)
 	}
 }
 
@@ -413,16 +462,16 @@ func TestVersionAndConfigPathAreExposed(t *testing.T) {
 	}
 }
 
-// stubBackend returns a config pointed at a server that answers every turn by
+// stubProvider returns a config pointed at a server that answers every turn by
 // recording a successful outcome.
-func stubBackend(t *testing.T) config.Config {
+func stubProvider(t *testing.T) config.Config {
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 
 		fmt.Fprintf(w, "data: %s\n\n",
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"_success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"all done\"}"}}]},"finish_reason":"tool_calls"}]}`)
 
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -431,9 +480,9 @@ func stubBackend(t *testing.T) config.Config {
 
 	cfg := config.Defaults()
 	cfg.UI.Plain = true
-	cfg.DefaultBackend = "local"
-	cfg.Backends = map[string]config.Backend{
-		"local": {Provider: "custom", BaseURL: server.URL, APIKey: "k"},
+	cfg.DefaultProvider = "local"
+	cfg.Providers = map[string]config.ProviderConfig{
+		"local": {Driver: "custom", BaseURL: server.URL, APIKey: "k"},
 	}
 
 	return cfg
@@ -481,7 +530,7 @@ func quietly(t *testing.T, fn func() error) (string, error) {
 // A run leaves a record of itself: what it was asked, which model answered, and
 // how it ended.
 func TestRunWithRecordsASession(t *testing.T) {
-	cfg := stubBackend(t)
+	cfg := stubProvider(t)
 
 	sessions := t.TempDir()
 
@@ -506,7 +555,7 @@ func TestRunWithRecordsASession(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if logged.Meta.Task != "do the thing" || logged.Meta.Backend != "local" {
+	if logged.Meta.Task != "do the thing" || logged.Meta.Provider != "local" || logged.Meta.Driver != "custom" {
 		t.Errorf("meta = %+v", logged.Meta)
 	}
 
@@ -528,7 +577,7 @@ func TestRunWithRecordsASession(t *testing.T) {
 // A resumed run carries the earlier conversation, so the agent continues rather
 // than rediscovering what it already knew.
 func TestRunWithResumesAnEarlierSession(t *testing.T) {
-	cfg := stubBackend(t)
+	cfg := stubProvider(t)
 
 	earlier := &session.Session{
 		Meta: session.Meta{ID: "20260805-090000", Task: "the original brief"},
@@ -589,7 +638,7 @@ func TestRunWithResumesAnEarlierSession(t *testing.T) {
 // goes ahead - refusing to work because a directory is read-only would be a
 // worse failure than losing the record of it.
 func TestRunWithSurvivesAnUnwritableSessionDirectory(t *testing.T) {
-	cfg := stubBackend(t)
+	cfg := stubProvider(t)
 
 	blocked := filepath.Join(t.TempDir(), "a-file")
 
@@ -614,7 +663,7 @@ func TestRunWithSurvivesAnUnwritableSessionDirectory(t *testing.T) {
 // No session directory means no log, and that has to be silent rather than an
 // error a caller has to handle.
 func TestRunWithoutASessionDirectoryWritesNothing(t *testing.T) {
-	cfg := stubBackend(t)
+	cfg := stubProvider(t)
 
 	if _, err := quietly(t, func() error {
 		return RunWith(context.Background(), cfg, "do the thing", RunOptions{})
@@ -643,8 +692,8 @@ func TestTheExampleConfigMatchesTheDefaults(t *testing.T) {
 		t.Errorf("example model = %q, defaults = %q", example.Agent.Model, defaults.Agent.Model)
 	}
 
-	if example.DefaultBackend != defaults.DefaultBackend {
-		t.Errorf("example backend = %q, defaults = %q", example.DefaultBackend, defaults.DefaultBackend)
+	if example.DefaultProvider != defaults.DefaultProvider {
+		t.Errorf("example provider = %q, defaults = %q", example.DefaultProvider, defaults.DefaultProvider)
 	}
 
 	if example.Agent.MaxIterations != defaults.Agent.MaxIterations {
@@ -668,24 +717,24 @@ func TestTheExampleConfigLoadsAndValidates(t *testing.T) {
 	}
 
 	// a key so validation is judging the shape rather than the environment
-	backend := cfg.Backends[cfg.DefaultBackend]
-	backend.APIKey = "test-key"
-	cfg.Backends[cfg.DefaultBackend] = backend
+	provider := cfg.Providers[cfg.DefaultProvider]
+	provider.APIKey = "test-key"
+	cfg.Providers[cfg.DefaultProvider] = provider
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("the example config does not validate: %v", err)
 	}
 }
 
-// The default model has to be one the default backend can actually serve. A
+// The default model has to be one the default provider can actually serve. A
 // pair that cannot talk to each other fails as a provider error rather than a
 // configuration one, which is much harder to read.
-func TestTheDefaultModelAndBackendCanTalkToEachOther(t *testing.T) {
+func TestTheDefaultModelAndProviderCanTalkToEachOther(t *testing.T) {
 	defaults := config.Defaults()
 
 	cfg := defaults
-	cfg.Backends = map[string]config.Backend{
-		defaults.DefaultBackend: {APIKey: "test-key"},
+	cfg.Providers = map[string]config.ProviderConfig{
+		defaults.DefaultProvider: {APIKey: "test-key"},
 	}
 
 	client, _, err := resolve(cfg, DefaultInstructions)
@@ -698,7 +747,7 @@ func TestTheDefaultModelAndBackendCanTalkToEachOther(t *testing.T) {
 	}
 
 	if client.BaseURL() == "" {
-		t.Errorf("the default backend %q resolved to no endpoint", defaults.DefaultBackend)
+		t.Errorf("the default provider %q resolved to no endpoint", defaults.DefaultProvider)
 	}
 }
 
@@ -735,8 +784,8 @@ func TestTaskGoesIntoTheInstructions(t *testing.T) {
 func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
 	real := map[string]bool{
 		// the terminal tools the loop injects in settle mode
-		"_success": true,
-		"_failure": true,
+		"success": true,
+		"failure": true,
 	}
 
 	for name := range agent.DefaultTools() {
@@ -758,7 +807,7 @@ func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
 	}
 
 	// and positively assert the tools the instructions promises are all present
-	for _, want := range []string{"plan", "progress", "read", "write", "list", "shell", "_success", "_failure"} {
+	for _, want := range []string{"plan", "progress", "read", "write", "list", "shell", "success", "failure"} {
 		if !real[want] {
 			t.Errorf("the instructions relies on %q but it is not a real tool", want)
 		}
@@ -775,8 +824,8 @@ func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
 // to record an outcome before giving up.
 func TestRunBudgetsComeFromConfig(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.DefaultBackend = "openai"
-	cfg.Backends = map[string]config.Backend{"openai": {APIKey: "sk-test"}}
+	cfg.DefaultProvider = "openai"
+	cfg.Providers = map[string]config.ProviderConfig{"openai": {APIKey: "sk-test"}}
 	cfg.Agent.MaxSettles = 5
 	cfg.Agent.MaxCalls = 33
 

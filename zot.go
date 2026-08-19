@@ -67,7 +67,7 @@ Operating rules:
 - Call "progress" as you complete steps.
 - Act, do not narrate. The deliverable is the changed working tree, not an explanation of it; there is no reader to address. Do not pause to summarise, interpret, or analyse tool output - keep working, and use "progress" for status.
 - Make reasonable assumptions instead of stopping. Do not ask for clarification.
-- The task is not finished until you record an outcome: call "_success" with a summary when the objective is met, or "_failure" with the reason when it genuinely cannot be. Do not simply stop.`
+- The task is not finished until you record an outcome: call "success" with a summary when the objective is met, or "failure" with the reason when it genuinely cannot be. Do not simply stop.`
 
 // taskHeading introduces the task inside the instructions. The task lives in the
 // system prompt rather than as a user message so it survives compaction: a user
@@ -187,7 +187,7 @@ func Run(ctx context.Context, cfg Config, task string) error {
 
 // RunWith is Run with session recording and resume.
 func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) error {
-	config.ScrubBackendSecrets(cfg)
+	config.ScrubProviderSecrets(cfg)
 
 	client, opts, err := resolve(cfg, DefaultInstructions)
 	if err != nil {
@@ -220,8 +220,8 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		meta := session.Meta{
 			Task:     task,
 			Model:    client.Model(),
-			Provider: client.Provider(),
-			Backend:  cfg.DefaultBackend,
+			Provider: cfg.DefaultProvider,
+			Driver:   client.Provider(),
 			Workdir:  workdir,
 		}
 
@@ -247,28 +247,37 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		}
 	}
 
+	return tui.Run(ctx, client, viewerMeta(cfg, task, workdir, opts), opts)
+}
+
+// viewerMeta describes the run to the viewer.
+//
+// The budgets it carries are the ones the run was resolved with, not the raw
+// configuration: a per-model max_iterations lowers the limit the engine
+// enforces, and a meta bar counting up to a number the run will never reach is
+// worse than no number at all.
+func viewerMeta(cfg Config, task, workdir string, opts agent.ExecuteWithToolsOptions) tui.Meta {
 	// Show the iteration progress denominator only for a real user-set limit -
 	// the default is a 1,000,000 backstop, which is not a budget worth displaying.
 	iterLimit := 0
-	if cfg.Agent.MaxIterations != config.Defaults().Agent.MaxIterations {
-		iterLimit = cfg.Agent.MaxIterations
+	if opts.MaxIterations != config.Defaults().Agent.MaxIterations {
+		iterLimit = opts.MaxIterations
 	}
 
-	maxDur, _ := cfg.Agent.MaxDuration() // already validated to parse
-
-	return tui.Run(ctx, client, tui.Meta{
+	return tui.Meta{
 		Task:          task,
 		Model:         cfg.Agent.Model,
-		Backend:       cfg.DefaultBackend,
+		Provider:      cfg.DefaultProvider,
 		Workdir:       workdir,
 		ShowDiff:      cfg.UI.Diff,
 		Plain:         cfg.UI.Plain,
+		Color:         cfg.UI.Color,
 		MaxScrollback: cfg.UI.Scrollback,
 		MaxIterations: iterLimit,
-		MaxCalls:      cfg.Agent.MaxCalls,
-		MaxDuration:   maxDur,
+		MaxCalls:      opts.MaxCalls,
+		MaxDuration:   opts.MaxDuration,
 		Stats:         cfg.UI.Stats,
-	}, opts)
+	}
 }
 
 // resolve turns a configuration into a provider client and the agent options a
@@ -276,37 +285,37 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.ExecuteWithToolsOptions, error) {
 	var empty agent.ExecuteWithToolsOptions
 
-	backend, ok := cfg.Backends[cfg.DefaultBackend]
+	providerConfig, ok := cfg.Providers[cfg.DefaultProvider]
 	if !ok {
-		return nil, empty, fmt.Errorf("backend %q is not configured", cfg.DefaultBackend)
+		return nil, empty, fmt.Errorf("provider %q is not configured", cfg.DefaultProvider)
 	}
 
-	// Resolve the model against the backend's custom model definitions. A custom
+	// Resolve the model against the provider's custom model definitions. A custom
 	// entry's settings take priority over the run defaults.
 	model := cfg.Agent.Model
 	maxIterations := cfg.Agent.MaxIterations
-	provider := config.BackendProvider(cfg.DefaultBackend, backend)
-	credential := config.BackendCredential(backend)
+	driver := config.ProviderDriver(cfg.DefaultProvider, providerConfig)
+	credential := config.ProviderCredential(providerConfig)
 
-	if mc, ok := backend.Models[model]; ok {
+	if mc, ok := providerConfig.Models[model]; ok {
 		if mc.Model != "" {
 			model = mc.Model
 		}
 		if mc.MaxIterations > 0 {
 			maxIterations = mc.MaxIterations
 		}
-		if mc.Provider != "" {
-			provider = mc.Provider
+		if mc.Driver != "" {
+			driver = mc.Driver
 		}
 		if mc.APIKey != "" {
 			credential = mc.APIKey
 		}
 	}
 
-	if provider == "" {
+	if driver == "" {
 		return nil, empty, fmt.Errorf(
-			"backend %q does not name a model provider (set provider: on the backend or the model - one of %s)",
-			cfg.DefaultBackend, strings.Join(agent.Providers(), ", "))
+			"provider %q does not name a driver (set driver: on the provider or the model - one of %s)",
+			cfg.DefaultProvider, strings.Join(agent.Providers(), ", "))
 	}
 
 	instructions := cfg.Agent.Instructions
@@ -315,13 +324,13 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	}
 
 	client, err := agent.NewClient(agent.ClientOptions{
-		Provider: provider,
+		Provider: driver,
 		Model:    model,
 		APIKey:   credential,
-		BaseURL:  backend.BaseURL,
+		BaseURL:  providerConfig.BaseURL,
 	})
 	if err != nil {
-		return nil, empty, fmt.Errorf("backend %q: %w", cfg.DefaultBackend, err)
+		return nil, empty, fmt.Errorf("provider %q: %w", cfg.DefaultProvider, err)
 	}
 
 	// max_time was validated at load, so a parse error here would be a bug; treat

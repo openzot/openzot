@@ -12,23 +12,20 @@ import (
 	"time"
 )
 
-// Values set at build time via -ldflags.
-// apiBase is the GitHub API root the check calls. A variable rather than a
-// constant purely so tests can point it at a local server; nothing at runtime
-// changes it.
-var apiBase = defaultAPIBase
+// APIBase is the GitHub API root the check calls. A variable rather than a
+// constant purely so a test can point the check at a local server; nothing at
+// runtime changes it.
+var APIBase = defaultAPIBase
 
-var (
-	// Version is the semver tag (e.g. "v0.1.0"). Defaults to "dev" when built
-	// without ldflags (i.e. via `go run`).
-	Version = "dev"
-)
+// Version is the semver tag (e.g. "v0.1.0"), set at build time via -ldflags.
+// Defaults to "dev" when built without them (i.e. via `go run`).
+var Version = "dev"
 
 const (
 	// releaseRepo is the GitHub owner/repo used to check for new releases.
 	releaseRepo = "openzot/openzot"
 
-	// defaultAPIBase is the GitHub API root. Overridable through apiBase so the
+	// defaultAPIBase is the GitHub API root. Overridable through APIBase so the
 	// check can be exercised without reaching the network.
 	defaultAPIBase = "https://api.github.com"
 
@@ -52,7 +49,7 @@ type ghRelease struct {
 func LatestRelease() (tag string, url string, err error) {
 	client := &http.Client{Timeout: checkTimeout}
 
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/releases/latest", apiBase, releaseRepo), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/repos/%s/releases/latest", APIBase, releaseRepo), nil)
 	if err != nil {
 		return "", "", err
 	}

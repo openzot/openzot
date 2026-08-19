@@ -13,6 +13,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 permissions:
+  actions: read
   contents: write
   packages: write
 
@@ -24,6 +25,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify CI passed for tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT="$(git rev-parse HEAD)"
+          PASSED="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yaml/runs" \
+            -f head_sha="${COMMIT}" \
+            -f event=push \
+            -f status=completed \
+            --jq 'any(.workflow_runs[]; .conclusion == "success")')"
+          if [ "${PASSED}" != "true" ]; then
+            echo "::error::commit ${COMMIT} has no successful completed CI push run"
+            exit 1
+          fi
 
       - name: Validate tag, VERSION and CHANGELOG
         run: |
@@ -75,6 +92,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          make worker-assets VERSION="${VERSION}"
           LDFLAGS="-s -w -X github.com/openzot/openzot/internal/version.Version=${VERSION}"
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
@@ -82,15 +100,23 @@ jobs:
           OUTDIR="dist/zot-${VERSION}-${GOOS}-${GOARCH}"
           mkdir -p "${OUTDIR}"
 
-          for cmd in zot; do
+          for cmd in zot zotui; do
             echo "Building ${cmd}..."
             go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/${cmd}${EXT}" "./cmd/${cmd}"
+            test -s "${OUTDIR}/${cmd}${EXT}"
           done
 
           cp configs/zot.example.yaml "${OUTDIR}/zot.example.yaml"
+          cp configs/zotui.example.yaml "${OUTDIR}/zotui.example.yaml"
           cp README.md "${OUTDIR}/README.md"
 
-          tar -czf "dist/zot-${VERSION}-${GOOS}-${GOARCH}.tar.gz" -C dist "zot-${VERSION}-${GOOS}-${GOARCH}"
+          ARCHIVE="dist/zot-${VERSION}-${GOOS}-${GOARCH}.tar.gz"
+          ROOT="zot-${VERSION}-${GOOS}-${GOARCH}"
+          tar -czf "${ARCHIVE}" -C dist "${ROOT}"
+          CONTENTS="$(tar -tzf "${ARCHIVE}")"
+          for file in "zot${EXT}" "zotui${EXT}" zot.example.yaml zotui.example.yaml README.md; do
+            grep -Fxq "${ROOT}/${file}" <<<"${CONTENTS}"
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

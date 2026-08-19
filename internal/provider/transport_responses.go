@@ -56,8 +56,13 @@ type responseItem struct {
 	Output string `json:"output,omitempty"`
 
 	// reasoning, replayed verbatim so the model can resume its own thinking
-	ID      string `json:"id,omitempty"`
-	Summary []any  `json:"summary,omitempty"`
+	ID string `json:"id,omitempty"`
+
+	// @note a reasoning item's summary is required on the way back in and is
+	// usually empty, so it cannot be omitempty - but nor may it appear on the
+	// other item types. A pointer is what distinguishes "no summary field" from
+	// "a summary field holding an empty list".
+	Summary *[]any `json:"summary,omitempty"`
 
 	// @note encrypted reasoning state, returned when the caller is not storing
 	// the conversation server-side. Opaque, and must be handed back untouched.
@@ -93,6 +98,12 @@ type responsesRequest struct {
 //
 // The system turn becomes top-level instructions; assistant tool calls and tool
 // results become sibling items rather than nested structures.
+//
+// An assistant turn's reasoning items go back first, ahead of the calls they
+// produced. That order is not cosmetic: with store:false the provider holds
+// nothing, so a function_call replayed on its own is rejected with "item … was
+// provided without its required 'reasoning' item" - which is every second
+// request of every tool round.
 func toResponsesInput(messages []ChatMessage) (instructions string, items []responseItem) {
 	for _, message := range messages {
 		switch message.Role {
@@ -112,6 +123,21 @@ func toResponsesInput(messages []ChatMessage) (instructions string, items []resp
 			})
 
 		case RoleAssistant:
+			for _, item := range message.ReasoningItems {
+				summary := item.Summary
+
+				if summary == nil {
+					summary = []any{}
+				}
+
+				items = append(items, responseItem{
+					Type:             "reasoning",
+					ID:               item.ID,
+					Summary:          &summary,
+					EncryptedContent: item.EncryptedContent,
+				})
+			}
+
 			for _, call := range message.ToolCalls {
 				items = append(items, responseItem{
 					Type:      "function_call",
@@ -173,6 +199,11 @@ type responsesEvent struct {
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
+
+		// a reasoning item's replayable state, present only because the request
+		// asked for it inline
+		Summary          []any  `json:"summary"`
+		EncryptedContent string `json:"encrypted_content"`
 	} `json:"item"`
 
 	Response struct {
@@ -200,6 +231,16 @@ func (t *responsesTransport) Stream(ctx context.Context, config Config, request 
 	go func() {
 		defer close(events)
 
+		// @note the Responses API has no stop-sequence parameter at all, so there
+		// is nothing to translate Request.Stop into. Saying so is the only honest
+		// option: dropping the sequences silently would leave a caller believing
+		// generation is bounded when nothing bounds it.
+		if len(request.Stop) > 0 {
+			sendTerminal(events, Event{Err: &Error{Status: 0, Message: "the responses transport cannot honour stop sequences - the API has no equivalent parameter; use the chat-completions transport for them"}})
+
+			return
+		}
+
 		instructions, input := toResponsesInput(request.Messages)
 
 		body := responsesRequest{
@@ -218,15 +259,19 @@ func (t *responsesTransport) Stream(ctx context.Context, config Config, request 
 
 		response, err := httpPost(ctx, t.http, config, config.responsesURL(), body)
 		if err != nil {
-			events <- Event{Err: err}
+			sendTerminal(events, Event{Err: err})
 
 			return
 		}
 
 		defer response.Body.Close()
 
-		if err := consumeResponsesSSE(ctx, response.Body, events); err != nil {
-			events <- Event{Err: err}
+		stream := newStallReader(response.Body, streamStallTimeout)
+
+		defer stream.stop()
+
+		if err := consumeResponsesSSE(ctx, stream, events); err != nil {
+			sendTerminal(events, Event{Err: err})
 		}
 	}()
 
@@ -245,10 +290,15 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		calls  []ToolCall
-		finish string
-		usage  *Usage
+		calls     []ToolCall
+		reasoning []ReasoningItem
+		finish    string
+		usage     *Usage
 	)
+
+	// whether the provider said the turn was over, rather than the body simply
+	// stopping - see the check after the loop
+	terminal := false
 
 	for scanner.Scan() {
 		select {
@@ -266,6 +316,8 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 
 		if payload == "[DONE]" {
+			terminal = true
+
 			break
 		}
 
@@ -278,16 +330,21 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 		switch event.Type {
 		case "response.output_text.delta":
 			if event.Delta != "" {
-				events <- Event{Token: event.Delta}
+				if !send(ctx, events, Event{Token: event.Delta}) {
+					return ctx.Err()
+				}
 			}
 
 		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 			if event.Delta != "" {
-				events <- Event{ReasoningToken: event.Delta}
+				if !send(ctx, events, Event{ReasoningToken: event.Delta}) {
+					return ctx.Err()
+				}
 			}
 
 		case "response.output_item.done":
-			if event.Item.Type == "function_call" {
+			switch event.Item.Type {
+			case "function_call":
 				calls = append(calls, ToolCall{
 					ID:   event.Item.CallID,
 					Type: "function",
@@ -296,9 +353,20 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 						Arguments: event.Item.Arguments,
 					},
 				})
+
+			case "reasoning":
+				// the state itself, kept in arrival order so it can go back ahead
+				// of the calls it produced
+				reasoning = append(reasoning, ReasoningItem{
+					ID:               event.Item.ID,
+					Summary:          event.Item.Summary,
+					EncryptedContent: event.Item.EncryptedContent,
+				})
 			}
 
 		case "response.completed", "response.incomplete":
+			terminal = true
+
 			if event.Response.Usage != nil {
 				usage = &Usage{
 					PromptTokens:     event.Response.Usage.InputTokens,
@@ -329,6 +397,13 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 		return err
 	}
 
+	// the same rule the chat transport applies: a body that stopped without any
+	// terminal frame is a cut-off turn, not a finished one. Defaulting to "stop"
+	// here made the identical truncation read as a complete answer.
+	if !terminal {
+		return errTruncatedStream
+	}
+
 	if finish == "" {
 		if len(calls) > 0 {
 			finish = FinishToolCalls
@@ -337,7 +412,16 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 		}
 	}
 
-	events <- Event{ToolCalls: calls, FinishReason: finish, Usage: usage}
+	// a final frame lost to cancellation is a cancelled turn, not a finished
+	// one: report it so the caller's terminal send says so
+	if !send(ctx, events, Event{
+		ToolCalls:      calls,
+		ReasoningItems: reasoning,
+		FinishReason:   finish,
+		Usage:          usage,
+	}) {
+		return ctx.Err()
+	}
 
 	return nil
 }

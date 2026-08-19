@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/openzot/openzot/agent"
 	"net/http"
@@ -96,7 +97,11 @@ func plainCall(id, name, arguments string) string {
 }
 
 func plainSuccess(summary string) string {
-	return plainCall("done", "_success", fmt.Sprintf(`{"summary":%q}`, summary))
+	return plainCall("done", "success", fmt.Sprintf(`{"summary":%q}`, summary))
+}
+
+func plainFailure(reason string) string {
+	return plainCall("done", "failure", fmt.Sprintf(`{"reason":%q}`, reason))
 }
 
 // capture runs a function with stdout redirected, returning what it printed.
@@ -148,7 +153,7 @@ func TestRunPlainTranscript(t *testing.T) {
 		[]string{plainSuccess("tests pass")},
 	)
 
-	meta := Meta{AppName: "zot", Task: "run the tests", Model: "test-model", Backend: "openai", Workdir: "/tmp/work"}
+	meta := Meta{AppName: "zot", Task: "run the tests", Model: "test-model", Provider: "openai", Workdir: "/tmp/work"}
 
 	options := agent.ExecuteWithToolsOptions{
 		Tools: agent.Tools{
@@ -171,7 +176,7 @@ func TestRunPlainTranscript(t *testing.T) {
 
 	for _, want := range []string{
 		"zot: run the tests",
-		"backend openai",
+		"provider openai",
 		"model test-model",
 		"iteration 1",
 		// the command itself, not a key=value dump
@@ -194,7 +199,7 @@ func TestRunPlainTranscript(t *testing.T) {
 func TestRunPlainReturnsAnErrorOnFailure(t *testing.T) {
 	client := plainServer(t, []string{plainToken("I give up."), plainStop()})
 
-	meta := Meta{Task: "impossible", Model: "m", Backend: "b", Workdir: "/w"}
+	meta := Meta{Task: "impossible", Model: "m", Provider: "b", Workdir: "/w"}
 
 	output, err := capture(t, func() error {
 		return runPlain(context.Background(), client, meta,
@@ -211,6 +216,36 @@ func TestRunPlainReturnsAnErrorOnFailure(t *testing.T) {
 
 	if !strings.Contains(output, "failed") {
 		t.Errorf("the transcript must say it failed:\n%s", output)
+	}
+}
+
+// A declared failure is an outcome the model reached - "failed: <reason>" -
+// not a harness crash to be reported by exit code. The viewer already draws
+// that line ("✗ failed" versus "✗ exited (code 1)"); plain mode is the path
+// scripts and CI logs read, where sending the operator hunting for a crash is
+// at least as costly. The exit error and its code are unchanged.
+func TestRunPlainRendersADeclaredFailureAsAnOutcome(t *testing.T) {
+	client := plainServer(t, []string{plainFailure("cannot reach the host")})
+
+	meta := Meta{Task: "deploy", Model: "m", Provider: "b", Workdir: "/w"}
+
+	output, err := capture(t, func() error {
+		return runPlain(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
+	})
+
+	// still a non-zero ending for the shell
+	var exitErr *AgentExitError
+
+	if !errors.As(err, &exitErr) || exitErr.Code == 0 {
+		t.Fatalf("err = %v, want a non-zero exit error", err)
+	}
+
+	if !strings.Contains(output, "failed: cannot reach the host") {
+		t.Errorf("the transcript must name the outcome:\n%s", output)
+	}
+
+	if strings.Contains(output, "(code") {
+		t.Errorf("a declared failure must not read as a crash code:\n%s", output)
 	}
 }
 
@@ -234,7 +269,7 @@ func TestRunPlainReportsToolErrors(t *testing.T) {
 
 	output, err := capture(t, func() error {
 		return runPlain(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w"}, options)
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"}, options)
 	})
 	if err != nil {
 		t.Fatalf("runPlain: %v", err)
@@ -267,7 +302,7 @@ func TestRunPlainSurfacesProviderFailures(t *testing.T) {
 
 	_, runErr := capture(t, func() error {
 		return runPlain(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w"},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
 			agent.ExecuteWithToolsOptions{})
 	})
 
@@ -296,7 +331,7 @@ func TestRunPlainShowsDiffsWhenAsked(t *testing.T) {
 
 	withDiff, err := capture(t, func() error {
 		return runPlain(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", ShowDiff: true}, options)
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", ShowDiff: true}, options)
 	})
 	if err != nil {
 		t.Fatalf("runPlain: %v", err)
@@ -313,7 +348,7 @@ func TestRunPlainShowsDiffsWhenAsked(t *testing.T) {
 func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	client := plainServer(t, []string{plainSuccess("finished")})
 
-	meta := Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Plain: true}
+	meta := Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Plain: true, Color: "always"}
 
 	output, err := capture(t, func() error {
 		return Run(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
@@ -325,12 +360,15 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	if !strings.Contains(output, "finished") {
 		t.Errorf("Run should have produced a plain transcript:\n%s", output)
 	}
+	if strings.Contains(output, "\x1b[") {
+		t.Errorf("explicit plain mode must override color capability:\n%q", output)
+	}
 
 	// under `go test` stdout is not a terminal, so even without Plain the
 	// dispatch must land on the same path rather than trying an alt screen
 	output, err = capture(t, func() error {
 		return Run(context.Background(), plainServer(t, []string{plainSuccess("again")}),
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w"},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
 			agent.ExecuteWithToolsOptions{})
 	})
 	if err != nil {
@@ -340,6 +378,60 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	if !strings.Contains(output, "again") {
 		t.Errorf("a non-TTY Run must fall back to plain:\n%s", output)
 	}
+	if strings.Contains(output, "\x1b[") {
+		t.Errorf("auto color must keep an ordinary non-TTY stream basic:\n%q", output)
+	}
+}
+
+// A browser terminal supports ANSI styling but cannot drive Bubble Tea's
+// keyboard UI, so it needs a coloured stream without pager affordances.
+func TestRunUsesAColoredStreamWithoutInteractiveControls(t *testing.T) {
+	client := plainServer(t, []string{plainSuccess("finished")})
+	output, err := capture(t, func() error {
+		return Run(context.Background(), client,
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Color: "always"},
+			agent.ExecuteWithToolsOptions{})
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(output, "\x1b[") {
+		t.Fatalf("a color-capable stream must contain ANSI styling:\n%q", output)
+	}
+	for _, interactive := range []string{"top/bottom", " scroll ", " quit"} {
+		if strings.Contains(output, interactive) {
+			t.Errorf("stream contains interactive affordance %q:\n%s", interactive, output)
+		}
+	}
+}
+
+func TestStreamColorCapability(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  string
+		env   map[string]string
+		color bool
+	}{
+		{name: "explicit always", mode: "always", color: true},
+		{name: "explicit never beats force", mode: "never", env: map[string]string{"FORCE_COLOR": "1"}},
+		{name: "force color", mode: "auto", env: map[string]string{"FORCE_COLOR": "1"}, color: true},
+		{name: "clicolor force", env: map[string]string{"CLICOLOR_FORCE": "1"}, color: true},
+		{name: "no color beats ambient force", env: map[string]string{"NO_COLOR": "1", "FORCE_COLOR": "1"}},
+		{name: "auto pipe stays basic", mode: "auto"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, name := range []string{"NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"} {
+				t.Setenv(name, "")
+			}
+			for name, value := range test.env {
+				t.Setenv(name, value)
+			}
+			if got := streamColorEnabled(test.mode); got != test.color {
+				t.Errorf("streamColorEnabled(%q) = %v, want %v", test.mode, got, test.color)
+			}
+		})
+	}
 }
 
 func TestRunPropagatesFailures(t *testing.T) {
@@ -347,7 +439,7 @@ func TestRunPropagatesFailures(t *testing.T) {
 
 	_, err := capture(t, func() error {
 		return Run(context.Background(), client,
-			Meta{Task: "t", Model: "m", Backend: "b", Workdir: "/w", Plain: true},
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Plain: true},
 			agent.ExecuteWithToolsOptions{MaxSettles: 1})
 	})
 

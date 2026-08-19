@@ -132,7 +132,7 @@ func TestSettleModeEmptyTurnIsBoundedButNudgesToSettle(t *testing.T) {
 	}
 
 	if !sawTerminalGuidance {
-		t.Error("in settle mode an empty turn's nudge must point at _success/_failure, not the plain empty notice")
+		t.Error("in settle mode an empty turn's nudge must point at success/failure, not the plain empty notice")
 	}
 }
 

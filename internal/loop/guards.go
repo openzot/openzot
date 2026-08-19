@@ -7,7 +7,10 @@
 // happened to use the word "completed".
 package loop
 
-import "sort"
+import (
+	"sort"
+	"time"
+)
 
 // Bounds on a single run. Every default here encodes a failure that happened.
 const (
@@ -28,6 +31,27 @@ const (
 	// DefaultMaxCycles is how many times the loop will nudge a model out of a
 	// detected repetition before giving up on it.
 	DefaultMaxCycles = 2
+
+	// DefaultRetryBackoff is the pause before the first retry of a retriable
+	// provider failure; each consecutive retry doubles it, up to MaxRetryBackoff.
+	//
+	// Retrying instantly is worse than not retrying: a provider outage burns the
+	// whole continuation budget inside a few milliseconds - so a run dies to a
+	// blip it would have outlived - while hammering an endpoint that is already
+	// failing. The delay is what turns the continuation budget into a window of
+	// time rather than a count of round trips.
+	DefaultRetryBackoff = 1 * time.Second
+
+	// MaxRetryBackoff caps the doubling, so a long continuation budget cannot
+	// leave a run asleep for hours on an outage that has already ended.
+	MaxRetryBackoff = 30 * time.Second
+
+	// MaxRateLimitWait caps how long a run will sit out a provider-advised
+	// Retry-After. Sitting out a real rate-limit window is the right thing for an
+	// unattended run - it is why a 429 no longer ends one - but no legitimate
+	// window needs longer than this, and a mistaken or hostile header must not be
+	// able to park a run for hours.
+	MaxRateLimitWait = 5 * time.Minute
 
 	// DefaultMaxEmpties caps turns that stop with neither text nor a tool call.
 	// Far tighter than the continuation budget because retrying an empty turn
@@ -64,17 +88,22 @@ const (
 // Terminal tool names. In settle mode the model ends a run by calling one of
 // these, which is unambiguous in a way prose never is.
 const (
-	SuccessTool = "_success"
-	FailureTool = "_failure"
+	SuccessTool = "success"
+	FailureTool = "failure"
 )
 
 // StopReason explains why a run ended.
 type StopReason string
 
 const (
-	// StopSettled - the model called a terminal tool. The only clean ending in
+	// StopSettled - the model called the success tool. The only clean ending in
 	// settle mode.
 	StopSettled StopReason = "settled"
+
+	// StopFailed - the model called the failure tool: it reached a conclusion,
+	// and the conclusion is that the task cannot be done. A settled ending, but
+	// not a successful one, so it must never be reported as StopSettled is.
+	StopFailed StopReason = "failed"
 
 	// StopStop - the model finished talking and settle mode is off.
 	StopStop StopReason = "stop"

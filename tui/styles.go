@@ -33,13 +33,13 @@ var (
 
 	// Meta-bar value colours. Fixed functional hues (not the brand accent), so the
 	// header carries colour and stays scannable even under a neutral theme: the
-	// model and backend are highlighted, the counters read by kind, and paths and
+	// model and provider are highlighted, the counters read by kind, and paths and
 	// timing stay muted.
-	metaModel   = lipgloss.NewStyle().Foreground(colCyan)
-	metaBackend = lipgloss.NewStyle().Foreground(colBlue)
-	metaCount   = lipgloss.NewStyle().Foreground(colFg)
-	metaTools   = lipgloss.NewStyle().Foreground(colGreen)
-	metaEdits   = lipgloss.NewStyle().Foreground(colYellow)
+	metaModel    = lipgloss.NewStyle().Foreground(colCyan)
+	metaProvider = lipgloss.NewStyle().Foreground(colBlue)
+	metaCount    = lipgloss.NewStyle().Foreground(colFg)
+	metaTools    = lipgloss.NewStyle().Foreground(colGreen)
+	metaEdits    = lipgloss.NewStyle().Foreground(colYellow)
 
 	// Footer / hints.
 	footerStyle = lipgloss.NewStyle().Foreground(colDim)
