@@ -147,7 +147,7 @@ var models = map[string]Model{
 	"kimi-k3":        {Provider: "moonshot", ContextWindow: 1_000_000, MaxOutputTokens: 131_072, SupportsTools: true, SupportsReasoning: true},
 	"kimi-k2.7-code": {Provider: "moonshot", ContextWindow: 256_000, MaxOutputTokens: 32_768, SupportsTools: true, SupportsReasoning: true},
 	"kimi-k2.6":      {Provider: "moonshot", ContextWindow: 262_000, MaxOutputTokens: 65_500, SupportsTools: true, SupportsReasoning: true},
-	"kimi-k2.5":      {Provider: "moonshot", ContextWindow: 262_114, MaxOutputTokens: 65_535, SupportsTools: true, SupportsReasoning: true},
+	"kimi-k2.5":      {Provider: "moonshot", ContextWindow: 262_144, MaxOutputTokens: 65_535, SupportsTools: true, SupportsReasoning: true},
 	"kimi":           {Provider: "moonshot", ContextWindow: 262_000, MaxOutputTokens: 65_500, SupportsTools: true, SupportsReasoning: true},
 
 	// ----------------------------------------------------------------- MiniMax
@@ -289,12 +289,26 @@ func Names() []string {
 	return names
 }
 
+// gateways route models they do not originate, so they are offered the whole
+// catalogue rather than a section of it. Grouping them by Provider would hand a
+// gateway connection an empty model list, which config validation reads as "no
+// model is configured for this provider".
+//
+// This mirrors `gatewaysQualifyModels` in internal/provider, which cannot be
+// shared from there: that package imports this one to complete a bare model
+// name, so the dependency only runs one way.
+var gateways = map[string]bool{
+	"openrouter": true,
+	"vercel":     true,
+	"cloudflare": true,
+}
+
 // NamesForProvider lists the catalogued models available from a provider,
 // sorted. Gateways expose the whole catalogue because they route models from
 // several creators; direct providers expose only models they originate.
 func NamesForProvider(provider string) []string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "openrouter" || provider == "vercel" {
+	if gateways[provider] {
 		return Names()
 	}
 

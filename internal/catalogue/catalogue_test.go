@@ -1,6 +1,7 @@
 package catalogue
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -51,18 +52,47 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 	}
 }
 
-// Vercel advertises a much smaller output ceiling for GLM 5.3 than GLM 5.2;
-// treating the 12.8K value as 128K would compact the thread 115.2K tokens early.
-func TestGLM53UsesGatewayMetadata(t *testing.T) {
-	entry := Lookup("vercel/zai/glm-5.3")
-	if entry.Provider != "zai" || entry.ContextWindow != 1_000_000 || entry.MaxOutputTokens != 12_800 {
-		t.Fatalf("GLM 5.3 metadata = %+v", entry)
+// A gateway-qualified name names the creator's model: "vercel/zai/glm-5.3" has
+// to reach the same entry as "glm-5.3", and a resolver that stopped at the first
+// slash would budget a million-token model on the default 128K window instead.
+func TestGatewayQualifiedNameResolvesToTheCreatorEntry(t *testing.T) {
+	qualified := Lookup("vercel/zai/glm-5.3")
+	direct := Lookup("glm-5.3")
+
+	if qualified != direct {
+		t.Fatalf("vercel/zai/glm-5.3 = %+v, glm-5.3 = %+v", qualified, direct)
 	}
-	if !entry.SupportsTools || !entry.SupportsReasoning {
-		t.Fatalf("GLM 5.3 capabilities = %+v", entry)
+
+	if qualified.Provider != "zai" {
+		t.Errorf("provider = %q, want the creator rather than the gateway", qualified.Provider)
 	}
-	if got := entry.InputBudget(); got != 987_200 {
-		t.Errorf("GLM 5.3 input budget = %d, want 987200", got)
+
+	if qualified.ContextWindow <= DefaultContextWindow {
+		t.Errorf("context window %d did not beat the default %d - the name fell through to Default",
+			qualified.ContextWindow, DefaultContextWindow)
+	}
+
+	if !qualified.SupportsTools || !qualified.SupportsReasoning {
+		t.Errorf("GLM 5.3 capabilities = %+v", qualified)
+	}
+}
+
+// The budget is derived from the entry, not carried alongside it: raise or lower
+// a model's output ceiling and the input budget has to move with it, or the
+// thread builder trims to a number the catalogue no longer says.
+func TestInputBudgetTracksTheEntry(t *testing.T) {
+	for _, name := range []string{"glm-5.3", "glm-5.2", "gpt-5.4", "claude-5-opus", "sonar-pro"} {
+		entry := Lookup(name)
+
+		want := entry.ContextWindow - entry.MaxOutputTokens
+		if half := entry.ContextWindow / 2; want < half {
+			want = half
+		}
+
+		if got := entry.InputBudget(); got != want {
+			t.Errorf("%s: input budget = %d, want %d for a %d window with a %d output ceiling",
+				name, got, want, entry.ContextWindow, entry.MaxOutputTokens)
+		}
 	}
 }
 
@@ -219,11 +249,33 @@ func TestNamesForProvider(t *testing.T) {
 			t.Fatalf("OpenAI list contains %q from %q", name, models[name].Provider)
 		}
 	}
-	if gateway := NamesForProvider("vercel"); len(gateway) != len(Names()) {
-		t.Fatalf("gateway models = %d, want whole catalogue (%d)", len(gateway), len(Names()))
-	}
 	if unknown := NamesForProvider("custom"); len(unknown) != 0 {
 		t.Fatalf("unknown provider models = %v", unknown)
+	}
+}
+
+// A gateway originates nothing, so grouping by Provider would leave it with an
+// empty list - and an empty list is not "no models known", it is a connection
+// whose every model config validation rejects and whose listing UI shows
+// nothing. Every gateway that routes by a creator-qualified name has to be
+// offered the whole catalogue.
+func TestGatewaysExposeTheWholeCatalogue(t *testing.T) {
+	for _, gateway := range []string{"openrouter", "vercel", "cloudflare"} {
+		t.Run(gateway, func(t *testing.T) {
+			names := NamesForProvider(gateway)
+
+			if len(names) != len(Names()) {
+				t.Fatalf("%s lists %d models, want the whole catalogue (%d)", gateway, len(names), len(Names()))
+			}
+
+			// models from creators the gateway is not, which is the point of a
+			// gateway and what grouping by Provider would drop
+			for _, want := range []string{"gpt-5.4", "claude-5-sonnet", "glm-5.3"} {
+				if !slices.Contains(names, want) {
+					t.Errorf("%s cannot route %q", gateway, want)
+				}
+			}
+		})
 	}
 }
 
