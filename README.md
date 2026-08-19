@@ -201,9 +201,10 @@ upgrading.
 
 ## Ecosystem
 
-| Project                                       | Role                                                             |
-| --------------------------------------------- | ---------------------------------------------------------------- |
-| [Rook](https://github.com/pdparchitect/rook)  | An AI bug-hunting and security-audit agent built on zot's engine |
-| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use   |
-| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands        |
-| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP   |
+| Project                                       | Role                                                                               |
+| --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                                       |
+| [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic mornitoring, and incident prevention |
+| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use                     |
+| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands                          |
+| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP                     |
