@@ -348,7 +348,12 @@ func resolveProviders(cfg *Config) {
 
 	for name, p := range cfg.Providers {
 		builtin, isBuiltin := builtinProviders[name]
-		if p.BaseURL == "" && isBuiltin {
+
+		// whether the endpoint was typed rather than left at the built-in one,
+		// recorded before the default fills it in
+		overridden := p.BaseURL != ""
+
+		if !overridden && isBuiltin {
 			p.BaseURL = builtin.baseURL
 		}
 
@@ -361,7 +366,13 @@ func resolveProviders(cfg *Config) {
 		// A built-in provider with nothing configured falls back to its
 		// provider's conventional variable, which is what makes `export
 		// OPENAI_API_KEY=…` enough on its own.
-		if ProviderCredential(p) == "" && isBuiltin && builtin.secretEnv != "" {
+		//
+		// Not once base_url has been overridden, though. The conventional key is
+		// scoped to the provider's own host, and forwarding it to a URL somebody
+		// typed into the config is how a provider credential ends up in someone
+		// else's logs - so overriding the endpoint costs the ambient fallback and
+		// the connection has to carry an api_key written for it.
+		if ProviderCredential(p) == "" && isBuiltin && builtin.secretEnv != "" && !overridden {
 			p.APIKey = strings.TrimSpace(os.Getenv(builtin.secretEnv))
 		}
 

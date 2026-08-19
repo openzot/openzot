@@ -870,3 +870,53 @@ func TestUIStatsAreValidated(t *testing.T) {
 		t.Errorf("an unset stat list must pass (defaults): %v", err)
 	}
 }
+
+// A base_url override points a connection at a host the provider's own
+// credential was never issued for. Falling back to OPENAI_API_KEY there forwards
+// a real OpenAI key to whatever URL was typed into the file - which is how a
+// provider credential ends up in someone else's logs. Overriding the endpoint
+// has to cost the ambient fallback.
+func TestOverriddenBaseURLDoesNotInheritTheEnvironmentKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+	t.Setenv("GROQ_API_KEY", "sk-groq")
+	path := writeConfig(t, `
+providers:
+  openai:
+    base_url: https://proxy.example.com/v1
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Providers["openai"].APIKey; got != "" {
+		t.Errorf("openai key = %q, want it withheld from an endpoint it was not issued for", got)
+	}
+	// a provider left on its built-in endpoint still gets the convenience
+	if got := cfg.Providers["groq"].APIKey; got != "sk-groq" {
+		t.Errorf("groq key = %q, want the environment fallback", got)
+	}
+}
+
+// The rule is about inheritance, not about custom endpoints: a key written for
+// the overridden endpoint is exactly what it should use.
+func TestOverriddenBaseURLKeepsAnExplicitKey(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+	t.Setenv("PROXY_KEY", "sk-proxy")
+	path := writeConfig(t, `
+providers:
+  openai:
+    base_url: https://proxy.example.com/v1
+    api_key: $PROXY_KEY
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Providers["openai"].APIKey; got != "sk-proxy" {
+		t.Errorf("openai key = %q, want the explicitly configured one", got)
+	}
+}
