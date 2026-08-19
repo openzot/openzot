@@ -3,9 +3,15 @@ package loop
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/openzot/openzot/internal/provider"
 )
 
 // Budget semantics, ported from the TypeScript engine's maxIterations and
@@ -559,5 +565,475 @@ func TestEachCheckpointFiresOnce(t *testing.T) {
 
 	if fired != 1 {
 		t.Errorf("the 50%% checkpoint fired %d times, want exactly once", fired)
+	}
+}
+
+// A retriable provider failure has to be waited out, not hammered. Retrying
+// instantly spends the whole continuation budget inside a single outage - twenty
+// round trips in a few milliseconds - so a run dies to a blip that a short pause
+// would have outlived, and the retries pile onto an endpoint that is already
+// failing.
+func TestRetriableFailuresAreSpacedOut(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	t.Cleanup(failing.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  failing.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	started := time.Now()
+
+	result := run(t, Options{
+		Client:           client,
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 3,
+		MaxIterations:    50,
+		RetryBackoff:     20 * time.Millisecond,
+	})
+
+	elapsed := time.Since(started)
+
+	if result.Reason != StopError {
+		t.Fatalf("reason = %q, want the run to end on the provider failure", result.Reason)
+	}
+
+	if result.Budget.Continuations != 3 {
+		t.Fatalf("continuations = %d, want the budget spent", result.Budget.Continuations)
+	}
+
+	// 20ms, then 40ms, then 80ms: the doubling means three retries cannot fit
+	// into anything close to the zero delay they used to take.
+	if want := 100 * time.Millisecond; elapsed < want {
+		t.Errorf("three retries took %s, want at least %s of backoff between them", elapsed, want)
+	}
+}
+
+// Cancelling a run must cut a backoff short rather than making the caller wait
+// out a pause that no longer has a retry at the end of it.
+func TestBackoffEndsWhenTheRunIsCancelled(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	t.Cleanup(failing.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  failing.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	engine, err := New(Options{
+		Client:           client,
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 5,
+		RetryBackoff:     time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	started := time.Now()
+	result := engine.Run(ctx, nil)
+
+	if elapsed := time.Since(started); elapsed > 30*time.Second {
+		t.Fatalf("cancellation took %s to end an hour-long backoff", elapsed)
+	}
+
+	if result.Reason != StopAborted {
+		t.Errorf("reason = %q, want the cancellation to end the run", result.Reason)
+	}
+}
+
+// The default backoff must be a real pause: a zero default would silently
+// restore the tight retry loop. Asserted on the constructed engine because
+// reaching it behaviourally costs a second of wall clock per retry.
+func TestRetryBackoffDefaultsToARealPause(t *testing.T) {
+	engine, err := New(Options{Client: stub(t, []string{stop()})})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if engine.retryBackoff <= 0 {
+		t.Errorf("default retry backoff = %s, want a positive pause", engine.retryBackoff)
+	}
+
+	// and a caller can still opt out, which is what keeps these tests fast
+	engine, err = New(Options{Client: stub(t, []string{stop()}), RetryBackoff: -1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if got := backoffFor(engine.retryBackoff, 1); got != 0 {
+		t.Errorf("opted-out backoff = %s, want none", got)
+	}
+}
+
+// The pause doubles per consecutive retry so a persistent outage is not retried
+// at the same rate as a one-off blip, and is capped so a long continuation
+// budget cannot leave a run asleep for hours.
+func TestBackoffDoublesAndIsCapped(t *testing.T) {
+	base := time.Second
+
+	if got := backoffFor(base, 1); got != base {
+		t.Errorf("first retry waits %s, want %s", got, base)
+	}
+
+	if got := backoffFor(base, 2); got != 2*base {
+		t.Errorf("second retry waits %s, want %s", got, 2*base)
+	}
+
+	if got := backoffFor(base, 3); got != 4*base {
+		t.Errorf("third retry waits %s, want %s", got, 4*base)
+	}
+
+	if got := backoffFor(base, 40); got != MaxRetryBackoff {
+		t.Errorf("a long outage waits %s, want the cap %s", got, MaxRetryBackoff)
+	}
+
+	// the cap binds the base too: a caller-configured backoff above it must not
+	// make the first retry the longest wait of the run
+	if got := backoffFor(2*MaxRetryBackoff, 1); got != MaxRetryBackoff {
+		t.Errorf("a base above the cap waits %s on the first retry, want the cap %s", got, MaxRetryBackoff)
+	}
+}
+
+// A rate limit must not kill a run. 429 is deliberately excluded from
+// IsRetriable because it needs the provider's own schedule rather than a tight
+// loop - but nothing waited on that schedule, so the loop fell straight through
+// to StopError. One throttle response at iteration 400 of an overnight run ended
+// it, with the whole continuation budget unspent.
+func TestARateLimitIsWaitedOutRatherThanFatal(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+
+		if first {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(w, `{"error":{"message":"slow down"}}`)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", tool("c1", SuccessTool, `{"summary":"done anyway"}`))
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	started := time.Now()
+
+	result := run(t, Options{
+		Client:     client,
+		Messages:   []Message{{Type: TypeUser, Text: "go"}},
+		MaxSettles: 5,
+	})
+
+	elapsed := time.Since(started)
+
+	if result.Reason != StopSettled {
+		t.Fatalf("reason = %q (%v), want the run to survive the rate limit", result.Reason, result.Err)
+	}
+
+	if result.Budget.Continuations != 1 {
+		t.Errorf("continuations = %d, want the rate limit to cost exactly one", result.Budget.Continuations)
+	}
+
+	// the provider asked for a second; honouring that is the whole point, so a
+	// retry that came back sooner means the advice was ignored
+	if elapsed < time.Second {
+		t.Errorf("retried after %s, want the advised second to be waited out", elapsed)
+	}
+}
+
+// A provider that advises an absurd Retry-After must not park an unattended run
+// for hours: the advice is honoured up to a cap, and no further.
+func TestAnAbsurdRetryAfterIsCapped(t *testing.T) {
+	if got := rateLimitWait(48*time.Hour, true, time.Second); got != MaxRateLimitWait {
+		t.Errorf("wait = %s, want the cap %s", got, MaxRateLimitWait)
+	}
+
+	// advice inside the cap is followed exactly, rather than rounded to our own
+	// backoff schedule
+	if got := rateLimitWait(90*time.Second, true, time.Second); got != 90*time.Second {
+		t.Errorf("wait = %s, want the advised 90s", got)
+	}
+
+	// and with no advice at all the ordinary backoff applies
+	if got := rateLimitWait(0, false, 4*time.Second); got != 4*time.Second {
+		t.Errorf("wait = %s, want the fallback backoff", got)
+	}
+}
+
+// The backoff is a floor under the provider's advice, not just a fallback for
+// its absence. "Retry-After: 0" (or a date already past) is advice to retry
+// now - and a provider that keeps sending it while still answering 429 would
+// otherwise be hammered with instant retries, the exact tight loop the backoff
+// exists to prevent.
+func TestAZeroRetryAfterIsFlooredByTheBackoff(t *testing.T) {
+	if got := rateLimitWait(0, true, 4*time.Second); got != 4*time.Second {
+		t.Errorf("wait = %s, want the 4s backoff floor under \"retry now\"", got)
+	}
+
+	// advice above the floor still wins: the provider knows its own window
+	if got := rateLimitWait(90*time.Second, true, 4*time.Second); got != 90*time.Second {
+		t.Errorf("wait = %s, want the advised 90s over the smaller backoff", got)
+	}
+}
+
+// And end to end: repeated 429s advising "retry now" must still space their
+// retries out on the backoff schedule rather than burning the continuation
+// budget in milliseconds.
+func TestRepeated429WithZeroRetryAfterStillBacksOff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `{"error":{"message":"slow down"}}`)
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	started := time.Now()
+
+	result := run(t, Options{
+		Client:           client,
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 3,
+		MaxIterations:    50,
+		RetryBackoff:     20 * time.Millisecond,
+	})
+
+	elapsed := time.Since(started)
+
+	if result.Reason != StopError {
+		t.Fatalf("reason = %q, want the run to end once the budget is spent", result.Reason)
+	}
+
+	if result.Budget.Continuations != 3 {
+		t.Fatalf("continuations = %d, want the budget spent", result.Budget.Continuations)
+	}
+
+	// 20ms, then 40ms, then 80ms: the advised zero must not undercut the floor
+	if want := 100 * time.Millisecond; elapsed < want {
+		t.Errorf("three rate-limited retries took %s, want at least %s of backoff between them", elapsed, want)
+	}
+}
+
+// The backoff paces *consecutive* failures. Once a turn succeeds, the outage it
+// was pacing is over, and the next blip - hours later, in a long run - must
+// start again from the base delay rather than from wherever the last outage
+// left the schedule.
+func TestBackoffRestartsAfterASuccessfulTurn(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		request := requests
+		mu.Unlock()
+
+		switch request {
+		case 1, 2:
+			// a two-deep outage: retries wait base, then 2x base
+			w.WriteHeader(http.StatusInternalServerError)
+
+		case 3:
+			// a successful tool round - the outage is over
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: %s\n\n", tool("c1", "echo", `{}`))
+			fmt.Fprint(w, "data: [DONE]\n\n")
+
+		case 4:
+			// a fresh, unrelated blip: it must wait base again, not 4x base
+			w.WriteHeader(http.StatusInternalServerError)
+
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: %s\n\n", tool("c2", SuccessTool, `{"summary":"done"}`))
+			fmt.Fprint(w, "data: [DONE]\n\n")
+		}
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	calls := 0
+
+	base := 300 * time.Millisecond
+
+	started := time.Now()
+
+	result := run(t, Options{
+		Client:           client,
+		Tools:            echoTool(&calls),
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 10,
+		MaxIterations:    20,
+		MaxSettles:       5,
+		RetryBackoff:     base,
+	})
+
+	elapsed := time.Since(started)
+
+	if result.Reason != StopSettled {
+		t.Fatalf("reason = %q (%v), want the run to finish", result.Reason, result.Err)
+	}
+
+	if result.Budget.Continuations != 3 {
+		t.Fatalf("continuations = %d, want 3", result.Budget.Continuations)
+	}
+
+	// base + 2x base + base = 4x base when the counter resets on success; a
+	// counter that kept escalating would wait base + 2x + 4x = 7x base. The
+	// bound sits between the two with generous slack for a loaded machine.
+	if floor := 4 * base; elapsed < floor {
+		t.Fatalf("the retries took %s, want at least %s of backoff", elapsed, floor)
+	}
+
+	if ceiling := 6 * base; elapsed > ceiling {
+		t.Errorf("the retries took %s, want under %s - the backoff must restart from the base after a successful turn", elapsed, ceiling)
+	}
+}
+
+// The consecutive-failure counter is the backoff's own, not the continuation
+// budget. That budget is also spent by truncation recoveries (and context-limit
+// compactions), so keying the backoff off it made an unrelated first blip start
+// at an escalated wait - here, 8x base for a run whose only prior continuations
+// were truncated answers.
+func TestOtherContinuationsDoNotEscalateTheBackoff(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		request := requests
+		mu.Unlock()
+
+		switch request {
+		case 1, 2, 3:
+			// truncated answers: each spends a continuation, none is a failure
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: %s\n\n", text("more to say"))
+			fmt.Fprintf(w, "data: %s\n\n", truncated())
+			fmt.Fprint(w, "data: [DONE]\n\n")
+
+		case 4:
+			// the run's first retriable failure: it must wait base, not 8x base
+			w.WriteHeader(http.StatusInternalServerError)
+
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: %s\n\n", text("done"))
+			fmt.Fprintf(w, "data: %s\n\n", stop())
+			fmt.Fprint(w, "data: [DONE]\n\n")
+		}
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	base := 300 * time.Millisecond
+
+	started := time.Now()
+
+	result := run(t, Options{
+		Client:           client,
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 10,
+		MaxIterations:    20,
+		RetryBackoff:     base,
+	})
+
+	elapsed := time.Since(started)
+
+	if result.Reason != StopStop {
+		t.Fatalf("reason = %q (%v), want the run to finish", result.Reason, result.Err)
+	}
+
+	if result.Budget.Continuations != 4 {
+		t.Fatalf("continuations = %d, want 3 truncations plus 1 retry", result.Budget.Continuations)
+	}
+
+	// one failure, one wait of base. Keyed off the shared budget it would have
+	// been 8x base; the bound leaves generous slack for a loaded machine.
+	if floor := base; elapsed < floor {
+		t.Fatalf("the retry took %s, want at least the %s base backoff", elapsed, floor)
+	}
+
+	if ceiling := 4 * base; elapsed > ceiling {
+		t.Errorf("the retry took %s, want under %s - truncation recoveries must not escalate the failure backoff", elapsed, ceiling)
 	}
 }

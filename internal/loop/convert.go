@@ -143,6 +143,11 @@ func toChatMessages(messages []Message) []provider.ChatMessage {
 							Arguments: activity.Arguments,
 						},
 					}},
+
+					// replayed with the call it produced: the transport that
+					// asks for this state tells the provider to store nothing,
+					// so a call sent without it is rejected outright
+					ReasoningItems: activity.ReasoningItems,
 				})
 
 			case ActivityResponse:

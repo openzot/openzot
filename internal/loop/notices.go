@@ -8,10 +8,14 @@ import "fmt"
 // because that is what they are for: the loop has noticed something the model
 // cannot see about itself, and the only lever it has is the next prompt.
 //
-// Each is prefixed so it can be recognised later. A notice must never be
-// mistaken for the model's own output, and the cycle detector deliberately skips
-// them - a nudge injected to break a loop must not itself break the detection
-// run and mask the loop it was meant to end.
+// Each is prefixed so a reader of the thread or the session log can tell a
+// notice from the model's own output. The prefix is a label, not a filter: the
+// cycle detector scans notices like any other message. Detection survives that
+// because the nudge for a given repetition is itself identical every time it is
+// injected, so an interleaved notice repeats along with the behaviour it is
+// answering instead of breaking up the run of it - and the result-run detector,
+// which is what fires on a tool loop, reads only tool results and never sees
+// them at all.
 const noticePrefix = "!NB:"
 
 // cycleNotice tells the model it is repeating itself.

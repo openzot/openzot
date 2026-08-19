@@ -7,6 +7,18 @@
 // history outright.
 //
 // The behaviour here is pinned by testdata/corpus.json. See corpus_test.go.
+//
+// Two layers live in this package, and telling them apart matters. The token
+// counters and BuildSummaryPrompt are what the engine calls on every run. The
+// decide-and-rewrite surface - Check, CheckCompaction, Split,
+// SplitMessagesForCompaction, ApplySummary - is the ported reference: the loop
+// makes those decisions itself (splitForCheckpoint and applyCheckpoint, in
+// internal/loop) because it pins the system prompt and existing checkpoints,
+// which the seed had no concept of. These are kept because the corpus pins them
+// against the implementation zot was ported from, which is what makes a
+// divergence in the live path detectable rather than a matter of opinion. They
+// are reference, not dead code, and deleting them would delete the parity check
+// with them.
 package compaction
 
 import (

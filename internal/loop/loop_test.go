@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openzot/openzot/internal/provider"
 )
@@ -79,6 +81,13 @@ func tool(id, name, arguments string) string {
 
 func run(t *testing.T, options Options) Result {
 	t.Helper()
+
+	// tests opt out of the retry backoff unless they are about it: a test that
+	// merely drives a retriable failure should not silently sleep through the
+	// production default. A test of the backoff itself sets its own value.
+	if options.RetryBackoff == 0 {
+		options.RetryBackoff = -1
+	}
 
 	engine, err := New(options)
 	if err != nil {
@@ -296,12 +305,42 @@ func TestSettleModeFailureToolAlsoEnds(t *testing.T) {
 		MaxSettles: 5,
 	})
 
-	if result.Reason != StopSettled {
-		t.Errorf("reason = %q, want settled", result.Reason)
+	if result.Reason != StopFailed {
+		t.Errorf("reason = %q, want failed", result.Reason)
 	}
 
 	if result.Message != "cannot reach the host" {
 		t.Errorf("message = %q, want the failure reason", result.Message)
+	}
+}
+
+// The two terminal tools mean opposite things, so a caller has to be able to
+// tell them apart. Both used to end a run as StopSettled, which exits 0 and
+// renders as "done" - a mission the model gave up on was reported to scripts,
+// schedules and the session log as a success.
+func TestTerminalToolsReportOppositeOutcomes(t *testing.T) {
+	settled := run(t, Options{
+		Client:     stub(t, []string{tool("c1", SuccessTool, `{"summary":"shipped it"}`)}),
+		Messages:   []Message{{Type: TypeUser, Text: "go"}},
+		MaxSettles: 5,
+	})
+
+	failed := run(t, Options{
+		Client:     stub(t, []string{tool("c9", FailureTool, `{"reason":"cannot reach the host"}`)}),
+		Messages:   []Message{{Type: TypeUser, Text: "go"}},
+		MaxSettles: 5,
+	})
+
+	if settled.Reason == failed.Reason {
+		t.Fatalf("both terminal tools ended the run as %q - nothing downstream can tell a failed mission from a finished one", settled.Reason)
+	}
+
+	if settled.Reason != StopSettled {
+		t.Errorf("success reason = %q, want settled", settled.Reason)
+	}
+
+	if failed.Reason != StopFailed {
+		t.Errorf("failure reason = %q, want failed", failed.Reason)
 	}
 }
 
@@ -508,5 +547,86 @@ func TestToolDefinitionsAddTerminalToolsInSettleMode(t *testing.T) {
 		if tool.Function.Name == SuccessTool {
 			t.Error("terminal tools must not be offered outside settle mode")
 		}
+	}
+}
+
+// The runaway guard ends a turn while the provider is still streaming, so the
+// stream it walks away from has to be cancelled. It was not: the transport's
+// producer goroutine stayed parked on a send nobody would ever receive, holding
+// its HTTP response body open for the life of the process, and every trip of the
+// guard - a routine event in a long run, which is why the guard exists - leaked
+// another one.
+func TestAnAbandonedStreamIsCancelled(t *testing.T) {
+	cancelled := make(chan struct{})
+
+	var once sync.Once
+
+	done := func() { once.Do(func() { close(cancelled) }) }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		flusher, _ := w.(http.Flusher)
+
+		// stream a repeating phrase forever: past RunawayGuardMinChars the guard
+		// recognises the repetition and cuts the turn short mid-stream
+		for {
+			select {
+			case <-r.Context().Done():
+				done()
+
+				return
+			default:
+			}
+
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", text("the same sentence over and over again. ")); err != nil {
+				done()
+
+				return
+			}
+
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	engine, err := New(Options{
+		Client:        client,
+		Messages:      []Message{{Type: TypeUser, Text: "go"}},
+		MaxIterations: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var runaway bool
+
+	engine.Run(context.Background(), func(event Event) {
+		if event.Kind == EventRunaway {
+			runaway = true
+		}
+	})
+
+	if !runaway {
+		t.Fatal("the guard never tripped, so this test is not exercising an abandoned stream")
+	}
+
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the abandoned stream was never cancelled: its transport goroutine and response body leak")
 	}
 }

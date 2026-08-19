@@ -1,6 +1,10 @@
 package loop
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/openzot/openzot/internal/provider"
+)
 
 // A tool call and its result, as first-class fields rather than a bag of keys.
 //
@@ -53,6 +57,12 @@ type Activity struct {
 
 	// Failure explains why a call could not be run. Set instead of Result.
 	Failure string `json:"failure,omitempty"`
+
+	// ReasoningItems is the opaque reasoning state the turn that made this call
+	// produced, carried so it can be replayed alongside the call. Set on the
+	// first request of a turn only - the state belongs to the turn, not to each
+	// call, and replaying it once per call would send it several times.
+	ReasoningItems []provider.ReasoningItem `json:"reasoning_items,omitempty"`
 }
 
 // IsPair reports whether two activities are the two halves of one call.
@@ -157,11 +167,21 @@ func (a *Activity) threadMeta() map[string]any {
 		}
 	}
 
-	return map[string]any{"activity": map[string]any{
+	meta := map[string]any{"activity": map[string]any{
 		"type":     string(a.Kind),
 		"id":       a.ID,
 		"function": function,
 	}}
+
+	// A sibling of "activity" rather than a member of it: the activity map is
+	// the platform shape the thread heuristics match on, and this is zot's own
+	// state. It has to survive the round trip through the thread builder or the
+	// call it belongs to is replayed without it.
+	if len(a.ReasoningItems) > 0 {
+		meta["reasoning_items"] = a.ReasoningItems
+	}
+
+	return meta
 }
 
 // activityFromMeta reads an activity out of the platform's map shape.
@@ -201,5 +221,35 @@ func activityFromMeta(meta map[string]any) *Activity {
 		return nil
 	}
 
+	activity.ReasoningItems = reasoningItemsFromMeta(meta["reasoning_items"])
+
 	return activity
+}
+
+// reasoningItemsFromMeta reads the reasoning state back out of a meta map.
+//
+// Typed when the map came straight from threadMeta, which is the live path; the
+// JSON round trip covers a conversation that reached here through a session log
+// or an embedder, where the same value arrives as decoded maps.
+func reasoningItemsFromMeta(raw any) []provider.ReasoningItem {
+	if raw == nil {
+		return nil
+	}
+
+	if items, ok := raw.([]provider.ReasoningItem); ok {
+		return items
+	}
+
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+
+	var items []provider.ReasoningItem
+
+	if err := json.Unmarshal(encoded, &items); err != nil {
+		return nil
+	}
+
+	return items
 }

@@ -291,8 +291,9 @@ func TestRetriableProviderErrorIsRetried(t *testing.T) {
 	}
 
 	engine, err := New(Options{
-		Client:   client,
-		Messages: []Message{{Type: TypeUser, Text: "go"}},
+		Client:       client,
+		Messages:     []Message{{Type: TypeUser, Text: "go"}},
+		RetryBackoff: -1, // the retry itself is under test, not its pacing
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
