@@ -319,7 +319,21 @@ func shellHandler(ctx context.Context, args map[string]any) (any, error) {
 		shell, flag = "cmd", "/c"
 	}
 
-	output, err := exec.CommandContext(ctx, shell, flag, command).CombinedOutput()
+	cmd := exec.CommandContext(ctx, shell, flag, command)
+
+	// Killing the shell is not enough. A command that leaves a process behind -
+	// `npm start &`, anything that daemonises - hands the inherited output pipe
+	// to a grandchild, and reading that pipe blocks until every holder of it is
+	// gone. Without a WaitDelay the tool call simply never returns, and nothing
+	// upstream can recover: the run's time budget is only checked between
+	// iterations, and cancelling the run kills the shell, not the process
+	// holding the pipe. WaitDelay gives up on the pipe shortly after the process
+	// is killed, so a wedged command costs a timeout instead of the whole run.
+	cmd.WaitDelay = 2 * time.Second
+
+	setProcessGroup(cmd)
+
+	output, err := cmd.CombinedOutput()
 
 	// @note a non-zero exit is returned to the model as output rather than as an
 	// error. A failing command is information - a compiler error, a failing test -

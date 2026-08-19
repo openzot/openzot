@@ -259,6 +259,12 @@ type ExecuteWithToolsOptions struct {
 	// default.
 	MaxContinuations int
 
+	// RetryBackoff is the pause before the first retry of a retriable provider
+	// failure, doubling per consecutive retry up to a cap. Zero uses the default.
+	// Negative disables the wait, which spends the whole continuation budget in
+	// milliseconds - only a test driving an outage should ask for that.
+	RetryBackoff time.Duration
+
 	// MaxCycles bounds how many times the loop nudges the model out of a detected
 	// repetition before giving up. Zero uses the default. A safety guard: the
 	// default encodes a real failure mode.
@@ -309,6 +315,12 @@ type ExecuteWithToolsOptions struct {
 	CompactTriggerRatio float64
 }
 
+// exitEventGrace is how long a cancelled run holds the exit event for a
+// consumer that is still draining the channel. A draining consumer receives
+// within microseconds; the window only elapses in full when the channel has
+// been abandoned, and it is what bounds the leak that abandonment used to be.
+const exitEventGrace = time.Second
+
 // ExecuteWithTools runs an autonomous conversation.
 //
 // Events stream on the first channel until the run ends, at which point both
@@ -333,32 +345,6 @@ func ExecuteWithTools(
 			return
 		}
 
-		engine, err := loop.New(loop.Options{
-			Client:              client.inner,
-			Instructions:        options.Instructions,
-			Messages:            toLoopMessages(options),
-			Tools:               toLoopTools(withSkillTool(options.Tools, options.Skills)),
-			Skills:              toLoopSkills(options.Skills),
-			MaxIterations:       options.MaxIterations,
-			MaxCalls:            options.MaxCalls,
-			MaxContinuations:    options.MaxContinuations,
-			MaxCycles:           options.MaxCycles,
-			MaxEmpties:          options.MaxEmpties,
-			MaxDuration:         options.MaxDuration,
-			MaxSettles:          settleBudget(options),
-			MaxTokens:           options.MaxTokens,
-			LimitCheckpoints:    options.LimitCheckpoints,
-			Compact:             options.ContextStrategy != StrategyTruncate,
-			CompactMinTokens:    options.CompactMinTokens,
-			CompactMinMessages:  options.CompactMinMessages,
-			CompactTriggerRatio: options.CompactTriggerRatio,
-		})
-		if err != nil {
-			errs <- err
-
-			return
-		}
-
 		recorder := options.Recorder
 
 		// The seed is recorded before the run starts so a session that dies in
@@ -371,35 +357,61 @@ func ExecuteWithTools(
 			}
 		}
 
+		log := &conversationLog{recorder: recorder, recorded: seed}
+
+		engine, err := loop.New(loop.Options{
+			Client:              client.inner,
+			Instructions:        options.Instructions,
+			Messages:            toLoopMessages(options),
+			Tools:               toLoopTools(withSkillTool(options.Tools, options.Skills)),
+			Skills:              toLoopSkills(options.Skills),
+			MaxIterations:       options.MaxIterations,
+			MaxCalls:            options.MaxCalls,
+			MaxContinuations:    options.MaxContinuations,
+			RetryBackoff:        options.RetryBackoff,
+			MaxCycles:           options.MaxCycles,
+			MaxEmpties:          options.MaxEmpties,
+			MaxDuration:         options.MaxDuration,
+			MaxSettles:          settleBudget(options),
+			MaxTokens:           options.MaxTokens,
+			LimitCheckpoints:    options.LimitCheckpoints,
+			Compact:             options.ContextStrategy != StrategyTruncate,
+			CompactMinTokens:    options.CompactMinTokens,
+			CompactMinMessages:  options.CompactMinMessages,
+			CompactTriggerRatio: options.CompactTriggerRatio,
+
+			OnConversation: func(messages []loop.Message) {
+				log.sync(fromLoopMessages(messages))
+			},
+		})
+		if err != nil {
+			errs <- err
+
+			return
+		}
+
 		result := engine.Run(ctx, func(event loop.Event) {
 			if recorder != nil {
 				_ = recorder.RecordEvent(string(event.Kind), event.Tool, event.Text, event.Iteration)
 			}
 
+			// The send stays synchronous - a slow consumer throttles the run -
+			// but must not outlive it: an embedder that cancels the run and
+			// walks away from the channel would otherwise park this goroutine
+			// on a send nobody will ever receive, leaking it (and the run's
+			// resources) for the life of the process. Once ctx is done the run
+			// is aborting anyway, so a dropped trailing event loses nothing.
 			if translated, ok := translate(event); ok {
-				events <- translated
+				select {
+				case events <- translated:
+				case <-ctx.Done():
+				}
 			}
 		})
 
-		// @note the conversation is recorded once the run ends rather than turn by
-		// turn: the loop rewrites its own history when it compacts, so an
-		// incremental log would keep turns that no longer exist and resume into a
-		// conversation the agent never actually had. When the ending differs from
-		// the seed - which is exactly what compaction looks like from here - the
-		// record is reset first so what remains is one coherent history.
-		if recorder != nil {
-			final := fromLoopMessages(result.Messages)
-
-			if !sharePrefix(seed, final) {
-				_ = recorder.RecordReset()
-
-				seed = nil
-			}
-
-			for _, message := range final[min(len(seed), len(final)):] {
-				_ = recorder.RecordMessage(message)
-			}
-		}
+		// the run's last turn happened after the final boundary hand-over, so the
+		// ending is written down here
+		log.sync(fromLoopMessages(result.Messages))
 
 		if recorder != nil {
 			_ = recorder.RecordResult(Summary{
@@ -414,11 +426,27 @@ func ExecuteWithTools(
 			})
 		}
 
-		events <- AgentExitEvent{
+		// The exit event is the contract - "the run always concludes with an
+		// AgentExitEvent" - so a consumer draining to close must receive it even
+		// when the run was cancelled. Cancellation alone cannot distinguish a
+		// consumer that is draining from one that walked away, so after ctx is
+		// done the send gets a grace window: a draining consumer takes the event
+		// within it, and only an abandoned channel forfeits it - which is what
+		// lets this goroutine end instead of leaking.
+		exit := AgentExitEvent{
 			Code:     exitCode(result.Reason),
 			Reason:   string(result.Reason),
 			Message:  result.Message,
 			Messages: fromLoopMessages(result.Messages),
+		}
+
+		select {
+		case events <- exit:
+		case <-ctx.Done():
+			select {
+			case events <- exit:
+			case <-time.After(exitEventGrace):
+			}
 		}
 
 		if result.Err != nil {
@@ -427,6 +455,43 @@ func ExecuteWithTools(
 	}()
 
 	return events, errs
+}
+
+// conversationLog keeps a Recorder in step with a conversation the engine
+// rewrites underneath it.
+//
+// The log is written as the run goes, so a run that dies at iteration 500 leaves
+// 500 iterations of work behind rather than just the brief it started from. The
+// complication that made it tempting to write only at the end is compaction: the
+// engine summarises its own history, so the conversation's prefix changes. That
+// is what the reset is for - when the history no longer extends what was
+// recorded, the record is discarded and rewritten, leaving one coherent
+// conversation rather than turns that no longer exist.
+type conversationLog struct {
+	recorder Recorder
+	recorded []Message
+}
+
+func (c *conversationLog) sync(current []Message) {
+	if c.recorder == nil {
+		return
+	}
+
+	if !sharePrefix(c.recorded, current) {
+		_ = c.recorder.RecordReset()
+
+		c.recorded = nil
+	}
+
+	if len(current) == len(c.recorded) {
+		return
+	}
+
+	for _, message := range current[min(len(c.recorded), len(current)):] {
+		_ = c.recorder.RecordMessage(message)
+	}
+
+	c.recorded = append([]Message(nil), current...)
 }
 
 // settleBudget resolves the settle-nudge allowance. Always positive: settlement
@@ -441,10 +506,11 @@ func settleBudget(options ExecuteWithToolsOptions) int {
 
 // exitCode maps a stop reason onto a process-style exit code.
 //
-// Zero means the agent reached a conclusion it stands behind - it settled, or it
-// finished talking in a non-settle run. Everything else means the run was cut
-// short, and a caller scripting against zot needs to be able to tell those apart
-// without parsing prose.
+// Zero means the agent reached a conclusion it stands behind and that conclusion
+// was success - it settled, or it finished talking in a non-settle run. Everything
+// else means the task did not get done: either the model declared it could not be
+// done (StopFailed) or the run was cut short by a guard. A caller scripting
+// against zot needs to tell those apart without parsing prose.
 func exitCode(reason loop.StopReason) int {
 	switch reason {
 	case loop.StopSettled, loop.StopStop:

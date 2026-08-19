@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func call(t *testing.T, tools Tools, name string, args map[string]any) (any, error) {
@@ -515,5 +517,39 @@ func TestPlanAndProgressAreInTheToolbox(t *testing.T) {
 		if _, ok := tools[name]; !ok {
 			t.Errorf("DefaultTools is missing the %q tool", name)
 		}
+	}
+}
+
+// A command that leaves a process behind must not be able to wedge the run.
+//
+// The timeout kills the shell, but a grandchild that inherited the output pipe
+// keeps it open, and CombinedOutput blocks until the pipe closes - so the tool
+// call never returned. Nothing downstream could recover: the run's time budget
+// is only checked at an iteration boundary, and cancelling the run kills the
+// shell, not the process holding the pipe. `npm start &` was enough to do it.
+func TestShellDoesNotWedgeOnADaemonisedChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the shell idiom under test is POSIX")
+	}
+
+	done := make(chan any, 1)
+
+	go func() {
+		out, _ := shellHandler(context.Background(), map[string]any{
+			// the child outlives the shell and keeps the inherited pipe open
+			"command": "sh -c 'sleep 60' & echo started",
+			"timeout": 1,
+		})
+
+		done <- out
+	}()
+
+	select {
+	case out := <-done:
+		if text, ok := out.(string); ok && !strings.Contains(text, "started") {
+			t.Errorf("output = %q, want the command's own output kept", text)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the tool call never returned: a backgrounded child holding the output pipe wedges the run for good")
 	}
 }
