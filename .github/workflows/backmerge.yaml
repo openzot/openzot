@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   backmerge:
-    runs-on: [self-hosted, linux, x64, tiny]
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
