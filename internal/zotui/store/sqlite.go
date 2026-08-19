@@ -108,10 +108,10 @@ func (s *sqlStore) CreateRun(ctx context.Context, r Run) (string, error) {
 	}
 	now := unix(time.Now())
 	_, err := s.db.ExecContext(ctx, s.d.rebind(`INSERT INTO runs
-(id, worker_id, status, mission, provider, model, max_iterations, iteration, tool, action, exit_code, error, output,
-created_at, updated_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+(id, worker_id, status, mission, provider, model, max_iterations, iteration, tool, action, exit_code, error,
+created_at, updated_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		r.ID, r.WorkerID, string(r.Status), r.Mission, r.Provider, r.Model, r.MaxIterations, r.Iteration,
-		r.Tool, r.Action, nullableInt(r.ExitCode), r.Error, "", now, now, nullableTime(r.StartedAt), nullableTime(r.FinishedAt))
+		r.Tool, r.Action, nullableInt(r.ExitCode), r.Error, now, now, nullableTime(r.StartedAt), nullableTime(r.FinishedAt))
 	return r.ID, err
 }
 
@@ -129,6 +129,26 @@ func (s *sqlStore) ListRuns(ctx context.Context, workerID string) ([]Run, error)
 		q, args = runSelect+` ORDER BY created_at DESC`, nil
 	}
 	rows, err := s.db.QueryContext(ctx, s.d.rebind(q), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Run, 0)
+	for rows.Next() {
+		r, err := scanRun(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ActiveRuns returns every run that is not terminal, newest first. A process
+// that starts up uses it to find runs a previous process left mid-flight.
+func (s *sqlStore) ActiveRuns(ctx context.Context) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, s.d.rebind(runSelect+` WHERE status IN (?, ?, ?) ORDER BY created_at DESC`),
+		string(RunScheduled), string(RunRunning), string(RunPaused))
 	if err != nil {
 		return nil, err
 	}
@@ -165,19 +185,79 @@ func (s *sqlStore) UpdateRunProgress(ctx context.Context, id string, iteration i
 	return changed(res, err)
 }
 
+// AppendRunOutput writes one chunk. The cost is a single row insert regardless
+// of how much the run has already emitted; once the run passes maxRunOutputBytes
+// the chunks that fall out of the window are discarded.
 func (s *sqlStore) AppendRunOutput(ctx context.Context, id string, output []byte) error {
-	res, err := s.db.ExecContext(ctx, s.d.rebind(`UPDATE runs SET output = output || ?, updated_at = ? WHERE id = ?`),
-		string(output), unix(time.Now()), id)
-	return changed(res, err)
+	if len(output) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := s.txExec(tx, `UPDATE runs SET updated_at = ? WHERE id = ?`, unix(time.Now()), id)
+	if err := changed(res, err); err != nil {
+		return err
+	}
+	var seq, start int64
+	err = tx.QueryRowContext(ctx, s.d.rebind(`SELECT seq + 1, byte_end FROM run_output
+WHERE run_id = ? ORDER BY seq DESC LIMIT 1`), id).Scan(&seq, &start)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	end := start + int64(len(output))
+	if _, err := s.txExec(tx, `INSERT INTO run_output (run_id, seq, byte_start, byte_end, data)
+VALUES (?, ?, ?, ?, ?)`, id, seq, start, end, output); err != nil {
+		return err
+	}
+	if trim := end - maxRunOutputBytes; trim > 0 {
+		if _, err := s.txExec(tx, `DELETE FROM run_output WHERE run_id = ? AND byte_end <= ?`, id, trim); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
-func (s *sqlStore) RunOutput(ctx context.Context, id string) (string, error) {
-	var output string
-	err := s.db.QueryRowContext(ctx, s.d.rebind(`SELECT output FROM runs WHERE id = ?`), id).Scan(&output)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrNotFound
+// RunOutput returns the run's output from offset onward. Start reports where the
+// returned bytes actually begin: it is later than offset when the cap has already
+// discarded them, which tells a reader its tail is no longer continuous.
+func (s *sqlStore) RunOutput(ctx context.Context, id string, offset int64) (Output, error) {
+	var exists int
+	if err := s.db.QueryRowContext(ctx, s.d.rebind(`SELECT 1 FROM runs WHERE id = ?`), id).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Output{}, ErrNotFound
+		}
+		return Output{}, err
 	}
-	return output, err
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, s.d.rebind(`SELECT byte_start, byte_end, data FROM run_output
+WHERE run_id = ? AND byte_end > ? ORDER BY seq`), id, offset)
+	if err != nil {
+		return Output{}, err
+	}
+	defer rows.Close()
+	out := Output{Start: offset, Next: offset}
+	first := true
+	for rows.Next() {
+		var start, end int64
+		var data []byte
+		if err := rows.Scan(&start, &end, &data); err != nil {
+			return Output{}, err
+		}
+		if first {
+			if start < offset {
+				data, start = data[offset-start:], offset
+			}
+			out.Start, first = start, false
+		}
+		out.Data = append(out.Data, data...)
+		out.Next = end
+	}
+	return out, rows.Err()
 }
 
 const runSelect = `SELECT id, worker_id, status, mission, provider, model, max_iterations, iteration, tool, action,

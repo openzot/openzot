@@ -78,6 +78,33 @@ including `/api/*`, and do not expose an unauthenticated zotui listener to an
 untrusted network. The default loopback listen address keeps the application
 local unless `ZOTUI_ADDR` is changed.
 
+Binding to loopback answers where the listener can be reached from, which is not
+the same question as which pages may drive it. A site the operator happens to
+visit can aim a request at `127.0.0.1` from inside their browser - by rebinding
+its own hostname to the loopback address, at which point the browser treats the
+page as same-origin. So the server also checks who a request claims to be for:
+
+- The `Host` header must name an address zotui serves - `localhost`,
+  `127.0.0.1`, `[::1]`, the host in `ZOTUI_ADDR`, or a name listed in
+  `ZOTUI_ALLOWED_HOSTS` (comma-separated). A rebound hostname does not match
+  and is refused. Binding to a wildcard address such as `0.0.0.0` does *not*
+  lift this check: which interfaces accept connections and which names a
+  browser page may aim at the API are separate questions, and the common
+  wildcard bind is a container whose published port is loopback on the host -
+  exactly the deployment rebinding attacks. To serve by other hostnames, list
+  them in `ZOTUI_ALLOWED_HOSTS`; setting it to `*` disables the check as an
+  explicit choice.
+- A state-changing request (anything that is not a read) must not be marked
+  cross-site by the browser, and any `Origin` it carries must match its `Host`.
+- Creating and updating workers additionally requires a JSON content type,
+  which an HTML form cannot produce. The other state-changing routes (starting,
+  pausing, resuming, stopping runs; deleting workers) take no request body and
+  rely on the `Origin` and `Sec-Fetch-Site` checks above.
+
+None of this replaces the proxy for a deployment that is genuinely exposed; it
+closes the case where the listener is local and the attacker arrives through the
+operator's own browser.
+
 ## Repositories
 
 Repository connections are named entries under `repos`. A worker records both

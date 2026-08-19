@@ -70,6 +70,22 @@ var migrations = []Migration{
 		`ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN provider TEXT NOT NULL DEFAULT ''`,
 	}},
+	// A single growing TEXT column made every append rewrite the whole buffer and
+	// every poll re-ship it. Chunks are written once and addressed by byte offset,
+	// so an append costs one row and a poll transfers only what is new. The old
+	// column is dropped outright: accumulated output is a live tail, not a record.
+	{Version: 4, Name: "store run output in append-only chunks", Statements: []string{
+		`ALTER TABLE runs DROP COLUMN output`,
+		`CREATE TABLE IF NOT EXISTS run_output (
+	run_id     TEXT   NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+	seq        BIGINT NOT NULL,
+	byte_start BIGINT NOT NULL,
+	byte_end   BIGINT NOT NULL,
+	data       BLOB   NOT NULL,
+	PRIMARY KEY (run_id, seq)
+)`,
+		`CREATE INDEX IF NOT EXISTS idx_run_output_range ON run_output(run_id, byte_end)`,
+	}},
 }
 
 // MigrationState reports how the database's schema compares to the code.

@@ -33,9 +33,24 @@ type App struct {
 	repoCache       map[string]repo.Provider
 	repositoryCache map[string]repositoryChoices
 	cancels         map[string]*runCancel
+	closed          bool
+
+	// runMu serialises every run status transition. Each transition reads the
+	// status it is allowed to leave and writes the next one; without the lock a
+	// control action and a finishing dispatch decide against a status the other
+	// is about to replace, and the loser's write silently wins.
+	runMu sync.Mutex
+
+	// worker resolves the zot executable a sandbox is given, keyed by platform.
+	worker func(string) (compute.Worker, error)
 }
 
-type runCancel struct{ cancel context.CancelFunc }
+// runCancel stops one dispatch goroutine and reports when it has torn its
+// sandbox down; Shutdown waits on done so Ctrl-C does not orphan a container.
+type runCancel struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
 
 type repositoryChoices struct {
 	repositories []string
@@ -48,7 +63,7 @@ const repositoryCacheTTL = 5 * time.Minute
 
 func New(cfg *config.Config, st store.Store) *App {
 	return &App{cfg: cfg, store: st, repoCache: map[string]repo.Provider{},
-		repositoryCache: map[string]repositoryChoices{}, cancels: map[string]*runCancel{}}
+		repositoryCache: map[string]repositoryChoices{}, cancels: map[string]*runCancel{}, worker: workerbin.Load}
 }
 
 type Choices struct {
@@ -162,8 +177,54 @@ func (a *App) Run(ctx context.Context, id string) (*store.Run, error) { return a
 func (a *App) Runs(ctx context.Context, workerID string) ([]store.Run, error) {
 	return a.store.ListRuns(ctx, workerID)
 }
-func (a *App) RunOutput(ctx context.Context, id string) (string, error) {
-	return a.store.RunOutput(ctx, id)
+func (a *App) RunOutput(ctx context.Context, id string, offset int64) (store.Output, error) {
+	return a.store.RunOutput(ctx, id, offset)
+}
+
+// Reconcile fails the runs a previous process left mid-flight. Their sandboxes
+// died with that process, so nothing can adopt them; leaving the rows "running"
+// would show phantom activity and block the worker's next run for ever. Paused
+// runs are deliberately untouched - a pause is meant to survive a restart.
+func (a *App) Reconcile(ctx context.Context) (int, error) {
+	runs, err := a.store.ActiveRuns(ctx)
+	if err != nil {
+		return 0, err
+	}
+	reconciled := 0
+	for _, r := range runs {
+		if r.Status != store.RunRunning && r.Status != store.RunScheduled {
+			continue
+		}
+		if err := a.store.SetRunStatus(ctx, r.ID, store.RunFailed, nil, "interrupted by a zotui restart"); err != nil {
+			return reconciled, err
+		}
+		reconciled++
+	}
+	return reconciled, nil
+}
+
+// Shutdown cancels every in-flight run and waits for its dispatch goroutine to
+// tear the sandbox down, refusing new launches meanwhile. Without it Ctrl-C
+// leaves sandboxes running with the run's repository token still inside them.
+func (a *App) Shutdown(ctx context.Context) error {
+	a.mu.Lock()
+	a.closed = true
+	handles := make([]*runCancel, 0, len(a.cancels))
+	for _, handle := range a.cancels {
+		handles = append(handles, handle)
+	}
+	a.mu.Unlock()
+	for _, handle := range handles {
+		handle.cancel()
+	}
+	for _, handle := range handles {
+		select {
+		case <-handle.done:
+		case <-ctx.Done():
+			return fmt.Errorf("shutdown: %d run(s) still tearing down: %w", len(handles), ctx.Err())
+		}
+	}
+	return nil
 }
 
 func (a *App) StartRun(ctx context.Context, workerID string) (string, error) {
@@ -189,31 +250,45 @@ func (a *App) StartRun(ctx context.Context, workerID string) (string, error) {
 
 // Pause stops the current remote execution but preserves the run. Resume boots a
 // fresh sandbox for the same run; checkpoint-aware compute can refine this seam.
+//
+// The status is written before the cancellation so the dispatch goroutine can
+// only ever see an already-paused run: cancelling first let it record a genuine
+// failure that the pending pause then overwrote, hiding the error behind a run
+// that looked resumable.
 func (a *App) PauseRun(ctx context.Context, id string) error {
+	a.runMu.Lock()
 	r, err := a.store.GetRun(ctx, id)
+	if err == nil && r.Status != store.RunRunning && r.Status != store.RunScheduled {
+		err = fmt.Errorf("run cannot be paused while %s", r.Status)
+	}
+	if err == nil {
+		err = a.store.SetRunStatus(ctx, id, store.RunPaused, r.ExitCode, "")
+	}
+	a.runMu.Unlock()
 	if err != nil {
 		return err
 	}
-	if r.Status != store.RunRunning && r.Status != store.RunScheduled {
-		return fmt.Errorf("run cannot be paused while %s", r.Status)
-	}
 	a.cancel(id)
-	return a.store.SetRunStatus(ctx, id, store.RunPaused, r.ExitCode, "")
+	return nil
 }
 
 func (a *App) ResumeRun(ctx context.Context, id string) error {
+	a.runMu.Lock()
+	var w *store.Worker
 	r, err := a.store.GetRun(ctx, id)
+	if err == nil && r.Status != store.RunPaused {
+		err = fmt.Errorf("run cannot be resumed while %s", r.Status)
+	}
+	if err == nil {
+		w, err = a.store.GetWorker(ctx, r.WorkerID)
+	}
+	if err == nil {
+		// Claiming the run inside the lock is what makes a duplicate resume fail
+		// instead of booting a second sandbox for the same run.
+		err = a.store.SetRunStatus(ctx, id, store.RunScheduled, nil, "")
+	}
+	a.runMu.Unlock()
 	if err != nil {
-		return err
-	}
-	if r.Status != store.RunPaused {
-		return fmt.Errorf("run cannot be resumed while %s", r.Status)
-	}
-	w, err := a.store.GetWorker(ctx, r.WorkerID)
-	if err != nil {
-		return err
-	}
-	if err := a.store.SetRunStatus(ctx, id, store.RunScheduled, nil, ""); err != nil {
 		return err
 	}
 	a.launch(id, *w)
@@ -221,21 +296,34 @@ func (a *App) ResumeRun(ctx context.Context, id string) error {
 }
 
 func (a *App) StopRun(ctx context.Context, id string) error {
+	a.runMu.Lock()
 	r, err := a.store.GetRun(ctx, id)
+	if err == nil && r.Status.Terminal() {
+		err = fmt.Errorf("run is already %s", r.Status)
+	}
+	if err == nil {
+		err = a.store.SetRunStatus(ctx, id, store.RunStopped, r.ExitCode, "stopped by user")
+	}
+	a.runMu.Unlock()
 	if err != nil {
 		return err
 	}
-	if r.Status.Terminal() {
-		return fmt.Errorf("run is already %s", r.Status)
-	}
 	a.cancel(id)
-	return a.store.SetRunStatus(ctx, id, store.RunStopped, r.ExitCode, "stopped by user")
+	return nil
 }
 
 func (a *App) launch(id string, w store.Worker) {
 	ctx, cancel := context.WithCancel(context.Background())
-	handle := &runCancel{cancel: cancel}
+	handle := &runCancel{cancel: cancel, done: make(chan struct{})}
 	a.mu.Lock()
+	// A run already in flight keeps its handle: replacing it would strand the
+	// running goroutine's sandbox with nothing left able to cancel it.
+	if a.closed || a.cancels[id] != nil {
+		a.mu.Unlock()
+		cancel()
+		close(handle.done)
+		return
+	}
 	a.cancels[id] = handle
 	a.mu.Unlock()
 	go a.dispatch(ctx, id, workerExecution(w), handle)
@@ -252,10 +340,11 @@ func (a *App) cancel(id string) {
 
 func (a *App) release(id string, handle *runCancel) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.cancels[id] == handle {
 		delete(a.cancels, id)
 	}
+	a.mu.Unlock()
+	close(handle.done)
 }
 
 func (a *App) dispatch(ctx context.Context, id string, execution dispatch.Execution, handle *runCancel) {
@@ -263,35 +352,55 @@ func (a *App) dispatch(ctx context.Context, id string, execution dispatch.Execut
 	if ctx.Err() != nil {
 		return
 	}
-	if err := a.store.SetRunStatus(context.Background(), id, store.RunRunning, nil, ""); err != nil {
+	if err := a.markRunning(id); err != nil {
 		return
 	}
 	writer := &runWriter{ctx: context.Background(), store: a.store, runID: id}
+	// Every path below settles the run exactly once. Settling twice erased the
+	// exit code, because the second write carried none and the store stores what
+	// it is given.
+	status, reason := store.RunSucceeded, ""
+	var code *int
 	rp, err := a.repoFor(execution.Repo)
 	if err == nil {
-		d := &dispatch.Dispatcher{Repo: rp, Resolver: a, Worker: workerbin.Load, Output: writer}
+		d := &dispatch.Dispatcher{Repo: rp, Resolver: a, Worker: a.worker, Output: writer}
 		var res *dispatch.Result
 		res, err = d.Dispatch(ctx, execution)
-		if err == nil && res != nil && res.ExitCode != 0 {
-			err = fmt.Errorf("zot exited with code %d", res.ExitCode)
-		}
 		if res != nil {
-			code := res.ExitCode
-			if err == nil {
-				_ = a.finishRun(id, store.RunSucceeded, &code, "")
-			} else {
-				_ = a.finishRun(id, store.RunFailed, &code, err.Error())
+			code = &res.ExitCode
+			if err == nil && res.ExitCode != 0 {
+				err = fmt.Errorf("zot exited with code %d", res.ExitCode)
 			}
 		}
 	}
 	if err != nil {
-		_ = a.finishRun(id, store.RunFailed, nil, err.Error())
+		status, reason = store.RunFailed, err.Error()
 	}
+	_ = a.finishRun(id, status, code, reason)
 }
 
-func (a *App) finishRun(id string, status store.RunStatus, code *int, reason string) error {
+// markRunning claims a scheduled run. A run paused or stopped between launch and
+// dispatch stays that way, and the sandbox is never created.
+func (a *App) markRunning(id string) error {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
 	r, err := a.store.GetRun(context.Background(), id)
-	if err != nil || r.Status == store.RunPaused || r.Status == store.RunStopped {
+	if err != nil {
+		return err
+	}
+	if r.Status != store.RunScheduled {
+		return fmt.Errorf("run is %s", r.Status)
+	}
+	return a.store.SetRunStatus(context.Background(), id, store.RunRunning, nil, "")
+}
+
+// finishRun records the outcome unless the run has already settled or been
+// paused by the operator - the cancellation it is reporting is theirs.
+func (a *App) finishRun(id string, status store.RunStatus, code *int, reason string) error {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	r, err := a.store.GetRun(context.Background(), id)
+	if err != nil || r.Status.Terminal() || r.Status == store.RunPaused {
 		return err
 	}
 	return a.store.SetRunStatus(context.Background(), id, status, code, reason)

@@ -77,6 +77,20 @@ type Run struct {
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
+// maxRunOutputBytes caps what one run keeps. Run output is a live tail, not an
+// archive: past the cap the oldest chunks are discarded so a verbose run cannot
+// grow the database without bound.
+const maxRunOutputBytes = 8 << 20
+
+// Output is a slice of one run's output stream, addressed by byte offset. Start
+// is where Data begins - later than the requested offset when the cap has
+// discarded the head - and Next is the offset to request on the following read.
+type Output struct {
+	Data  []byte `json:"data"`
+	Start int64  `json:"start"`
+	Next  int64  `json:"next"`
+}
+
 // Store persists the command center domain. Implementations must be safe for
 // concurrent use.
 type Store interface {
@@ -89,10 +103,11 @@ type Store interface {
 	CreateRun(context.Context, Run) (string, error)
 	GetRun(context.Context, string) (*Run, error)
 	ListRuns(context.Context, string) ([]Run, error)
+	ActiveRuns(context.Context) ([]Run, error)
 	SetRunStatus(context.Context, string, RunStatus, *int, string) error
 	UpdateRunProgress(context.Context, string, int, string, string) error
 	AppendRunOutput(context.Context, string, []byte) error
-	RunOutput(context.Context, string) (string, error)
+	RunOutput(context.Context, string, int64) (Output, error)
 	Close() error
 }
 

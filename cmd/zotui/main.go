@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/openzot/openzot/configs"
 	"github.com/openzot/openzot/internal/zotui/app"
@@ -64,13 +65,39 @@ func run() error {
 	defer st.Close()
 
 	addr := firstNonEmpty(os.Getenv("ZOTUI_ADDR"), "127.0.0.1:8080")
+	// Extra Host-header names the server answers to, beyond loopback and the
+	// bind host. "*" disables the check. Binding a wildcard address does not
+	// widen this: which interfaces accept connections and which names a browser
+	// page may aim at the API are separate questions.
+	allowedHosts := strings.Split(os.Getenv("ZOTUI_ALLOWED_HOSTS"), ",")
 	fmt.Fprintf(os.Stderr, "zotui: command center at http://%s\n", addr)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	commandCenter := app.New(cfg, st)
+
+	// Runs a previous process left mid-flight have no sandbox to return to.
+	if reconciled, err := commandCenter.Reconcile(context.Background()); err != nil {
+		return err
+	} else if reconciled > 0 {
+		fmt.Fprintf(os.Stderr, "zotui: failed %d run(s) interrupted by an earlier shutdown\n", reconciled)
+	}
+
 	go commandCenter.RunScheduler(ctx)
-	return web.Serve(ctx, addr, web.New(commandCenter))
+	err = web.Serve(ctx, addr, web.New(commandCenter, addr, allowedHosts...))
+
+	// Draining before exit is what stops a signal from orphaning sandboxes that
+	// still hold the run's repository token.
+	drain, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
+	if drainErr := commandCenter.Shutdown(drain); drainErr != nil {
+		fmt.Fprintln(os.Stderr, "zotui: "+drainErr.Error())
+	}
+	return err
 }
+
+// drainTimeout bounds how long a shutdown waits for in-flight runs to tear their
+// sandboxes down before giving up and reporting what is left.
+const drainTimeout = 30 * time.Second
 
 // editConfig ensures the config file exists - seeding it from the embedded
 // template on first run - and opens it in the user's editor.

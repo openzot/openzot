@@ -70,12 +70,19 @@ func TestOldDispatchCannotReleaseAResumedRun(t *testing.T) {
 	a := &App{cancels: map[string]*runCancel{}}
 	_, oldCancel := context.WithCancel(context.Background())
 	newContext, newCancel := context.WithCancel(context.Background())
-	old := &runCancel{cancel: oldCancel}
-	newer := &runCancel{cancel: newCancel}
+	old := &runCancel{cancel: oldCancel, done: make(chan struct{})}
+	newer := &runCancel{cancel: newCancel, done: make(chan struct{})}
 	a.cancels["run"] = newer
 	a.release("run", old)
 	if a.cancels["run"] != newer {
 		t.Fatal("old dispatch released the resumed run's cancellation handle")
+	}
+	// Releasing still reports that dispatch is done, which is what a shutdown
+	// waits on; a handle that never closed would hang the drain.
+	select {
+	case <-old.done:
+	default:
+		t.Fatal("a released dispatch never reported that it finished")
 	}
 	a.cancel("run")
 	if newContext.Err() == nil {

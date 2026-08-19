@@ -9,7 +9,10 @@ let schedule = { cron: "", timezone: "", runtimeMinutes: 0 };
 let poll;
 let outputRequest = 0;
 let outputRunID = "";
-let renderedOutput = null;
+let outputOffset = 0;
+let outputTail = "";
+let outputWritten = 0;
+let renderedPlaceholder = null;
 let terminal;
 let terminalFallback = true;
 let followOutput = true;
@@ -304,38 +307,86 @@ function renderTelemetry() {
   $("#state-bar").style.setProperty("--value", status === "running" ? "60%" : status === "succeeded" ? "100%" : "12%");
 }
 
+function resetOutput(id) {
+  outputRunID = id;
+  outputOffset = 0;
+  outputTail = "";
+  outputWritten = 0;
+  renderedPlaceholder = null;
+}
+
+// The API is a cursor, not a snapshot: each poll asks for the bytes after the
+// offset it last saw, so a long run is not re-shipped in full every 1.5 seconds.
+async function fetchOutput(id, offset) {
+  const response = await fetch(`/api/runs/${encodeURIComponent(id)}/output?offset=${offset}`);
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try { message = (await response.json()).error || message; } catch (_) {}
+    throw new Error(message);
+  }
+  return {
+    text: await response.text(),
+    start: Number(response.headers.get("X-Output-Start") ?? offset),
+    next: Number(response.headers.get("X-Output-Next") ?? offset),
+  };
+}
+
+function showPlaceholder(text) {
+  if (text === renderedPlaceholder) return;
+  replaceTerminal(text);
+  renderedPlaceholder = text;
+}
+
 async function loadOutput() {
   const record = run();
   const requestID = ++outputRequest;
   $("#output-run-id").textContent = record?.id || "NO RUN SELECTED";
   $("#tail-state").textContent = record?.status === "running" ? "LIVE TAIL" : "RUN RECORD";
   if (!record) {
-    outputRunID = "";
-    renderedOutput = null;
-    replaceTerminal("Select or start a run to inspect its output.");
+    resetOutput("");
+    showPlaceholder("Select or start a run to inspect its output.");
     return;
   }
-  const changedRun = outputRunID !== record.id;
-  if (changedRun) {
-    outputRunID = record.id;
-    renderedOutput = null;
-    replaceTerminal(record.status === "running" ? "Waiting for live worker output…" : "Loading run output…");
+  if (outputRunID !== record.id) {
+    resetOutput(record.id);
+    showPlaceholder(record.status === "running" ? "Waiting for live worker output…" : "Loading run output…");
   }
   try {
-    const output = await request(`/api/runs/${encodeURIComponent(record.id)}/output`);
+    const slice = await fetchOutput(record.id, outputOffset);
     if (requestID !== outputRequest || run()?.id !== record.id) return;
-    const nextOutput = output || record.error || (record.status === "running" ? "Waiting for live worker output…" : "Run did not emit output.");
-    if (nextOutput === renderedOutput) return;
-    if (typeof renderedOutput === "string" && nextOutput.startsWith(renderedOutput)) {
-      writeTerminal(nextOutput.slice(renderedOutput.length), renderedOutput);
-    } else {
-      replaceTerminal(nextOutput);
+    if (slice.start !== outputOffset) {
+      // The store capped the run and dropped what we were tailing; restart from
+      // the oldest bytes it still holds rather than splicing over a hole.
+      outputTail = "";
+      outputWritten = 0;
+      renderedPlaceholder = null;
+      clearTerminal();
     }
-    renderedOutput = nextOutput;
+    outputOffset = slice.next;
+    if (slice.text) {
+      if (renderedPlaceholder !== null) {
+        renderedPlaceholder = null;
+        clearTerminal();
+      }
+      outputWritten += slice.text.length;
+      writeTerminal(slice.text, outputTail);
+      outputTail = slice.text;
+      return;
+    }
+    if (!outputWritten) {
+      showPlaceholder(record.error || (record.status === "running" ? "Waiting for live worker output…" : "Run did not emit output."));
+    }
   } catch (error) {
     if (requestID !== outputRequest || run()?.id !== record.id) return;
-    if (error.message !== renderedOutput) replaceTerminal(error.message);
-    renderedOutput = error.message;
+    // A transient poll failure must not clear the terminal: the cursor has
+    // already moved past the rendered bytes, so a wiped tail could never be
+    // refilled. Keep the output, flag the stall where the tail state already
+    // lives, and let the next poll retry from the same offset.
+    if (outputWritten) {
+      $("#tail-state").textContent = "TAIL STALLED — RETRYING";
+      return;
+    }
+    showPlaceholder(error.message);
   }
 }
 
