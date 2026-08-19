@@ -383,3 +383,76 @@ func TestErrorUnwrapsItsCause(t *testing.T) {
 		t.Errorf("a status must appear in the message: %q", got)
 	}
 }
+
+// url.Parse("http://[::1]/v1") yields the host "[::1]", and splitting that on its
+// last colon finds one inside the address rather than a port separator. The
+// bracketed no-port form therefore matched nothing, so a local endpoint was
+// refused as plaintext and lost the loopback waiver on the API key - while the
+// same address with a port worked.
+func TestLoopbackIsRecognisedInEveryForm(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		wantErr bool
+	}{
+		{name: "IPv6 loopback with a port", baseURL: "http://[::1]:11434/v1"},
+		{name: "IPv6 loopback without a port", baseURL: "http://[::1]/v1"},
+		{name: "IPv4 loopback with a port", baseURL: "http://127.0.0.1:8080/v1"},
+		{name: "IPv4 loopback without a port", baseURL: "http://127.0.0.1/v1"},
+		{name: "the whole 127/8 block is local", baseURL: "http://127.0.0.53:8080/v1"},
+		{name: "localhost by name", baseURL: "http://localhost:1234/v1"},
+		{
+			name:    "a routable IPv6 address is not loopback",
+			baseURL: "http://[2001:db8::1]:8080/v1",
+			wantErr: true,
+		},
+		{
+			name:    "a routable name is not loopback",
+			baseURL: "http://gw.example.com/v1",
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// no key: a loopback endpoint carries the credential waiver too, so
+			// both halves of the rule are exercised at once
+			_, err := Config{Provider: Custom, Model: "m", BaseURL: test.baseURL}.Resolve()
+
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("%s should be refused over plaintext", test.baseURL)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("%s: %v", test.baseURL, err)
+			}
+		})
+	}
+}
+
+// The credential rule for a custom endpoint has a reason worth stating, and a
+// bare "no API key configured" sends the reader looking for a missing export
+// rather than at the base_url they just added.
+func TestACustomEndpointExplainsWhyItNeedsItsOwnKey(t *testing.T) {
+	_, err := Config{
+		Provider: OpenAI,
+		Model:    "gpt-4o",
+		BaseURL:  "https://proxy.example.com/v1",
+	}.Resolve()
+
+	if err == nil {
+		t.Fatal("an overridden endpoint with no key must be refused")
+	}
+
+	if !errors.Is(err, ErrMissingCredential) {
+		t.Errorf("error = %v, want it to classify as a missing credential", err)
+	}
+
+	if !strings.Contains(err.Error(), "proxy.example.com") {
+		t.Errorf("error = %v, want it to name the endpoint that needs the key", err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -338,5 +339,30 @@ func TestTransportIsReported(t *testing.T) {
 
 	if got := chat.Transport(); got != "chat-completions" {
 		t.Errorf("Transport = %q, want chat-completions", got)
+	}
+}
+
+// Request.Stop is public API and the chat transport sends it. The Responses API
+// has no stop-sequence parameter at all, so dropping the sequences silently
+// would let a caller believe generation is bounded when nothing bounds it.
+func TestResponsesRefusesStopSequences(t *testing.T) {
+	client, _ := responsesServer(t,
+		`{"type":"response.completed","response":{"status":"completed"}}`,
+	)
+
+	var failed error
+
+	for event := range client.Stream(context.Background(), Request{Stop: []string{"\n\nUser:"}}) {
+		if event.Err != nil {
+			failed = event.Err
+		}
+	}
+
+	if failed == nil {
+		t.Fatal("stop sequences the transport cannot honour must be reported, not dropped")
+	}
+
+	if !strings.Contains(failed.Error(), "stop") {
+		t.Errorf("error = %v, want it to name what could not be honoured", failed)
 	}
 }

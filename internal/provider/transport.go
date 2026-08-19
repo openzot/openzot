@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 )
 
 // Transport is one way of talking to a model.
@@ -101,6 +102,72 @@ const (
 	// state between turns, which chat-completions cannot.
 	TransportResponses = "responses"
 )
+
+// errTruncatedStream is what a stream that merely stopped produces.
+//
+// A body reaching a clean EOF with no terminal frame - no [DONE], no
+// finish_reason, no terminal status - is a turn that was cut off rather than one
+// that ended, and a proxy closing a chunked response mid-generation looks exactly
+// like this. It has to be an error: a consumer cannot tell the difference, so it
+// would record half an answer as the model's complete turn. Retriable, because
+// the next attempt usually completes.
+var errTruncatedStream = &Error{
+	Status:  0,
+	Message: "the stream ended without a terminal frame, so the turn was cut off mid-answer",
+}
+
+// send delivers one event, or gives up if the turn has been cancelled.
+//
+// Every send in every transport goes through this. The event channel is
+// unbuffered, so a consumer that stops draining mid-turn - which is exactly what
+// the loop's runaway guard does - would park the producing goroutine on a bare
+// channel send for the life of the process, holding the response body open with
+// it. Checking ctx.Done() once per scan is not enough: the goroutine blocks
+// between those checks, not at them.
+//
+// It reports whether the event was delivered, so a caller can stop early rather
+// than keep parsing a stream nobody is reading.
+//
+// It is for mid-stream events only. The turn's last event goes through
+// sendTerminal: a cancelled ctx is exactly when there is a terminal error to
+// report, and this select would drop it.
+func send(ctx context.Context, events chan<- Event, event Event) bool {
+	select {
+	case events <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// terminalSendGrace is how long a terminal event waits for a consumer that has
+// stopped draining before it is dropped.
+//
+// Long enough that a consumer parked on the channel always wins the race; short
+// enough that an abandoned turn releases its goroutine and response body
+// promptly rather than never.
+const terminalSendGrace = 250 * time.Millisecond
+
+// sendTerminal delivers the turn's last word - usually the terminal error -
+// even though the ctx that produced it is typically already cancelled.
+//
+// send is the wrong tool here: it selects against ctx.Done(), and with a
+// cancelled ctx and a waiting receiver both ready, the select picks at random -
+// so half of all cancelled turns would end with the channel closing silently
+// and the consumer reading a partial answer as a complete, error-free turn. A
+// consumer that is still draining (Complete, or any range-until-close loop)
+// must receive the terminal event unconditionally; only one that walked away
+// forfeits it, after a short grace, so the goroutine cannot park forever.
+func sendTerminal(events chan<- Event, event Event) {
+	timer := time.NewTimer(terminalSendGrace)
+
+	defer timer.Stop()
+
+	select {
+	case events <- event:
+	case <-timer.C:
+	}
+}
 
 // httpPost builds a POST with the configuration's auth and headers applied.
 //

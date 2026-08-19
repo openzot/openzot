@@ -9,6 +9,7 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 
@@ -229,6 +230,10 @@ func (c Config) Resolve() (Config, error) {
 
 	base, known := baseURLs[resolved.Provider]
 
+	// whether the endpoint was typed rather than looked up, which is what makes
+	// the credential rule apply
+	overridden := false
+
 	switch {
 	case resolved.BaseURL != "":
 		parsed, err := url.Parse(resolved.BaseURL)
@@ -236,11 +241,13 @@ func (c Config) Resolve() (Config, error) {
 			return Config{}, fmt.Errorf("provider: invalid base URL %q", resolved.BaseURL)
 		}
 
-		if parsed.Scheme != "https" && !isLoopback(parsed.Host) {
+		if parsed.Scheme != "https" && !isLoopbackHost(parsed.Hostname()) {
 			return Config{}, fmt.Errorf("provider: base URL must use https (got %q)", resolved.BaseURL)
 		}
 
 		resolved.BaseURL = strings.TrimRight(resolved.BaseURL, "/")
+
+		overridden = true
 
 	case known:
 		resolved.BaseURL = base
@@ -256,6 +263,15 @@ func (c Config) Resolve() (Config, error) {
 	}
 
 	if resolved.APIKey == "" && resolved.Provider != Ollama && !isLoopbackURL(resolved.BaseURL) {
+		if overridden {
+			// naming the endpoint is the whole point: the reader's instinct is to
+			// go looking for a missing export, when the thing that withdrew the
+			// ambient key is the base_url they just added
+			return Config{}, fmt.Errorf(
+				"%w: %s overrides the default endpoint with %s, which needs a key of its own - a credential is scoped to the host it was issued for",
+				ErrMissingCredential, resolved.Provider, resolved.BaseURL)
+		}
+
 		return Config{}, ErrMissingCredential
 	}
 
@@ -293,18 +309,21 @@ func (c Config) responsesURL() string {
 	return c.BaseURL + "/responses"
 }
 
-// isLoopback reports whether a host is local, which is the one case where a
-// plaintext endpoint is reasonable.
-func isLoopback(host string) bool {
-	name := host
-
-	if index := strings.LastIndex(host, ":"); index >= 0 {
-		name = host[:index]
+// isLoopbackHost reports whether a hostname is local, which is the one case
+// where a plaintext endpoint is reasonable.
+//
+// It takes a hostname rather than a host: url.URL.Hostname() is what strips both
+// the port and the brackets an IPv6 address is written in. Splitting the raw host
+// on its last colon cannot do that - "[::1]" has no port and every colon in it
+// belongs to the address - and got the bracketed form wrong in both directions.
+func isLoopbackHost(hostname string) bool {
+	if strings.EqualFold(hostname, "localhost") {
+		return true
 	}
 
-	switch strings.ToLower(name) {
-	case "localhost", "127.0.0.1", "::1", "[::1]":
-		return true
+	// an address rather than a name: 127.0.0.0/8 and ::1 are all local
+	if ip := net.ParseIP(hostname); ip != nil {
+		return ip.IsLoopback()
 	}
 
 	return false
@@ -316,7 +335,7 @@ func isLoopbackURL(raw string) bool {
 		return false
 	}
 
-	return isLoopback(parsed.Host)
+	return isLoopbackHost(parsed.Hostname())
 }
 
 // completionsURL is the chat-completions endpoint for this configuration.
