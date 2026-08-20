@@ -28,16 +28,34 @@ that way of working.
 
 ## What you get
 
-Give it a brief and walk away:
+zot takes **work orders, not prompts**. A work order is a small YAML file: the
+durable objective, the acceptance criteria that define "done", and the
+constraints the work must hold to. Write one, hand it over, and walk away:
 
 ```bash
-zot "add rate limiting to the API, with tests"
+zot new "add rate limiting to the API, with tests"
+# wrote orders/add-rate-limiting-to-the-api-with-tests.yaml - edit its
+# acceptance criteria, then:
+zot orders/add-rate-limiting-to-the-api-with-tests.yaml
 ```
 
 zot reads the repo, writes and edits the code, runs the build and the tests, and
-fixes what it broke - on its own, from that one brief to a recorded outcome. When
+fixes what it broke - on its own, from that one order to a recorded outcome. When
 it stops you have a changed working tree and a full session log of every step it
-took. No chat loop, no approving each edit: one brief in, finished work out.
+took. No chat loop, no approving each edit: one order in, finished work out.
+
+Orders are files, so they compose: `zot orders/*.yaml` runs each order as its
+own run, in sequence, stopping at the first that does not end in success - and
+every order you ever ran stays on disk to be re-run, diffed, or committed.
+
+`zot new` scaffolds at three levels of help, all landing in the same reviewable
+file: bare `zot new` writes the blank form, `zot new "objective"` fills the
+objective in, and `zot new --draft "objective"` additionally has the configured
+model propose the acceptance criteria and constraints - as a draft for you to
+edit, never as a contract it signed itself. A draft is not a blind guess: it
+runs as a small read-only run through the same engine, surveying the working
+tree - the build files, the test setup - so the criteria it proposes name the
+project's real commands and files.
 
 ## zotui
 
@@ -82,7 +100,8 @@ give it a job:
 
 ```bash
 export ZAI_API_KEY="…"
-zot "add input validation to the signup handler and a test"
+zot new "add input validation to the signup handler and a test"
+zot orders/add-input-validation-to-the-signup-handler-and.yaml
 ```
 
 Any OpenAI-compatible provider works - `--provider anthropic --model

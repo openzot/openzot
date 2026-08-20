@@ -1,6 +1,7 @@
 // Package zot is the embeddable core of the zot automated software factory. It
-// turns a single plain-English task into an agentic run - plan, act, observe,
-// exit - and renders the run in a read-only terminal UI.
+// turns a work order - a durable objective, rendered to a task - into an
+// agentic run - plan, act, observe, exit - and renders the run in a read-only
+// terminal UI.
 //
 // The agentic loop is zot's own (see the agent package): thread assembly,
 // compaction, loop detection and the tool-call cycle all run locally, against
@@ -76,10 +77,14 @@ Operating rules:
 // are never summarised and always ordered first.
 const taskHeading = "\n\n## Your task\n\n"
 
-// taskKickoff is the user message that starts a run when the caller gave no
-// prompt of its own. The objective is in the instructions; this only has to get the
-// agent moving.
+// taskKickoff is the user message that starts a run. The objective is in the
+// instructions; this only has to get the agent moving.
 const taskKickoff = "Begin working on your task. Start by calling the plan tool to lay out your approach, then carry it through to completion."
+
+// resumeKickoff starts a resumed run. The replayed conversation carries what
+// already happened; this points the agent back at the gap between its plan and
+// the tree, rather than telling it to begin as though nothing had.
+const resumeKickoff = "Continue your task from where the session left off. Reconcile your plan with the current state of the working tree, then carry the task through to completion."
 
 // withTask appends the task to the instructions, or returns them unchanged when
 // there is no task.
@@ -94,6 +99,17 @@ func withTask(instructions, task string) string {
 
 // Version reports the build version of the linked zot core.
 func Version() string { return version.Version }
+
+// NewClient resolves the configuration into a provider-backed client, for
+// engine work outside the main run path - the read-only survey that drafts a
+// work order's acceptance criteria, say. A run of record never takes this
+// path: it goes through Run or RunWith, which render, log, and record an
+// outcome.
+func NewClient(cfg Config) (*agent.Client, error) {
+	client, _, err := resolve(cfg, DefaultInstructions)
+
+	return client, err
+}
 
 // Load reads configuration, layering defaults < file < env. A missing default
 // file is fine (env vars alone can configure zot).
@@ -169,12 +185,6 @@ type RunOptions struct {
 	// OnSession is called once the log is open, with its path. Used to tell the
 	// operator where the record is before the run takes over the screen.
 	OnSession func(path string)
-
-	// Prompt is an optional user message that opens the run, distinct from the
-	// task. The task (in the instructions) is the durable objective; the prompt is
-	// an ephemeral nudge - "start with the error handling" - and may be
-	// compacted away later, which is fine because it is not the objective.
-	Prompt string
 }
 
 // Run executes one autonomous coding task, rendering the agent's activity in the
@@ -202,17 +212,20 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 	}
 
 	// The task is the durable objective and goes into the system prompt; the
-	// opening user message is the prompt if the caller gave one, otherwise a
-	// kickoff. This is what keeps the objective in context however long the run
-	// grows - see withTask.
+	// opening user message only has to get the agent moving. This is what keeps
+	// the objective in context however long the run grows - see withTask.
+	//
+	// @note there is deliberately no way to open a run with a prompt of the
+	// caller's own. zot takes a work order, not a conversation; anything worth
+	// saying to the agent belongs in the order, where it is durable.
 	opts.Instructions = withTask(opts.Instructions, task)
 
-	prompt := strings.TrimSpace(options.Prompt)
-	if prompt == "" {
-		prompt = taskKickoff
+	kickoff := taskKickoff
+	if options.Resume != nil {
+		kickoff = resumeKickoff
 	}
 
-	opts.Messages = append(opts.Messages, agent.Message{Type: agent.TypeUser, Text: prompt})
+	opts.Messages = append(opts.Messages, agent.Message{Type: agent.TypeUser, Text: kickoff})
 
 	workdir, _ := os.Getwd()
 
@@ -247,7 +260,9 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		}
 	}
 
-	return tui.Run(ctx, client, viewerMeta(cfg, task, workdir, opts), opts)
+	_, err = tui.Run(ctx, client, viewerMeta(cfg, task, workdir, opts), opts)
+
+	return err
 }
 
 // viewerMeta describes the run to the viewer.

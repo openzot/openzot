@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/openzot/openzot/internal/zotui/compute"
@@ -97,10 +98,81 @@ func TestDispatchCleansUpWithLiveContextAfterCancellation(t *testing.T) {
 	if _, ok := sandbox.env["GH_TOKEN"]; ok {
 		t.Fatalf("an empty repository credential was injected: %v", sandbox.env)
 	}
-	if len(sandbox.command) != 2 || sandbox.command[0] != "/runtime/zot" || sandbox.command[1] != "test" {
-		t.Fatalf("worker command = %v", sandbox.command)
+	// the first exec is the order write; the mission travels in the environment,
+	// not shell-interpolated into the command
+	if !strings.Contains(strings.Join(sandbox.command, " "), orderPath) {
+		t.Fatalf("order write command = %v", sandbox.command)
+	}
+	if !strings.Contains(sandbox.env["ZOT_DISPATCH_ORDER"], "objective: test") {
+		t.Fatalf("order environment = %q", sandbox.env["ZOT_DISPATCH_ORDER"])
 	}
 }
+
+// The mission becomes a work order file, and the worker is invoked on that
+// file: zot takes orders, not argv prose.
+func TestDispatchWritesTheOrderThenRunsIt(t *testing.T) {
+	sandbox := &recordingSandbox{}
+	d := Dispatcher{Repo: fakeRepo{}, Resolver: fakeResolver{sandbox: sandbox}, Worker: testWorker, Output: io.Discard}
+
+	result, err := d.Dispatch(context.Background(), Execution{Repository: "openzot/openzot", Mission: "fix the bug"})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit code = %d", result.ExitCode)
+	}
+
+	if len(sandbox.execs) != 2 {
+		t.Fatalf("execs = %d, want the order write then the run", len(sandbox.execs))
+	}
+
+	write := sandbox.execs[0]
+	if write.command[0] != "/bin/sh" || !strings.Contains(write.command[2], orderPath) {
+		t.Errorf("order write = %v", write.command)
+	}
+	if !strings.Contains(write.env["ZOT_DISPATCH_ORDER"], "objective: fix the bug") {
+		t.Errorf("order payload = %q", write.env["ZOT_DISPATCH_ORDER"])
+	}
+
+	run := sandbox.execs[1]
+	if len(run.command) != 2 || run.command[0] != "/runtime/zot" || run.command[1] != orderPath {
+		t.Errorf("run command = %v", run.command)
+	}
+	if _, ok := run.env["ZOT_DISPATCH_ORDER"]; ok {
+		t.Errorf("the order payload leaked into the run environment: %v", run.env)
+	}
+}
+
+// A mission that already is an order document passes through intact, so the
+// worker form can carry acceptance criteria.
+func TestDispatchCarriesAFullOrderMission(t *testing.T) {
+	sandbox := &recordingSandbox{}
+	d := Dispatcher{Repo: fakeRepo{}, Resolver: fakeResolver{sandbox: sandbox}, Worker: testWorker, Output: io.Discard}
+
+	if _, err := d.Dispatch(context.Background(),
+		Execution{Repository: "openzot/openzot", Mission: "objective: build it\nacceptance:\n  - it builds\n"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	payload := sandbox.execs[0].env["ZOT_DISPATCH_ORDER"]
+	if !strings.Contains(payload, "it builds") {
+		t.Errorf("the mission's own acceptance criteria were dropped: %q", payload)
+	}
+}
+
+type recordedExec struct {
+	command []string
+	env     map[string]string
+}
+
+type recordingSandbox struct{ execs []recordedExec }
+
+func (s *recordingSandbox) WorkerPath() string { return "/runtime/zot" }
+func (s *recordingSandbox) Exec(_ context.Context, command []string, env map[string]string, _ io.Writer) (int, error) {
+	s.execs = append(s.execs, recordedExec{command: command, env: env})
+	return 0, nil
+}
+func (s *recordingSandbox) Destroy(context.Context) error { return nil }
 
 // A run must deploy the worker selected for the compute platform and execute
 // the provider's installed path; otherwise images still secretly need Zot.

@@ -176,7 +176,7 @@ docker run --rm \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
   --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --max-iterations 40 --task-file TASK.md | tee run.log
+  ghcr.io/openzot/openzot:latest --max-iterations 40 orders/rate-limiting.yaml | tee run.log
 ```
 
 `--max-iterations` is worth setting explicitly for unattended runs. The default
@@ -199,7 +199,7 @@ docker run --rm \
   --pids-limit 512 --memory 2g --cpus 2 \
   --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --task-file TASK.md
+  ghcr.io/openzot/openzot:latest orders/rate-limiting.yaml
 ```
 
 `--read-only` works because everything zot writes goes to the workspace volume;

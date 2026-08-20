@@ -23,7 +23,7 @@ func isInteractive() bool {
 // runPlain streams the agent's activity as plain, unstyled lines. It is the
 // explicit --plain path; automatic non-TTY output uses runStream so an ANSI-aware
 // consumer can opt into colors without becoming an interactive terminal.
-func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+func runPlain(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) (Outcome, error) {
 	return runStream(ctx, client, meta, opts, false)
 }
 
@@ -60,7 +60,7 @@ func (p streamPalette) paint(code, text string) string {
 
 // runStream writes an append-only transcript. Unlike the Bubble Tea viewer it
 // never uses an alternate screen, reads input, or advertises keyboard controls.
-func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions, color bool) error {
+func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions, color bool) (Outcome, error) {
 	palette := streamPalette{enabled: color}
 	fmt.Printf("%s: %s\n", palette.paint("1;94", meta.AppName), meta.Task)
 	fmt.Printf("%s %s · %s %s · %s %s\n",
@@ -73,6 +73,7 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 	var pending strings.Builder
 	var exitErr error
 	var sawExit bool
+	var outcome Outcome
 	flush := func() {
 		if s := strings.TrimSpace(pending.String()); s != "" {
 			fmt.Printf("  • %s\n", s)
@@ -108,6 +109,7 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 			fmt.Printf("  %s %s\n", palette.paint("33", "…"), e.Detail)
 		case agent.AgentExitEvent:
 			sawExit = true
+			outcome = Outcome{Reason: e.Reason, Message: e.Message}
 			flush()
 			status := "done"
 			if e.Code != 0 {
@@ -131,12 +133,12 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 	}
 
 	if err := <-errs; err != nil {
-		return err
+		return Outcome{}, err
 	}
 	if !sawExit {
-		return fmt.Errorf("agent stream ended without an exit")
+		return Outcome{}, fmt.Errorf("agent stream ended without an exit")
 	}
-	return exitErr
+	return outcome, exitErr
 }
 
 // plainArg is the one-line argument summary for a tool call.

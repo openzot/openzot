@@ -1,21 +1,26 @@
 // Command zot is an automated software factory you watch, not drive.
 //
-// An autonomous coding harness powers the factory: hand zot a single task on
-// the command line and it works the problem on its own - reading files, editing
-// them, and running shell commands - while the terminal streams a live,
-// read-only view of everything it does.
+// zot takes work orders, not prompts. A work order is a small YAML file - the
+// durable objective, the acceptance criteria that define "done", the
+// constraints the work must hold to - and each order becomes one autonomous
+// run: the agent reads files, edits them, and runs shell commands on its own
+// while the terminal streams a live, read-only view of everything it does.
 //
 // Usage:
 //
 //	export OPENAI_API_KEY="your-api-key"
-//	zot "add a /health endpoint to the Go server and a test for it"
 //
-//	# operate inside a specific directory and cap the work
-//	zot --dir ./scratch --max-iterations 40 "scaffold a snake game in python"
+//	# write an order, then run it
+//	zot new "add a /health endpoint to the Go server and a test for it"
+//	zot orders/add-a-health-endpoint-to-the-go-server-and-a-te.yaml
+//
+//	# run a batch: each order is its own run, in sequence, stopping at the
+//	# first that fails
+//	zot orders/*.yaml
 //
 //	# every run is logged; pick one up where it stopped
 //	zot sessions
-//	zot --resume last "finish the part you ran out of budget for"
+//	zot --resume last
 package main
 
 import (
@@ -26,16 +31,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/joho/godotenv"
+	"github.com/openzot/openzot/agent"
 	"github.com/spf13/pflag"
 
 	"github.com/openzot/openzot"
 	"github.com/openzot/openzot/internal/buildinfo"
 	"github.com/openzot/openzot/internal/config"
+	"github.com/openzot/openzot/internal/order"
 	"github.com/openzot/openzot/internal/session"
 	"github.com/openzot/openzot/internal/version"
+	"github.com/openzot/openzot/tui"
 )
 
 func main() {
@@ -57,9 +66,17 @@ func run() error {
 	}
 
 	// `zot sessions` lists what previous runs left behind. Its own subcommand
-	// rather than a flag because it takes no task and produces no run.
+	// rather than a flag because it takes no order and produces no run.
 	if len(os.Args) > 1 && os.Args[1] == "sessions" {
 		return listSessions(os.Args[2:])
+	}
+
+	// `zot new` scaffolds a work order. The two-step shape is deliberate: the
+	// pause between writing the order and running it is where acceptance
+	// criteria get written, and it is what keeps zot from feeling like a
+	// prompt box.
+	if len(os.Args) > 1 && os.Args[1] == "new" {
+		return newOrder(os.Args[2:], os.Stdout)
 	}
 
 	configPath := pflag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
@@ -67,8 +84,6 @@ func run() error {
 	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai provider serves)")
 	dir := pflag.String("dir", ".", "working directory the agent reads, writes and runs commands in")
 	maxIter := pflag.Int("max-iterations", 0, "override the safety cap on agent iterations")
-	taskFlag := pflag.String("task", "", "the durable objective, placed in the system prompt so it survives a long run (overrides a positional task)")
-	taskFile := pflag.String("task-file", "", "read the durable objective from a file")
 	diffFlag := pflag.Bool("diff", false, "show a syntax-highlighted diff panel under each edit/write")
 	plainFlag := pflag.Bool("plain", false, "stream unstyled output instead of the full-screen UI (auto-enabled when not a TTY)")
 	colorFlag := pflag.String("color", "", "colorize non-interactive output: auto, always, or never")
@@ -126,27 +141,13 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
 	}
 
-	var task, prompt string
-
-	// A resumed run inherits its objective from the session it continues; any new
-	// command-line text is a follow-up prompt, not a replacement objective - a
-	// resume is "keep going, and also do this", not "start over". An explicit
-	// --task / --task-file still overrides, for deliberately changing course.
-	//
-	// This is decided before resolveTask is consulted, because a resume with no
-	// new text is a complete invocation: asking resolveTask first meant the
-	// missing-task branch printed the whole usage block to stderr on the way to
-	// working correctly.
-	if resumed != nil && *taskFlag == "" && *taskFile == "" {
-		task = resumed.Meta.Task
-		prompt = strings.TrimSpace(strings.Join(pflag.Args(), " "))
-	} else {
-		var err error
-
-		task, prompt, err = resolveTask(*taskFlag, *taskFile, pflag.Args())
-		if err != nil {
-			return err
-		}
+	// Orders are loaded - all of them, so a bad batch fails before any run
+	// starts - while the original working directory is still current, because
+	// their paths mean what the user typed, not what they happen to mean after
+	// the chdir below.
+	orders, err := resolveOrders(pflag.Args(), resumed != nil)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := zot.Load(*configPath)
@@ -194,23 +195,229 @@ func run() error {
 		return err
 	}
 
-	options := zot.RunOptions{SessionDir: sessions, Resume: resumed}
-
 	if *noSession {
-		options.SessionDir = ""
+		sessions = ""
 	}
 
-	options.Prompt = prompt
-
-	// The release check runs alongside the whole run and is reported only once
+	// The release check runs alongside the whole batch and is reported only once
 	// the viewer has released the screen.
 	report := checkForUpdate()
+	defer report(os.Stderr)
 
-	err = zot.RunWith(context.Background(), cfg, task, options)
+	// A resumed run inherits its objective from the session it continues; it is
+	// "keep going", never "start over".
+	if resumed != nil {
+		return zot.RunWith(context.Background(), cfg,
+			resumed.Meta.Task, zot.RunOptions{SessionDir: sessions, Resume: resumed})
+	}
 
-	report(os.Stderr)
+	// Each order is its own run: a fresh conversation, its own session log, its
+	// own recorded outcome. The batch stops at the first order that does not
+	// end in success, because later orders usually assume the earlier ones
+	// landed - running order three against the wreckage of order two produces
+	// confident garbage.
+	for i, o := range orders {
+		if len(orders) > 1 {
+			fmt.Fprintf(os.Stderr, "zot: order %d/%d: %s\n", i+1, len(orders), o.Path)
+		}
 
-	return err
+		options := zot.RunOptions{SessionDir: sessions}
+
+		if err := zot.RunWith(context.Background(), cfg, o.Task(), options); err != nil {
+			if len(orders) > 1 {
+				return fmt.Errorf("order %s stopped the batch: %w", o.Path, err)
+			}
+
+			return err
+		}
+	}
+
+	return nil
+}
+
+// resolveOrders loads every order named on the command line, or explains why it
+// will not.
+func resolveOrders(args []string, resuming bool) ([]order.Order, error) {
+	// A resume continues the order its session was started with. New orders
+	// belong to new runs - silently mixing the two would blur which outcome
+	// belongs to which order.
+	if resuming {
+		if len(args) > 0 {
+			return nil, fmt.Errorf("--resume continues the order its session was started with; run new orders in a fresh invocation")
+		}
+
+		return nil, nil
+	}
+
+	if len(args) == 0 {
+		usage()
+
+		return nil, fmt.Errorf("no order given (write one with `zot new \"the objective\"`)")
+	}
+
+	orders := make([]order.Order, 0, len(args))
+
+	for _, path := range args {
+		loaded, err := order.Load(path)
+		if err != nil {
+			// The retraining moment: someone typed prose where an order file
+			// goes. The error has to teach the new shape, not just report a
+			// missing file.
+			if _, statErr := os.Stat(path); statErr != nil && strings.ContainsAny(path, " \t") {
+				return nil, fmt.Errorf("work orders are files, not prose - write the order first:\n\n  zot new %q", path)
+			}
+
+			return nil, err
+		}
+
+		orders = append(orders, loaded)
+	}
+
+	return orders, nil
+}
+
+// newOrder scaffolds a work order under ./orders and says how to run it.
+//
+// Three levels of help, all landing in the same reviewable file: bare `zot new`
+// writes the blank form, `zot new "objective"` fills the objective in, and
+// `zot new --draft "objective"` additionally has the configured model propose
+// the acceptance criteria and constraints. The model only ever drafts - the
+// operator's edit is what makes the criteria a contract.
+func newOrder(args []string, out io.Writer) error {
+	set := pflag.NewFlagSet("new", pflag.ContinueOnError)
+
+	draft := set.Bool("draft", false, "have the configured model draft the acceptance criteria and constraints")
+	configPath := set.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
+	providerFlag := set.String("provider", "", "provider for --draft (default: the configured one)")
+	modelFlag := set.String("model", "", "model for --draft (default: the configured one)")
+
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+
+	objective := strings.TrimSpace(strings.Join(set.Args(), " "))
+
+	o := order.Order{Objective: objective}
+
+	edit := "edit its acceptance criteria"
+	if objective == "" {
+		edit = "edit its objective and acceptance criteria"
+	}
+
+	if *draft {
+		if objective == "" {
+			return fmt.Errorf(`--draft needs an objective to draft from: zot new --draft "the objective"`)
+		}
+
+		cfg, err := zot.Load(*configPath)
+		if err != nil {
+			return err
+		}
+
+		if *providerFlag != "" {
+			cfg.DefaultProvider = *providerFlag
+		}
+
+		if *modelFlag != "" {
+			cfg.Agent.Model = *modelFlag
+		}
+
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+
+		client, err := zot.NewClient(cfg)
+		if err != nil {
+			return err
+		}
+
+		o, err = draftOrder(context.Background(), cfg, client, objective)
+		if err != nil {
+			// a failed draft writes nothing: the operator asked for a drafted
+			// order, and silently handing back the plain scaffold would hide
+			// that they did not get one
+			return fmt.Errorf("%w (or scaffold without --draft and write the criteria yourself)", err)
+		}
+
+		edit = "review its drafted acceptance criteria"
+	}
+
+	path, err := order.Scaffold("orders", o)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "wrote %s\n%s, then run:\n\n  zot %s\n", path, edit, path)
+
+	return nil
+}
+
+// draftOrder runs the draft as what it is: a small autonomous run through the
+// same engine as real work, with a read-only toolbox, so the proposed criteria
+// are grounded in the actual working tree - its build files, its test setup -
+// rather than guessed from the objective alone. It renders in the same viewer
+// as any run - watching a run work is zot's whole interface - and it ends the
+// way every run ends, by calling the success tool; here its summary is the
+// draft, handed back as the run's recorded outcome.
+//
+// It is a survey, not a run of record: it leaves no session log, and its
+// budgets are a fraction of a real run's because reading a tree does not take
+// a thousand iterations.
+func draftOrder(ctx context.Context, cfg zot.Config, client *agent.Client, objective string) (order.Order, error) {
+	opts := agent.ExecuteWithToolsOptions{
+		Instructions:  order.DraftInstructions(objective),
+		Text:          []string{"Survey the working directory, then record the draft."},
+		Tools:         draftTools(),
+		MaxIterations: draftMaxIterations,
+		MaxDuration:   3 * time.Minute,
+		// a draft is a convenience, not a run of record: fail fast rather than
+		// sitting out a provider outage the way a real run rightly would
+		MaxContinuations: 3,
+	}
+
+	workdir, _ := os.Getwd()
+
+	outcome, err := tui.Run(ctx, client, tui.Meta{
+		Task:          "draft: " + objective,
+		Model:         cfg.Agent.Model,
+		Provider:      cfg.DefaultProvider,
+		Workdir:       workdir,
+		Plain:         cfg.UI.Plain,
+		Color:         cfg.UI.Color,
+		MaxScrollback: cfg.UI.Scrollback,
+		Stats:         cfg.UI.Stats,
+		MaxIterations: draftMaxIterations,
+		MaxDuration:   3 * time.Minute,
+		// the draft's deliverable is the scaffolded file, not the screen: close
+		// the viewer when the run ends so the write it feeds is not held
+		// hostage to a keypress
+		QuitOnDone: true,
+	}, opts)
+	if err != nil {
+		return order.Order{}, fmt.Errorf("draft: %w", err)
+	}
+
+	if outcome.Reason != agent.ReasonSettled {
+		return order.Order{}, fmt.Errorf("draft: the survey ended without a draft (%s: %s)", outcome.Reason, outcome.Message)
+	}
+
+	return order.ParseDraft(objective, outcome.Message)
+}
+
+// draftMaxIterations bounds the survey. Reading a tree does not take a
+// thousand rounds; a draft that needs more than this is lost.
+const draftMaxIterations = 25
+
+// draftTools is the read-only subset of the default toolbox. A draft surveys
+// the tree; a survey that can edit files or run commands is not a survey.
+func draftTools() agent.Tools {
+	tools := agent.Tools{}
+
+	for _, name := range []string{"read", "list"} {
+		tools[name] = agent.DefaultTools()[name]
+	}
+
+	return tools
 }
 
 // checkForUpdate starts the GitHub release check and returns the function that
@@ -427,72 +634,33 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// resolveTask splits the input into the durable task (the objective, which goes
-// into the system prompt) and an optional opening prompt (a user message).
-//
-// --task / --task-file give the objective explicitly; a bare positional is
-// treated as the objective too, so `zot "do X"` keeps working and stays durable.
-// When an objective is given explicitly, positional text becomes the opening
-// prompt beside it. There is intentionally no interactive input: zot is a
-// viewer, not a chat client.
-func resolveTask(taskFlag, taskFile string, args []string) (task, prompt string, err error) {
-	// The durable objective comes from --task or --task-file; it lands in the
-	// system prompt and stays there for the whole run.
-	switch {
-	case taskFlag != "":
-		task = strings.TrimSpace(taskFlag)
-	case taskFile != "":
-		data, readErr := os.ReadFile(taskFile)
-		if readErr != nil {
-			return "", "", fmt.Errorf("cannot read --task-file: %w", readErr)
-		}
-		task = strings.TrimSpace(string(data))
-		if task == "" {
-			return "", "", fmt.Errorf("--task-file %q is empty", taskFile)
-		}
-	}
-
-	positional := strings.TrimSpace(strings.Join(args, " "))
-
-	switch {
-	case task == "" && positional == "":
-		usage()
-		return "", "", fmt.Errorf("no task given")
-
-	case task == "":
-		// No explicit objective, so the positional text is the objective - this
-		// is the common `zot "do X"`, which stays durable rather than becoming a
-		// throwaway prompt.
-		task = positional
-
-	default:
-		// An explicit objective was given, so the positional text is an opening
-		// prompt alongside it rather than a second objective.
-		prompt = positional
-	}
-
-	return task, prompt, nil
-}
-
 func usage() {
 	fmt.Fprintln(os.Stderr, `zot - an automated software factory powered by an autonomous coding harness
 
+zot takes work orders, not prompts. A work order is a small YAML file: the
+durable objective, the acceptance criteria that define "done", and the
+constraints the work must hold to. Each order is one autonomous run.
+
 Usage:
-  zot [flags] "your task in plain english"
+  zot [flags] <order.yaml> ...
+  zot new [--draft] ["the objective"]
   zot config
   zot sessions
 
 Examples:
-  zot "add input validation to the signup handler and a test"
-  zot --task-file TASK.md "start with the parser"
-  zot --dir ./scratch "scaffold a tiny http server in go"
-  zot --resume last "now add the tests you skipped"
+  zot new "add input validation to the signup handler and a test"
+  zot new --draft "add rate limiting to the API"
+  zot orders/add-input-validation-to-the-signup-handler-and.yaml
+  zot --dir ./scratch orders/*.yaml
+  zot --resume last
 
-The task is the durable objective: it goes into the system prompt and stays in
-context for the whole run. A bare "..." is the task; with --task/--task-file the
-"..." becomes an opening prompt alongside it.
+A batch runs each order as its own run, in sequence, and stops at the first
+order that does not end in success.
 
 Commands:
+  new        scaffold a work order under ./orders - bare for the blank form,
+             with an objective to fill it in, --draft to have the configured
+             model propose the acceptance criteria for your review
   config     edit the config file in $EDITOR (creates it on first run)
   sessions   list previous runs, newest first
 

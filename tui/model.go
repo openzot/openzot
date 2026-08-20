@@ -55,13 +55,18 @@ type model struct {
 	maxEntries       int      // scrollback cap (DefaultMaxScrollback unless overridden)
 	stats            []string // header fields to show, in order (DefaultStats when empty)
 
-	status    status
-	iteration int
-	toolCount int
-	fileEdits int
-	exitCode  int
-	exitMsg   string
-	err       error
+	status     status
+	iteration  int
+	toolCount  int
+	fileEdits  int
+	exitCode   int
+	exitReason string
+	exitMsg    string
+	err        error
+
+	// quitOnDone closes the viewer as soon as the run ends (see
+	// Meta.QuitOnDone); the default holds the final screen for review.
+	quitOnDone bool
 
 	// Provider-reported cumulative token usage (not a local estimate).
 	inputTokens  int
@@ -158,7 +163,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentEventMsg:
 		m.handleEvent(msg.ev)
-		return m, nil
+		return m, m.maybeQuit()
 
 	case agentErrMsg:
 		if m.status == statusRunning {
@@ -167,7 +172,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushPending()
 			m.appendEntry(errStyle.Render("✗ agent error: " + msg.err.Error()))
 		}
-		return m, nil
+		return m, m.maybeQuit()
 
 	case agentDoneMsg:
 		// The stream ended without an explicit exit (e.g. iteration cap reached).
@@ -177,10 +182,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flushPending()
 			m.appendEntry(dividerStyle.Render("- stream ended -"))
 		}
-		return m, nil
+		return m, m.maybeQuit()
 	}
 
 	return m, nil
+}
+
+// maybeQuit ends the program once the run has ended, when the caller asked for
+// that instead of a held final screen.
+func (m model) maybeQuit() tea.Cmd {
+	if m.quitOnDone && m.status != statusRunning {
+		return tea.Quit
+	}
+
+	return nil
 }
 
 // handleEvent folds one agent event into the UI state.
@@ -236,6 +251,7 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 
 	case agent.AgentExitEvent:
 		m.exitCode = e.Code
+		m.exitReason = e.Reason
 		m.exitMsg = e.Message
 		m.flushPending()
 		switch {

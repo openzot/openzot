@@ -593,7 +593,6 @@ func TestRunWithResumesAnEarlierSession(t *testing.T) {
 		return RunWith(context.Background(), cfg, "the original brief", RunOptions{
 			SessionDir: sessions,
 			Resume:     earlier,
-			Prompt:     "carry on",
 		})
 	})
 	if err != nil {
@@ -626,11 +625,18 @@ func TestRunWithResumesAnEarlierSession(t *testing.T) {
 
 	joined := strings.Join(texts, "|")
 
-	// the replayed conversation plus the new follow-up prompt
-	for _, want := range []string{"I got halfway", "carry on"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("the resumed conversation is missing %q: %s", want, joined)
-		}
+	// the replayed conversation, then the resume kickoff - not the fresh-start
+	// one, which would tell an agent with half the work done to begin again
+	if !strings.Contains(joined, "I got halfway") {
+		t.Errorf("the resumed conversation is missing the replayed history: %s", joined)
+	}
+
+	if !strings.Contains(joined, resumeKickoff) {
+		t.Errorf("the resumed run must open with the resume kickoff: %s", joined)
+	}
+
+	if strings.Contains(joined, taskKickoff) {
+		t.Errorf("a resumed run opened with the fresh-start kickoff: %s", joined)
 	}
 }
 

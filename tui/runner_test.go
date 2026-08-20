@@ -315,7 +315,7 @@ func TestQuittingTheViewerStopsTheAgent(t *testing.T) {
 		return m, nil
 	}
 
-	if err := runViewer(context.Background(), m, client, agent.ExecuteWithToolsOptions{
+	if _, err := runViewer(context.Background(), m, client, agent.ExecuteWithToolsOptions{
 		Text: []string{"do the thing"},
 	}, start); err == nil {
 		t.Error("quitting mid-run should report that the run did not finish")
