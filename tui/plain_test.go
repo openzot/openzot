@@ -168,7 +168,7 @@ func TestRunPlainTranscript(t *testing.T) {
 	}
 
 	output, err := capture(t, func() error {
-		return runPlain(context.Background(), client, meta, options)
+		return runPlainErr(context.Background(), client, meta, options)
 	})
 	if err != nil {
 		t.Fatalf("runPlain: %v", err)
@@ -202,7 +202,7 @@ func TestRunPlainReturnsAnErrorOnFailure(t *testing.T) {
 	meta := Meta{Task: "impossible", Model: "m", Provider: "b", Workdir: "/w"}
 
 	output, err := capture(t, func() error {
-		return runPlain(context.Background(), client, meta,
+		return runPlainErr(context.Background(), client, meta,
 			agent.ExecuteWithToolsOptions{MaxSettles: 1})
 	})
 
@@ -230,7 +230,7 @@ func TestRunPlainRendersADeclaredFailureAsAnOutcome(t *testing.T) {
 	meta := Meta{Task: "deploy", Model: "m", Provider: "b", Workdir: "/w"}
 
 	output, err := capture(t, func() error {
-		return runPlain(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
+		return runPlainErr(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
 	})
 
 	// still a non-zero ending for the shell
@@ -268,7 +268,7 @@ func TestRunPlainReportsToolErrors(t *testing.T) {
 	}
 
 	output, err := capture(t, func() error {
-		return runPlain(context.Background(), client,
+		return runPlainErr(context.Background(), client,
 			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"}, options)
 	})
 	if err != nil {
@@ -301,7 +301,7 @@ func TestRunPlainSurfacesProviderFailures(t *testing.T) {
 	}
 
 	_, runErr := capture(t, func() error {
-		return runPlain(context.Background(), client,
+		return runPlainErr(context.Background(), client,
 			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
 			agent.ExecuteWithToolsOptions{})
 	})
@@ -330,7 +330,7 @@ func TestRunPlainShowsDiffsWhenAsked(t *testing.T) {
 	}
 
 	withDiff, err := capture(t, func() error {
-		return runPlain(context.Background(), client,
+		return runPlainErr(context.Background(), client,
 			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", ShowDiff: true}, options)
 	})
 	if err != nil {
@@ -351,7 +351,9 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	meta := Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Plain: true, Color: "always"}
 
 	output, err := capture(t, func() error {
-		return Run(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
+		_, err := Run(context.Background(), client, meta, agent.ExecuteWithToolsOptions{})
+
+		return err
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -367,7 +369,7 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 	// under `go test` stdout is not a terminal, so even without Plain the
 	// dispatch must land on the same path rather than trying an alt screen
 	output, err = capture(t, func() error {
-		return Run(context.Background(), plainServer(t, []string{plainSuccess("again")}),
+		return runErr(context.Background(), plainServer(t, []string{plainSuccess("again")}),
 			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
 			agent.ExecuteWithToolsOptions{})
 	})
@@ -388,7 +390,7 @@ func TestRunUsesThePlainPathWithoutATerminal(t *testing.T) {
 func TestRunUsesAColoredStreamWithoutInteractiveControls(t *testing.T) {
 	client := plainServer(t, []string{plainSuccess("finished")})
 	output, err := capture(t, func() error {
-		return Run(context.Background(), client,
+		return runErr(context.Background(), client,
 			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Color: "always"},
 			agent.ExecuteWithToolsOptions{})
 	})
@@ -438,12 +440,56 @@ func TestRunPropagatesFailures(t *testing.T) {
 	client := plainServer(t, []string{plainToken("nope"), plainStop()})
 
 	_, err := capture(t, func() error {
-		return Run(context.Background(), client,
+		return runErr(context.Background(), client,
 			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w", Plain: true},
 			agent.ExecuteWithToolsOptions{MaxSettles: 1})
 	})
 
 	if err == nil {
 		t.Error("a failed run must reach the caller through Run")
+	}
+}
+
+// runPlainErr adapts runPlain for the tests here, which assert on the rendered
+// stream and the error; the outcome value has its own coverage.
+func runPlainErr(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+	_, err := runPlain(ctx, client, meta, opts)
+
+	return err
+}
+
+// runErr adapts Run the same way for the dispatch tests.
+func runErr(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+	_, err := Run(ctx, client, meta, opts)
+
+	return err
+}
+
+// The outcome is the return value for a caller whose deliverable IS the run's
+// recorded ending - a draft run reading criteria out of the success summary.
+func TestRunReturnsTheRecordedOutcome(t *testing.T) {
+	client := plainServer(t, []string{plainSuccess("acceptance:\n  - it works")})
+
+	var outcome Outcome
+
+	_, err := capture(t, func() error {
+		var runErr error
+
+		outcome, runErr = runPlain(context.Background(), client,
+			Meta{Task: "t", Model: "m", Provider: "b", Workdir: "/w"},
+			agent.ExecuteWithToolsOptions{})
+
+		return runErr
+	})
+	if err != nil {
+		t.Fatalf("runPlain: %v", err)
+	}
+
+	if outcome.Reason != agent.ReasonSettled {
+		t.Errorf("Reason = %q", outcome.Reason)
+	}
+
+	if outcome.Message != "acceptance:\n  - it works" {
+		t.Errorf("Message = %q, want the success summary verbatim", outcome.Message)
 	}
 }

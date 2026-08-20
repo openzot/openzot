@@ -91,118 +91,273 @@ func TestNothingAtRuntimeCanEnableDotEnv(t *testing.T) {
 	}
 }
 
-// A bare positional is the durable objective, with no separate prompt - `zot
-// "do X"` must keep working and stay durable.
-func TestResolveTaskFromArguments(t *testing.T) {
-	task, prompt, err := resolveTask("", "", []string{"add", "a", "health", "endpoint"})
+func TestResolveOrdersLoadsEveryFile(t *testing.T) {
+	first := orderFile(t, "build the parser")
+	second := orderFile(t, "then the lexer")
+
+	orders, err := resolveOrders([]string{first, second}, false)
 	if err != nil {
-		t.Fatalf("resolveTask: %v", err)
+		t.Fatalf("resolveOrders: %v", err)
 	}
 
-	if task != "add a health endpoint" {
-		t.Errorf("task = %q", task)
-	}
-
-	if prompt != "" {
-		t.Errorf("a bare positional should be the task, not a prompt; got prompt %q", prompt)
+	if len(orders) != 2 || orders[0].Objective != "build the parser" || orders[1].Objective != "then the lexer" {
+		t.Errorf("orders = %+v", orders)
 	}
 }
 
-// --task is the objective; a positional alongside it is the opening prompt.
-func TestResolveTaskFlagWithPrompt(t *testing.T) {
-	task, prompt, err := resolveTask("build the parser", "", []string{"start", "with", "the", "lexer"})
-	if err != nil {
-		t.Fatalf("resolveTask: %v", err)
-	}
+// A bad batch must fail before any run starts: discovering order three is
+// broken after orders one and two have spent an hour is the expensive way.
+func TestResolveOrdersFailsTheWholeBatchUpFront(t *testing.T) {
+	good := orderFile(t, "fine")
 
-	if task != "build the parser" {
-		t.Errorf("task = %q, want the --task value", task)
-	}
-
-	if prompt != "start with the lexer" {
-		t.Errorf("prompt = %q, want the positional text", prompt)
+	if _, err := resolveOrders([]string{good, filepath.Join(t.TempDir(), "nope.yaml")}, false); err == nil {
+		t.Error("a batch with a broken order must not resolve")
 	}
 }
 
-// --task wins over a positional as the objective.
-func TestResolveTaskFlagOverridesPositional(t *testing.T) {
-	task, _, err := resolveTask("the real objective", "", []string{"noise"})
-	if err != nil {
-		t.Fatalf("resolveTask: %v", err)
+// Someone typing prose where an order file goes is the retraining moment: the
+// error has to teach the new shape, not just report a missing file.
+func TestResolveOrdersTeachesProseTypers(t *testing.T) {
+	_, err := resolveOrders([]string{"add a health endpoint"}, false)
+	if err == nil {
+		t.Fatal("prose must not resolve")
 	}
 
-	if task != "the real objective" {
-		t.Errorf("task = %q", task)
+	if !strings.Contains(err.Error(), "zot new") {
+		t.Errorf("the error should point at `zot new`: %v", err)
 	}
 }
 
-func TestResolveTaskFromFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "task.md")
+func TestResolveOrdersRequiresAnOrder(t *testing.T) {
+	quietStderr(t)
 
-	if err := os.WriteFile(path, []byte("\n  refactor the parser  \n"), 0o644); err != nil {
+	if _, err := resolveOrders(nil, false); err == nil {
+		t.Error("no order must be an error")
+	}
+}
+
+// A resume continues the order its session was started with; mixing new orders
+// into it would blur which outcome belongs to which order.
+func TestResolveOrdersOnAResume(t *testing.T) {
+	orders, err := resolveOrders(nil, true)
+	if err != nil || orders != nil {
+		t.Errorf("a bare resume must resolve to no orders: %v, %v", orders, err)
+	}
+
+	if _, err := resolveOrders([]string{orderFile(t, "new work")}, true); err == nil {
+		t.Error("orders alongside --resume must be an error")
+	}
+}
+
+// `zot new` writes an order zot itself will run.
+func TestNewOrderScaffoldsARunnableOrder(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var out strings.Builder
+
+	if err := newOrder([]string{"fix", "the", "typo"}, &out); err != nil {
+		t.Fatalf("newOrder: %v", err)
+	}
+
+	path := filepath.Join("orders", "fix-the-typo.yaml")
+
+	if !strings.Contains(out.String(), path) {
+		t.Errorf("the output should say where the order went and how to run it:\n%s", out.String())
+	}
+
+	orders, err := resolveOrders([]string{path}, false)
+	if err != nil {
+		t.Fatalf("the scaffolded order does not resolve: %v", err)
+	}
+
+	if orders[0].Objective != "fix the typo" {
+		t.Errorf("objective = %q", orders[0].Objective)
+	}
+}
+
+// Bare `zot new` scaffolds the blank form: a file to fill in, which refuses to
+// run until it is.
+func TestNewOrderScaffoldsTheBlankForm(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var out strings.Builder
+
+	if err := newOrder(nil, &out); err != nil {
+		t.Fatalf("newOrder: %v", err)
+	}
+
+	path := filepath.Join("orders", "order.yaml")
+
+	if !strings.Contains(out.String(), "edit its objective") {
+		t.Errorf("the output should say the objective still needs writing:\n%s", out.String())
+	}
+
+	if _, err := resolveOrders([]string{path}, false); err == nil {
+		t.Error("the unedited blank form must not run")
+	}
+}
+
+// --draft without an objective has nothing to draft from.
+func TestNewOrderDraftRequiresAnObjective(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if err := newOrder([]string{"--draft"}, io.Discard); err == nil {
+		t.Error("`zot new --draft` with no objective must be an error")
+	}
+}
+
+// A draft is a small read-only run: the model surveys the tree with the survey
+// tools, then delivers the draft as its recorded outcome - and the result
+// lands in the scaffold as real, editable YAML.
+func TestNewOrderDraftsWithTheConfiguredModel(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var turn atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		// first the survey - a list call - then the draft, delivered the way
+		// every run ends: through the success tool
+		if turn.Add(1) == 1 {
+			fmt.Fprintf(w, "data: %s\n\n",
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"list","arguments":"{\"path\":\".\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		} else {
+			fmt.Fprintf(w, "data: %s\n\n",
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","type":"function","function":{"name":"success","arguments":"{\"summary\":\"acceptance:\\n  - the suite passes\\nconstraints:\\n  - no new dependencies\\n\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		}
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
+agent:
+  model: test-model
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, server.URL)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	task, _, err := resolveTask("", path, nil)
-	if err != nil {
-		t.Fatalf("resolveTask: %v", err)
+	var out strings.Builder
+
+	if err := newOrder([]string{"--draft", "--config", configPath, "add", "rate", "limiting"}, &out); err != nil {
+		t.Fatalf("newOrder: %v", err)
 	}
 
-	if task != "refactor the parser" {
-		t.Errorf("task = %q, want it trimmed", task)
+	orders, err := resolveOrders([]string{filepath.Join("orders", "add-rate-limiting.yaml")}, false)
+	if err != nil {
+		t.Fatalf("the drafted order does not resolve: %v", err)
+	}
+
+	if len(orders[0].Acceptance) != 1 || orders[0].Acceptance[0] != "the suite passes" {
+		t.Errorf("Acceptance = %q, want the drafted criteria in the file", orders[0].Acceptance)
+	}
+
+	if !strings.Contains(out.String(), "review its drafted acceptance criteria") {
+		t.Errorf("the output should ask for a review of the draft:\n%s", out.String())
 	}
 }
 
-// A task file is the objective; the positional beside it is the opening prompt.
-func TestResolveTaskFilePrecedence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "task.md")
+// A failed draft writes nothing: the operator asked for a drafted order, and
+// silently handing back the plain scaffold would hide that they did not get one.
+func TestNewOrderDraftFailureWritesNoFile(t *testing.T) {
+	t.Chdir(t.TempDir())
 
-	if err := os.WriteFile(path, []byte("from the file"), 0o644); err != nil {
+	// a non-retriable failure, so the draft dies immediately rather than
+	// pacing out the engine's (deliberately short) recovery budget
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "bad key", http.StatusUnauthorized)
+	}))
+
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
+agent:
+  model: test-model
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, server.URL)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	task, prompt, err := resolveTask("", path, []string{"opening", "note"})
-	if err != nil {
-		t.Fatalf("resolveTask: %v", err)
+	if err := newOrder([]string{"--draft", "--config", configPath, "add", "rate", "limiting"}, io.Discard); err == nil {
+		t.Fatal("a failed draft must be an error")
 	}
 
-	if task != "from the file" {
-		t.Errorf("task = %q, want the file as the objective", task)
-	}
-
-	if prompt != "opening note" {
-		t.Errorf("prompt = %q, want the positional text", prompt)
+	if _, statErr := os.Stat("orders"); statErr == nil {
+		t.Error("a failed draft must not leave a scaffold behind")
 	}
 }
 
-func TestResolveTaskErrors(t *testing.T) {
-	empty := filepath.Join(t.TempDir(), "empty.md")
+// A draft surveys the tree; a survey that can edit files or run commands is
+// not a survey. This locks the toolbox read-only against anyone extending it.
+func TestDraftToolsAreReadOnly(t *testing.T) {
+	tools := draftTools()
 
-	if err := os.WriteFile(empty, []byte("   \n\t"), 0o644); err != nil {
+	for _, name := range []string{"read", "list"} {
+		if _, ok := tools[name]; !ok {
+			t.Errorf("the draft toolbox is missing %q", name)
+		}
+	}
+
+	for name := range tools {
+		if name == "write" || name == "shell" {
+			t.Errorf("the draft toolbox must never carry %q", name)
+		}
+	}
+
+	if len(tools) != 2 {
+		t.Errorf("draft toolbox = %d tools, want exactly read and list", len(tools))
+	}
+}
+
+// orderFile writes a minimal order and returns its path.
+func orderFile(t *testing.T, objective string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "order.yaml")
+
+	if err := os.WriteFile(path, []byte("objective: "+fmt.Sprintf("%q", objective)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	tests := []struct {
-		name     string
-		taskFlag string
-		taskFile string
-		args     []string
-	}{
-		// there is no interactive prompt to fall back on: zot is a viewer, so a
-		// missing task has to be an error rather than a wait
-		{"no task at all", "", "", nil},
-		{"whitespace-only arguments", "", "", []string{"  ", "\t"}},
-		{"a missing task file", "", filepath.Join(t.TempDir(), "nope.md"), nil},
-		{"an empty task file", "", empty, nil},
+	return path
+}
+
+// quietStderr silences stderr for a test that deliberately triggers the usage
+// block.
+func quietStderr(t *testing.T) {
+	t.Helper()
+
+	original := os.Stderr
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, _, err := resolveTask(test.taskFlag, test.taskFile, test.args); err == nil {
-				t.Error("expected an error")
-			}
-		})
-	}
+	os.Stderr = devNull
+
+	t.Cleanup(func() {
+		os.Stderr = original
+
+		devNull.Close()
+	})
 }
 
 func TestFirstNonEmpty(t *testing.T) {
@@ -259,7 +414,7 @@ func TestUsageDescribesTheRealCommands(t *testing.T) {
 
 	text := builder.String()
 
-	for _, want := range []string{"zot [flags]", "zot config", "zot sessions", "--resume"} {
+	for _, want := range []string{"zot [flags] <order.yaml>", "zot new", "zot config", "zot sessions", "--resume"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("usage does not mention %q:\n%s", want, text)
 		}
@@ -272,10 +427,11 @@ func TestUsageDescribesTheRealCommands(t *testing.T) {
 }
 
 // The CLI uses pflag (GNU-style), so a flag may appear AFTER the positional
-// task: `zot "do X" --plain` parses --plain as a flag and keeps the task intact.
-// The stdlib flag package stopped at the first non-flag, folding --plain into the
-// task string - this locks the behaviour that motivated the switch.
-func TestFlagsAfterThePositionalTaskAreParsed(t *testing.T) {
+// order paths: `zot orders/a.yaml --plain` parses --plain as a flag and keeps
+// the paths intact. The stdlib flag package stopped at the first non-flag,
+// folding --plain into the positionals - this locks the behaviour that
+// motivated the switch.
+func TestFlagsAfterThePositionalOrdersAreParsed(t *testing.T) {
 	set := pflag.NewFlagSet("zot", pflag.ContinueOnError)
 	plain := set.Bool("plain", false, "")
 
@@ -482,7 +638,8 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestRunRequiresATask(t *testing.T) {
+func TestRunRequiresAnOrder(t *testing.T) {
+	quietStderr(t)
 	withArgs(t)
 
 	if err := run(); err == nil {
@@ -546,7 +703,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	withArgs(t, "--config", configPath, "--dir", workdir, "do", "the", "thing")
+	withArgs(t, "--config", configPath, "--dir", workdir, orderFile(t, "do the thing"))
 
 	output, err := captureStdout(t, run)
 	if err != nil {
@@ -558,6 +715,112 @@ providers:
 			t.Errorf("transcript is missing %q:\n%s", want, output)
 		}
 	}
+}
+
+// A batch is N independent runs: each order gets its own session and its own
+// recorded outcome, and the batch stops at the first order that does not end in
+// success - later orders usually assume the earlier ones landed.
+func TestRunABatchOfOrders(t *testing.T) {
+	settle := func(name, args string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+
+			fmt.Fprintf(w, "data: %s\n\n", fmt.Sprintf(
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":"tool_calls"}]}`,
+				name, args))
+
+			fmt.Fprint(w, "data: [DONE]\n\n")
+		}))
+	}
+
+	configFor := func(t *testing.T, url string) string {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "config.yaml")
+
+		if err := os.WriteFile(path, []byte(fmt.Sprintf(`
+agent:
+  model: test-model
+ui:
+  plain: true
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, url)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return path
+	}
+
+	t.Run("every order gets its own run and session", func(t *testing.T) {
+		sessions := t.TempDir()
+
+		t.Setenv("ZOT_SESSION_DIR", sessions)
+
+		server := settle("success", `{"summary":"complete"}`)
+		defer server.Close()
+
+		withArgs(t, "--config", configFor(t, server.URL), "--dir", t.TempDir(),
+			orderFile(t, "the first order"), orderFile(t, "the second order"))
+
+		if _, err := captureStdout(t, run); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+
+		entries, err := session.List(sessions)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+
+		if len(entries) != 2 {
+			t.Fatalf("got %d sessions, want one per order", len(entries))
+		}
+
+		// newest first: each session carries its own order's objective, not a
+		// blend of the batch
+		if entries[0].Task != "the second order" || entries[1].Task != "the first order" {
+			t.Errorf("session tasks = %q, %q", entries[0].Task, entries[1].Task)
+		}
+	})
+
+	t.Run("the batch stops at the first failed order", func(t *testing.T) {
+		sessions := t.TempDir()
+
+		t.Setenv("ZOT_SESSION_DIR", sessions)
+
+		server := settle("failure", `{"reason":"cannot"}`)
+		defer server.Close()
+
+		first := orderFile(t, "the doomed order")
+
+		withArgs(t, "--config", configFor(t, server.URL), "--dir", t.TempDir(),
+			first, orderFile(t, "the never-run order"))
+
+		var err error
+
+		quietStderr(t)
+
+		if _, err = captureStdout(t, run); err == nil {
+			t.Fatal("a failed order must fail the batch")
+		}
+
+		if !strings.Contains(err.Error(), first) {
+			t.Errorf("the error should name the order that stopped the batch: %v", err)
+		}
+
+		entries, listErr := session.List(sessions)
+		if listErr != nil {
+			t.Fatalf("List: %v", listErr)
+		}
+
+		if len(entries) != 1 {
+			t.Fatalf("got %d sessions - the second order must never have run", len(entries))
+		}
+	})
 }
 
 // An explicitly passed --max-iterations is the operator's last word. A per-model
@@ -609,7 +872,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--max-iterations", "4", "a task")
+	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--max-iterations", "4", orderFile(t, "a task"))
 
 	// exhausting the iteration budget is how this run ends, so the error is the
 	// expected outcome - what matters is the budget it exhausted
@@ -639,7 +902,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	withArgs(t, "--config", configPath, "a task")
+	withArgs(t, "--config", configPath, orderFile(t, "a task"))
 
 	if err := run(); err == nil {
 		t.Error("an unreachable provider must fail before any request")
@@ -647,7 +910,7 @@ providers:
 }
 
 func TestRunRejectsAMissingConfigFile(t *testing.T) {
-	withArgs(t, "--config", filepath.Join(t.TempDir(), "nope.yaml"), "a task")
+	withArgs(t, "--config", filepath.Join(t.TempDir(), "nope.yaml"), orderFile(t, "a task"))
 
 	if err := run(); err == nil {
 		t.Error("an explicit but missing --config must be an error")
@@ -799,7 +1062,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "a task")
+	withArgs(t, "--config", configPath, "--dir", t.TempDir(), orderFile(t, "a task"))
 
 	var transcript string
 
@@ -925,7 +1188,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	withArgs(t, "--config", configPath, "--dir", workdir, "the first task")
+	withArgs(t, "--config", configPath, "--dir", workdir, orderFile(t, "the first task"))
 
 	if _, err := captureStdout(t, run); err != nil {
 		t.Fatalf("run: %v", err)
@@ -976,9 +1239,9 @@ providers:
 		t.Errorf("listing = %q", listing)
 	}
 
-	// now resume it: the new run carries the old conversation plus the new
-	// instruction, so the agent continues rather than starting over
-	withArgs(t, "--config", configPath, "--dir", workdir, "--resume", "last", "the follow-up")
+	// now resume it: the new run replays the old conversation and continues,
+	// rather than starting over
+	withArgs(t, "--config", configPath, "--dir", workdir, "--resume", "last")
 
 	if _, err := captureStdout(t, run); err != nil {
 		t.Fatalf("resumed run: %v", err)
@@ -1002,22 +1265,10 @@ providers:
 		t.Errorf("ResumedFrom = %q, want %q", second.Meta.ResumedFrom, first.Meta.ID)
 	}
 
-	// the objective carries over from the resumed session - a resume keeps the
-	// original brief and adds to it, it does not replace it
+	// the objective carries over from the resumed session - a resume continues
+	// the order the session was started with, never replaces it
 	if second.Meta.Task != "the first task" {
 		t.Errorf("resumed task = %q, want the original objective preserved", second.Meta.Task)
-	}
-
-	var texts []string
-
-	for _, message := range second.Messages {
-		texts = append(texts, message.Text)
-	}
-
-	joined := strings.Join(texts, "\n")
-
-	if !strings.Contains(joined, "the follow-up") {
-		t.Errorf("a resumed log must hold the new instruction:\n%s", joined)
 	}
 }
 
@@ -1101,7 +1352,7 @@ providers:
 func TestResumeOfAnUnknownSessionFails(t *testing.T) {
 	t.Setenv("ZOT_SESSION_DIR", t.TempDir())
 
-	withArgs(t, "--resume", "nope", "a task")
+	withArgs(t, "--resume", "nope")
 
 	if err := run(); err == nil {
 		t.Error("resuming a session that does not exist must be an error")
@@ -1141,7 +1392,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--no-session", "a task")
+	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--no-session", orderFile(t, "a task"))
 
 	if _, err := captureStdout(t, run); err != nil {
 		t.Fatalf("run: %v", err)

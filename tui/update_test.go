@@ -1157,3 +1157,49 @@ func TestFmtTokens(t *testing.T) {
 		}
 	}
 }
+
+// A caller collecting the run's outcome (a draft run) asks the viewer to close
+// itself when the run ends; a run of record holds the final screen, because the
+// screen is its report.
+func TestQuitOnDoneClosesTheViewerWhenTheRunEnds(t *testing.T) {
+	exit := agentEventMsg{ev: agent.AgentExitEvent{Code: 0, Reason: "settled", Message: "done"}}
+
+	m := sized(t, 100, 30)
+	m.quitOnDone = true
+
+	_, cmd := m.Update(exit)
+	if cmd == nil {
+		t.Fatal("the viewer should quit once the run ends")
+	}
+
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("cmd() = %T, want tea.QuitMsg", cmd())
+	}
+
+	// mid-run events must not quit, even with the flag set
+	running := sized(t, 100, 30)
+	running.quitOnDone = true
+
+	if _, cmd := running.Update(agentEventMsg{ev: agent.IterationEvent{Iteration: 1}}); cmd != nil {
+		t.Error("the viewer must stay open while the run is going")
+	}
+
+	// without the flag the final screen is held for review
+	held := sized(t, 100, 30)
+
+	if _, cmd := held.Update(exit); cmd != nil {
+		t.Error("a run of record must hold its final screen")
+	}
+}
+
+// A fatal agent error also ends the run; the self-closing viewer must not hang
+// on it.
+func TestQuitOnDoneClosesTheViewerOnAgentError(t *testing.T) {
+	m := sized(t, 100, 30)
+	m.quitOnDone = true
+
+	_, cmd := m.Update(agentErrMsg{err: fmt.Errorf("provider down")})
+	if cmd == nil {
+		t.Fatal("the viewer should quit on a fatal error")
+	}
+}

@@ -30,7 +30,6 @@ config, referencing a variable you export. Every field is documented in
 | `--provider` / `--model`                       | which provider and model to run against                            |
 | `--dir`                                       | the directory the agent reads, writes and runs commands in         |
 | `--max-iterations`                            | cap the agentic rounds; the default is deliberately large          |
-| `--task-file`                                 | read the brief from a file instead of the command line             |
 | `--resume` / `--session-dir` / `--no-session` | see [Sessions](#sessions)                                          |
 | `--diff`                                      | show a syntax-highlighted diff under each write                    |
 | `--plain`                                     | stream unstyled output; auto-enabled when stdout is not a terminal |
@@ -64,10 +63,8 @@ zot sessions
 # read one
 cat ~/.local/state/zot/sessions/20260805-155859.jsonl | jq .
 
-# pick up where it stopped - the agent keeps everything it already knew
-zot --resume last "now add the tests you skipped"
-
-# or continue the original brief, unchanged
+# pick up where it stopped - the agent keeps everything it already knew, and
+# continues the order the session was started with
 zot --resume last
 ```
 

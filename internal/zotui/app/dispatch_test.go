@@ -51,6 +51,14 @@ func (a *sandboxAPI) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{}`)
 	case strings.HasSuffix(r.URL.Path, "/cmd"):
+		// The dispatcher's first command writes the work order into the sandbox
+		// via /bin/sh; it succeeds silently, so the configured exit code and the
+		// hold both model the zot run itself.
+		if body, _ := io.ReadAll(r.Body); strings.Contains(string(body), "/bin/sh") {
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			_, _ = io.WriteString(w, "{\"command\":{\"id\":\"cmd_0\",\"exitCode\":0}}\n")
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, _ = io.WriteString(w, "{\"command\":{\"id\":\"cmd_1\",\"exitCode\":null}}\n")
 		_, _ = io.WriteString(w, "{\"stream\":\"stdout\",\"data\":\"working\\n\"}\n")

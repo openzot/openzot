@@ -51,6 +51,14 @@ type Meta struct {
 	// KnownStats). Empty uses DefaultStats. Unknown names are ignored.
 	Stats []string
 
+	// QuitOnDone closes the full-screen viewer as soon as the run ends, instead
+	// of holding the final screen until the user quits. For a run of record the
+	// held screen IS the report, so it stays; for a run whose deliverable is
+	// collected by the caller - a draft run - holding the screen blocks the
+	// step that consumes the outcome. The streaming renderers already end with
+	// the run, so this only affects the viewer.
+	QuitOnDone bool
+
 	// MaxIterations, MaxCalls and MaxDuration are the configured run limits, shown
 	// as "5/1000" progress in the meta bar. Zero means unbounded (or not worth
 	// showing, e.g. the default iteration backstop), so no denominator appears.
@@ -63,7 +71,11 @@ type Meta struct {
 // Bubble Tea program lifecycle and blocks until the user quits or the program
 // errors. The agent runs in the background and communicates with the UI solely
 // through tea messages.
-func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) error {
+//
+// Along with any error it returns the run's recorded Outcome, so a caller whose
+// deliverable is the outcome itself - a draft run - gets it without scraping
+// the screen.
+func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions) (Outcome, error) {
 	// Set the brand colours before anything renders. An empty Theme falls back to
 	// zot's neutral default (see applyTheme).
 	applyTheme(meta.Theme)
@@ -80,6 +92,7 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	if meta.Plain {
 		return runPlain(ctx, client, meta, opts)
 	}
+
 	if !isInteractive() {
 		return runStream(ctx, client, meta, opts, streamColorEnabled(meta.Color))
 	}
@@ -92,6 +105,7 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	m.maxIterations = meta.MaxIterations
 	m.maxCalls = meta.MaxCalls
 	m.maxDuration = meta.MaxDuration
+	m.quitOnDone = meta.QuitOnDone
 
 	return runViewer(ctx, m, client, opts, func(p *tea.Program) (tea.Model, error) { return p.Run() })
 }
@@ -105,7 +119,7 @@ func runViewer(
 	client *agent.Client,
 	opts agent.ExecuteWithToolsOptions,
 	start func(*tea.Program) (tea.Model, error),
-) error {
+) (Outcome, error) {
 	// Quitting the viewer stops the agent rather than merely stopping watching
 	// it. The agent has shell and file-write access, so an embedding process
 	// that returned from here with the run still going would leave something
@@ -119,14 +133,14 @@ func runViewer(
 
 	final, err := start(p)
 	if err != nil {
-		return err
+		return Outcome{}, err
 	}
 	switch m := final.(type) {
 	case model:
-		return m.runError()
+		return m.outcome(), m.runError()
 	case *model:
-		return m.runError()
+		return m.outcome(), m.runError()
 	default:
-		return nil
+		return Outcome{}, nil
 	}
 }

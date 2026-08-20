@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"time"
 
+	"github.com/openzot/openzot/internal/order"
 	"github.com/openzot/openzot/internal/zotui/compute"
 	"github.com/openzot/openzot/internal/zotui/repo"
 )
@@ -76,9 +78,28 @@ func (d *Dispatcher) Dispatch(ctx context.Context, execution Execution) (*Result
 	if workerPath == "" {
 		return nil, fmt.Errorf("execute run: compute returned no installed worker path")
 	}
-	code, err := sandbox.Exec(ctx, []string{workerPath, execution.Mission}, env, d.Output)
+	// zot takes a work order file, not prose argv. The mission is rendered to
+	// order YAML - a mission that already is one passes through intact, so the
+	// worker form can carry a full order - and written into the sandbox through
+	// the environment, which unlike shell interpolation carries arbitrary text
+	// without quoting rules getting a say.
+	writeOrder := maps.Clone(env)
+	writeOrder["ZOT_DISPATCH_ORDER"] = order.FromText(execution.Mission).Encode()
+	code, err := sandbox.Exec(ctx,
+		[]string{"/bin/sh", "-c", `printf '%s' "$ZOT_DISPATCH_ORDER" > ` + orderPath}, writeOrder, d.Output)
+	if err != nil {
+		return nil, fmt.Errorf("write order: %w", err)
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("write order: exit code %d", code)
+	}
+	code, err = sandbox.Exec(ctx, []string{workerPath, orderPath}, env, d.Output)
 	if err != nil {
 		return nil, fmt.Errorf("execute run: %w", err)
 	}
 	return &Result{ExitCode: code}, nil
 }
+
+// orderPath is where the run's work order lands inside the sandbox: outside the
+// workspace, so the order is not something the agent finds in its own tree.
+const orderPath = "/tmp/zot-order.yaml"
