@@ -82,16 +82,6 @@ var models = map[string]Model{
 	"o4-mini":       {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true},
 	"o3-mini":       {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true},
 	"o3":            {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-4.1":       {Provider: "openai", ContextWindow: 1_047_576, MaxOutputTokens: 32_768, SupportsTools: true},
-	"gpt-4.1-mini":  {Provider: "openai", ContextWindow: 1_047_576, MaxOutputTokens: 32_768, SupportsTools: true},
-	"gpt-4.1-nano":  {Provider: "openai", ContextWindow: 1_047_576, MaxOutputTokens: 32_768, SupportsTools: true},
-	"gpt-4.5":       {Provider: "openai", ContextWindow: 128_000, MaxOutputTokens: 16_000, SupportsTools: true},
-	"gpt-4o":        {Provider: "openai", ContextWindow: 128_000, MaxOutputTokens: 4_096, SupportsTools: true},
-	"gpt-4o-mini":   {Provider: "openai", ContextWindow: 128_000, MaxOutputTokens: 4_096, SupportsTools: true},
-	"gpt-4-turbo":   {Provider: "openai", ContextWindow: 128_000, MaxOutputTokens: 4_096, SupportsTools: true},
-	"gpt-4":         {Provider: "openai", ContextWindow: 8_000, MaxOutputTokens: 2_000, SupportsTools: true},
-	"gpt-3.5-turbo": {Provider: "openai", ContextWindow: 16_000, MaxOutputTokens: 4_000, SupportsTools: true},
-
 	// ------------------------------------------------------------- Anthropic
 
 	"claude-5-opus":     {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},

@@ -117,7 +117,7 @@ you want Zot's permissive built-in/unknown-model behavior.
 ## Gateways and prefixed models
 
 `openrouter` and `vercel` are model gateways: one endpoint fronting many
-providers, addressed by a provider-qualified model name like `openai/gpt-4o` or
+providers, addressed by a provider-qualified model name like `openai/gpt-5.4` or
 `anthropic/claude-5-sonnet`. zot resolves the model's real context window behind
 the prefix, and - because a model is the same model whichever gateway serves it -
 you can give a **bare** name and zot supplies each gateway's own prefix from its

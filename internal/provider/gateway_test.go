@@ -282,7 +282,7 @@ func TestBareModelIsQualifiedPerGateway(t *testing.T) {
 		{provider: Vercel, model: "glm-5.3", want: "zai/glm-5.3"},
 
 		// a provider whose slug matches our name needs no alias
-		{provider: OpenRouter, model: "gpt-4o", want: "openai/gpt-4o"},
+		{provider: OpenRouter, model: "gpt-5.4", want: "openai/gpt-5.4"},
 		{provider: Vercel, model: "gpt-5.4-mini", want: "openai/gpt-5.4-mini"},
 
 		// the other known OpenRouter slug mismatches

@@ -175,7 +175,7 @@ providers:
     # base_url: 'http://localhost:11434/v1'
 
   # Model gateways - one endpoint fronting many providers, addressed by a
-  # provider-qualified model name like 'openai/gpt-4o' or 'anthropic/claude-5-sonnet'
+  # provider-qualified model name like 'openai/gpt-5.4' or 'anthropic/claude-5-sonnet'
   # passed to --model. These two have a fixed endpoint, so the key is all they need.
   openrouter:
     # api_key: '$OPENROUTER_API_KEY'
