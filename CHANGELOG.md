@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-08-21
+
+### Changed
+
+- **The model catalogue now starts at GPT-5, and token budgeting is provider-neutral.** GPT-4, GPT-4o, GPT-4.1, GPT-4.5 and GPT-3.5 are no longer offered: they are legacy, largely unsupported choices for an agentic coding harness. Zot no longer ships an OpenAI vocabulary and pretends it describes every provider's tokenizer; it conservatively estimates UTF-8 input, including instructions and tool schemas, then uses the provider's reported usage to drive compaction. This removes several megabytes of model-specific data while retaining context-limit recovery as the final safeguard.
+
 ## [0.13.0] - 2026-08-20
 
 ### Added

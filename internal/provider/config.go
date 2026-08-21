@@ -78,7 +78,7 @@ var gatewayProviders = map[string]string{
 }
 
 // gatewaysQualifyModels are the providers that route by a creator-qualified
-// model name ("openai/gpt-4o"). For these, a bare model the user typed is
+// model name ("openai/gpt-5.4"). For these, a bare model the user typed is
 // completed from the catalogue - see qualifyModel.
 var gatewaysQualifyModels = map[string]bool{
 	OpenRouter: true,

@@ -8,6 +8,8 @@
 automated software factory in a single binary - an autonomous coding harness that
 plans, edits, runs, and verifies until the work is done.
 
+**About 11 MiB. One binary, with no hosted engine and no telemetry.**
+
 <p align="center">
   <img width="1504" height="1080" alt="zot demo" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
 </p>

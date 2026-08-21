@@ -22,7 +22,6 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 		// a dated point release falls through to its family rather than the
 		// default - the case an exact-name map would miss
 		{"gpt-5.4-mini-2026-03-01", 400_000},
-		{"gpt-4o-mini", 128_000},
 		{"gemini-3-pro-preview", 1_048_576},
 
 		// longest prefix wins: deepseek-r is a reasoning variant with its own
@@ -32,8 +31,6 @@ func TestLookupMatchesLongestPrefix(t *testing.T) {
 
 		// the full OpenAI range is present, not just the current flagship
 		{"gpt-5.6-sol", 1_050_000},
-		{"gpt-4.1-nano", 1_047_576},
-		{"gpt-3.5-turbo", 16_000},
 		{"o3", 200_000},
 
 		// a provider-qualified name resolves on the segment after the last slash
@@ -105,7 +102,7 @@ func TestReasoningModelsAreFlagged(t *testing.T) {
 		}
 	}
 
-	for _, model := range []string{"gpt-4o", "mistral-large-2", "devstral-2"} {
+	for _, model := range []string{"mistral-large-2", "devstral-2"} {
 		if Lookup(model).SupportsReasoning {
 			t.Errorf("%s does not emit a reasoning channel", model)
 		}
@@ -143,6 +140,17 @@ func TestKnownReportsCoverage(t *testing.T) {
 
 	if Known("totally-made-up-model") {
 		t.Error("an unknown model must not report as known")
+	}
+}
+
+func TestLegacyGPTModelsAreNotOffered(t *testing.T) {
+	for _, model := range []string{
+		"gpt-4.1", "gpt-4.1-mini", "gpt-4.5", "gpt-4o", "gpt-4o-mini",
+		"gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+	} {
+		if Known(model) {
+			t.Errorf("legacy model %s should not be in the catalogue", model)
+		}
 	}
 }
 
@@ -192,8 +200,6 @@ func TestOpenAICoverage(t *testing.T) {
 		"gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
 		"gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano",
 		"o4-mini", "o3-mini", "o3",
-		"gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-		"gpt-4.5", "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
 	} {
 		if _, ok := models[model]; !ok {
 			t.Errorf("%s is missing from the catalogue", model)
