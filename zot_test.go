@@ -23,9 +23,9 @@ func TestLoadProjectContext(t *testing.T) {
 	configDir := t.TempDir()
 	workDir := t.TempDir()
 
-	// A global AGENT.md in the config dir and a project one in the work dir.
-	mustWrite(t, filepath.Join(configDir, "AGENT.md"), "GLOBAL CONVENTIONS")
-	mustWrite(t, filepath.Join(workDir, "AGENT.md"), "PROJECT CONVENTIONS")
+	// A global AGENTS.md in the config dir and a project one in the work dir.
+	mustWrite(t, filepath.Join(configDir, "AGENTS.md"), "GLOBAL CONVENTIONS")
+	mustWrite(t, filepath.Join(workDir, "AGENTS.md"), "PROJECT CONVENTIONS")
 
 	// A skill in each location: plain "skills/" in the config dir and hidden
 	// ".skills/" in the project dir - both layouts must be picked up.
@@ -39,14 +39,14 @@ func TestLoadProjectContext(t *testing.T) {
 		t.Fatalf("LoadProjectContext: %v", err)
 	}
 
-	// Instructions keeps the default and appends both AGENT.md files in order.
+	// Instructions keeps the default and appends both AGENTS.md files in order.
 	for _, want := range []string{DefaultInstructions[:20], "GLOBAL CONVENTIONS", "PROJECT CONVENTIONS"} {
 		if !strings.Contains(cfg.Agent.Instructions, want) {
 			t.Errorf("instructions missing %q", want)
 		}
 	}
 	if i, j := strings.Index(cfg.Agent.Instructions, "GLOBAL"), strings.Index(cfg.Agent.Instructions, "PROJECT"); i > j {
-		t.Error("expected config-dir AGENT.md to appear before work-dir AGENT.md")
+		t.Error("expected config-dir AGENTS.md to appear before work-dir AGENTS.md")
 	}
 
 	// Both skills are discovered and described to the model.
@@ -70,7 +70,7 @@ func TestLoadProjectContextNoFiles(t *testing.T) {
 		t.Fatalf("LoadProjectContext: %v", err)
 	}
 	if cfg.Agent.Instructions != "" {
-		t.Error("expected instructions untouched when no AGENT.md is present")
+		t.Error("expected instructions untouched when no AGENTS.md is present")
 	}
 
 	if len(cfg.Skills) != 0 {
@@ -917,7 +917,7 @@ providers:
 }
 
 // The contract must not pile up. The default prompt already carries it, and so
-// does a default prompt that LoadProjectContext extended with an AGENT.md;
+// does a default prompt that LoadProjectContext extended with an AGENTS.md;
 // re-attaching it there would spend context repeating the same paragraph.
 func TestResolvedInstructionsCarryTheContractExactlyOnce(t *testing.T) {
 	configPath := writeCfg(t, `
@@ -933,14 +933,14 @@ providers:
 
 	project := t.TempDir()
 
-	mustWrite(t, filepath.Join(project, "AGENT.md"), "PROJECT CONVENTIONS")
+	mustWrite(t, filepath.Join(project, "AGENTS.md"), "PROJECT CONVENTIONS")
 
 	for _, test := range []struct {
 		name    string
 		prepare func(*Config)
 	}{
 		{"the built-in prompt", func(*Config) {}},
-		{"the built-in prompt plus AGENT.md", func(cfg *Config) {
+		{"the built-in prompt plus AGENTS.md", func(cfg *Config) {
 			if err := LoadProjectContext(cfg, project); err != nil {
 				t.Fatalf("LoadProjectContext: %v", err)
 			}

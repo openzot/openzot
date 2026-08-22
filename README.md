@@ -177,7 +177,7 @@ how to use it:
   `zot` again - a fresh run with its own brief, its own working directory, its
   own budget - and read back the result. Delegating a self-contained piece of
   work to a clean context is a shell command, not a special API. Direct
-  instructions in your `AGENT.md`, or a skill, are what tell it when that is
+  instructions in your `AGENTS.md`, or a skill, are what tell it when that is
   worth doing.
 - **Agent-to-agent communication is left open, too.** zot does not prescribe a
   message bus or a protocol. Two runs coordinate through whatever they already
@@ -221,7 +221,7 @@ upgrading.
 ## Documentation
 
 - [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints, the Responses API
-- [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENT.md` & skills
+- [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENTS.md` & skills
 - [docs/zotui-configuration.md](docs/zotui-configuration.md) - zotui repos, compute, models, environments, Vercel Sandbox, and local Docker setup
 - [docs/development.md](docs/development.md) - building from source, release vs developer builds, the codebase map
 - [docs/portable-config.md](docs/portable-config.md) - baking the configuration into the binary

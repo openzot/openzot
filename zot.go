@@ -29,7 +29,7 @@ import (
 
 // Names zot looks for under each context directory.
 const (
-	agentFile      = "AGENT.md"
+	agentFile      = "AGENTS.md"
 	projectContext = "# Project context"
 )
 
@@ -117,7 +117,7 @@ const resumeKickoff = "Continue your task from where the session left off. Recon
 // model whatever the instructions say. Custom instructions replace the built-in
 // prompt wholesale - that is what an override is for - but they cannot opt a run
 // into an interactivity zot does not have. Instructions that already carry the
-// contract (the defaults, or the defaults plus an AGENT.md) are left untouched,
+// contract (the defaults, or the defaults plus an AGENTS.md) are left untouched,
 // so the common path is unchanged and the text is never repeated.
 func withNonInteractiveContract(instructions string) string {
 	if strings.Contains(instructions, nonInteractiveContract) {
@@ -163,11 +163,11 @@ func DefaultConfigPath() string { return config.DefaultConfigPath() }
 // given directories, searched in order (typically the config directory first,
 // then the working directory):
 //
-//   - <dir>/AGENT.md  - appended to the agent instructions
+//   - <dir>/AGENTS.md  - appended to the agent instructions
 //   - <dir>/skills/   - loaded via the SDK and added as a "skills" feature
 //
 // Missing files and directories are ignored, and duplicate directories are
-// searched once. AGENT.md content augments (never replaces) the base instructions.
+// searched once. AGENTS.md content augments (never replaces) the base instructions.
 func LoadProjectContext(cfg *Config, dirs ...string) error {
 	seen := map[string]bool{}
 	var search []string

@@ -246,7 +246,7 @@ func run() error {
 		return err
 	}
 
-	// Resolve the config directory (source of any global AGENT.md / skills) while
+	// Resolve the config directory (source of any global AGENTS.md / skills) while
 	// the original working directory is still current, so a relative --config
 	// resolves correctly before the chdir below.
 	configDir := config.ConfigDir(*configPath)
@@ -261,7 +261,7 @@ func run() error {
 		return fmt.Errorf("cannot enter --dir %q: %w", *dir, err)
 	}
 
-	// Fold in AGENT.md and skills from the config directory, then the working
+	// Fold in AGENTS.md and skills from the config directory, then the working
 	// directory (project-level context wins / appends last).
 	workDir, _ := os.Getwd()
 	if err := zot.LoadProjectContext(&cfg, configDir, workDir); err != nil {

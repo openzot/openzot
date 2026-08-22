@@ -898,7 +898,7 @@ func TestRunFromADifferentDirectoryEndToEnd(t *testing.T) {
 
 	// project context that only exists inside --dir: if either reaches the
 	// provider, it was loaded from the right tree
-	if err := os.WriteFile(filepath.Join(target, "AGENT.md"), []byte("# Project context\n\nAlways mention PINECONE.\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "AGENTS.md"), []byte("# Project context\n\nAlways mention PINECONE.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -974,7 +974,7 @@ providers:
 	}
 
 	if !sawContext.Load() || !sawSkill.Load() {
-		t.Errorf("project context did not come from --dir (AGENT.md seen: %v, skills seen: %v)",
+		t.Errorf("project context did not come from --dir (AGENTS.md seen: %v, skills seen: %v)",
 			sawContext.Load(), sawSkill.Load())
 	}
 

@@ -375,7 +375,7 @@ func TestHomeDirHasAFallback(t *testing.T) {
 	}
 }
 
-// ConfigDir is where a global AGENT.md and skills live, so it has to track
+// ConfigDir is where a global AGENTS.md and skills live, so it has to track
 // whichever config path is in play.
 func TestConfigDir(t *testing.T) {
 	if got := ConfigDir("/somewhere/zot.yaml"); got != "/somewhere" {
