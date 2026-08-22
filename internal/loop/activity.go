@@ -19,6 +19,23 @@ import (
 // So it is a struct. A missing field is a compile error, the shape is the
 // documentation, and the pairing and rendering code stops guessing.
 
+// ToolResult is what a handler returns when a tool produces more than text.
+//
+// A handler's return value is `any`, and text or a JSON-encodable value is
+// still the common case; this is the shape for the uncommon one. The images do
+// not travel in the tool result itself - the wire rejects that - so the engine
+// takes them off the result and attaches them to a message of its own. Text is
+// what the model reads as the result, and it has to stand alone: it is what
+// remains if the images are dropped from a compacted history, or if their
+// blobs go missing before a resume.
+type ToolResult struct {
+	// Text is the tool result the model reads.
+	Text string
+
+	// Images are attached after the turn's tool results, in call order.
+	Images []provider.Image
+}
+
 // ActivityKind is which half of a tool call a message carries.
 type ActivityKind string
 
@@ -121,6 +138,12 @@ func (a *Activity) ResultText() string {
 
 	if text, ok := value.(string); ok {
 		return text
+	}
+
+	// a tool that produced images reads as its text; the images were taken off
+	// the result when the turn was assembled
+	if result, ok := value.(ToolResult); ok {
+		return result.Text
 	}
 
 	encoded, err := json.Marshal(value)

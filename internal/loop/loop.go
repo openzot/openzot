@@ -78,6 +78,12 @@ type Options struct {
 	MaxCycles        int
 	MaxEmpties       int
 
+	// MaxRecoveries bounds recovery attempts across the whole run, however they
+	// are spaced - the point at which a provider that keeps needing them is
+	// called broken. See DefaultMaxRecoveries for why it is separate from
+	// MaxContinuations rather than derived from it. Zero uses the default.
+	MaxRecoveries int
+
 	// MaxCalls bounds total tool calls. Zero (or negative) is unbounded - only
 	// the iteration count is a hard default backstop.
 	MaxCalls int
@@ -158,6 +164,19 @@ const (
 	// so a long run accumulates a chain of segment summaries rather than
 	// re-condensing its own summaries into a lossy summary-of-a-summary.
 	TypeCheckpoint MessageType = "checkpoint"
+
+	// TypeAttachment carries what a tool produced but a tool result cannot
+	// hold - today, images.
+	//
+	// It exists because the wire will not take the obvious arrangement: an
+	// OpenAI-compatible endpoint rejects image parts on a tool result, so an
+	// image has to travel as its own message, in the one role that accepts it.
+	// A type of its own rather than TypeUser because nothing in an unattended
+	// run should claim a human said something, and because compaction needs to
+	// find these cheaply - images are the first thing worth dropping from a
+	// long history, and the message's text is written to stand alone once they
+	// are gone.
+	TypeAttachment MessageType = "attachment"
 )
 
 // Message is one entry in the conversation.
@@ -168,6 +187,12 @@ type Message struct {
 	// Activity is the tool call this message carries, on a TypeActivity
 	// message. Nil on every other type.
 	Activity *Activity `json:"activity,omitempty"`
+
+	// Images are what the model is shown alongside Text, on a TypeAttachment
+	// message. The bytes are not serialised with the message - see
+	// provider.Image - so a message read back from a log carries the shape of
+	// its images and the recorder rehydrates the bytes from their blobs.
+	Images []provider.Image `json:"images,omitempty"`
 }
 
 // Result is the outcome of a run.
@@ -196,11 +221,15 @@ type Engine struct {
 	maxCalls         int
 	maxDuration      time.Duration
 	maxContinuations int
-	maxCycles        int
-	maxEmpties       int
-	maxSettles       int
-	retryBackoff     time.Duration
-	checkpoints      []int
+
+	// maxRecoveries is the runaway backstop under the consecutive count; see
+	// DefaultMaxRecoveries.
+	maxRecoveries int
+	maxCycles     int
+	maxEmpties    int
+	maxSettles    int
+	retryBackoff  time.Duration
+	checkpoints   []int
 
 	compactStrategy     bool
 	compactMinTokens    int
@@ -276,6 +305,7 @@ func New(options Options) (*Engine, error) {
 		maxCalls:            nonNegative(options.MaxCalls),
 		maxDuration:         options.MaxDuration,
 		maxContinuations:    pick(options.MaxContinuations, DefaultMaxContinuations),
+		maxRecoveries:       pick(options.MaxRecoveries, DefaultMaxRecoveries),
 		maxCycles:           pick(options.MaxCycles, DefaultMaxCycles),
 		maxEmpties:          pick(options.MaxEmpties, DefaultMaxEmpties),
 		maxSettles:          options.MaxSettles,
@@ -289,6 +319,15 @@ func New(options Options) (*Engine, error) {
 		retryBackoff: pickDuration(options.RetryBackoff, DefaultRetryBackoff),
 		inputBudget:  budget,
 	}, nil
+}
+
+// canContinue reports whether another recovery attempt is within both bounds:
+// the consecutive run of them, and the total across the run. Both are checked
+// at every site that spends one, so neither can be reached by taking a
+// different route into recovery.
+func (e *Engine) canContinue(budget Budget) bool {
+	return budget.Continuations < e.maxContinuations &&
+		budget.Recoveries < e.maxRecoveries
 }
 
 // backoffFor is the pause before the attempt'th consecutive retry: base,
@@ -474,11 +513,10 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 	lastInputTokens := 0
 
 	// retries counts *consecutive* retriable provider failures, and is what the
-	// backoff keys off. Deliberately not budget.Continuations: that is a
-	// run-lifetime budget also spent by truncation recoveries and context-limit
-	// compactions, so keying the backoff off it would make an unrelated blip
-	// hours into a run start at an escalated wait - and never come back down.
-	// A successful turn resets this, so each new outage backs off from the base.
+	// backoff keys off. Deliberately not budget.Continuations: that also counts
+	// truncation recoveries and context-limit compactions, so keying the
+	// backoff off it would make a truncation earlier in the same stretch start
+	// an unrelated outage at an escalated wait. Both reset on a good turn.
 	retries := 0
 
 	// The most recent provider failure, kept so an abort can carry it. A run is
@@ -593,8 +631,8 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 			}
 
 			// a context-limit rejection is recoverable: compact and retry
-			if limit, ok := provider.DetectContextLimit(err); ok && budget.Continuations < e.maxContinuations {
-				budget.Continuations++
+			if limit, ok := provider.DetectContextLimit(err); ok && e.canContinue(budget) {
+				budget.spendContinuation()
 
 				// @note the provider's stated window beats the local estimate.
 				// A rejection is precisely the case where the catalogue was
@@ -635,8 +673,8 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 			// single throttle response ends an overnight run outright.
 			limited := provider.IsRateLimited(err)
 
-			if (limited || provider.IsRetriable(err)) && budget.Continuations < e.maxContinuations {
-				budget.Continuations++
+			if (limited || provider.IsRetriable(err)) && e.canContinue(budget) {
+				budget.spendContinuation()
 				retries++
 
 				emit(Event{Kind: EventRetry, Text: err.Error(), Failure: err})
@@ -693,12 +731,12 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		// a truncated answer is continued rather than accepted
 
 		if turn.FinishReason == provider.FinishLength {
-			if budget.Continuations >= e.maxContinuations {
+			if !e.canContinue(budget) {
 				return e.finish(messages, budget, StopContinuations,
 					"the model kept running out of output space", nil)
 			}
 
-			budget.Continuations++
+			budget.spendContinuation()
 
 			emit(Event{Kind: EventNotice, Text: fmt.Sprintf(
 				"answer cut off at the output limit; asking the model to continue (%d/%d)",
@@ -707,6 +745,17 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 			messages = append(messages, Message{Type: TypeUser, Text: truncationNotice()})
 
 			continue
+		}
+
+		// The turn came back whole - not a provider failure, not cut off at the
+		// output limit - so whatever the run was recovering from is behind it
+		// and the consecutive count starts over. Everything that needs recovery
+		// continues above this line, which is what keeps a run of truncations
+		// bounded while a truncation an hour ago no longer counts against a
+		// provider blip now. The total is untouched: it is the record of what
+		// the run spent, and the backstop under this reset.
+		if turn.Text != "" || turn.Reasoning != "" || len(turn.ToolCalls) > 0 {
+			budget.Continuations = 0
 		}
 
 		// terminal tool calls end the run before anything else is dispatched
@@ -947,6 +996,11 @@ func (e *Engine) dispatch(
 ) ([]Message, *Result) {
 	first := true
 
+	// images the turn's tools produced, held back until every call has been
+	// answered: a tool result may not carry them, and a user message wedged
+	// between two tool results would invalidate the turn
+	var attached []attachment
+
 	for _, call := range calls {
 		if e.maxCalls > 0 && budget.Calls >= e.maxCalls {
 			result := e.finish(messages, *budget, StopCalls,
@@ -1010,9 +1064,92 @@ func (e *Engine) dispatch(
 		emit(Event{Kind: EventToolCallEnd, Tool: name, Result: output})
 
 		messages = append(messages, activityMessage(ActivityResponse, call, output, ""))
+
+		if result, ok := output.(ToolResult); ok {
+			for _, image := range result.Images {
+				attached = append(attached, attachment{tool: name, call: call.ID, image: image})
+			}
+		}
+	}
+
+	if message, ok := attachmentMessage(attached); ok {
+		messages = append(messages, message)
 	}
 
 	return messages, nil
+}
+
+// maxAttachmentsPerTurn bounds how many images one turn may attach.
+//
+// A tool loop that attached everything it was handed could spend a context
+// window in a single turn - a handful of screenshots is thousands of tokens -
+// and the model cannot see that happening. The extras are named in the text so
+// the drop is visible rather than silent.
+const maxAttachmentsPerTurn = 8
+
+// attachment pairs an image with the call that produced it, so the message that
+// carries it can say where it came from.
+type attachment struct {
+	tool  string
+	call  string
+	image provider.Image
+}
+
+// attachmentMessage renders a turn's images as the one message that carries
+// them.
+//
+// The text is written to stand alone. It is what the model reads if the images
+// are dropped by compaction, what remains in a log whose blobs were deleted,
+// and what a resumed run falls back to when a blob cannot be found - in every
+// one of those cases the conversation should still say that an image existed
+// and what it was.
+func attachmentMessage(attached []attachment) (Message, bool) {
+	if len(attached) == 0 {
+		return Message{}, false
+	}
+
+	dropped := 0
+
+	if len(attached) > maxAttachmentsPerTurn {
+		dropped = len(attached) - maxAttachmentsPerTurn
+		attached = attached[:maxAttachmentsPerTurn]
+	}
+
+	var (
+		lines  []string
+		images []provider.Image
+	)
+
+	for _, item := range attached {
+		lines = append(lines, describeAttachment(item))
+		images = append(images, item.image)
+	}
+
+	text := "Attached: " + strings.Join(lines, "; ")
+
+	if dropped > 0 {
+		text += fmt.Sprintf(" (%d further image(s) not attached: a turn may attach at most %d)",
+			dropped, maxAttachmentsPerTurn)
+	}
+
+	return Message{Type: TypeAttachment, Text: text, Images: images}, true
+}
+
+// describeAttachment is one image's standalone description.
+func describeAttachment(item attachment) string {
+	image := item.image
+
+	origin := image.Origin
+
+	if origin == "" {
+		origin = item.tool
+	}
+
+	if image.Width > 0 && image.Height > 0 {
+		return fmt.Sprintf("%s (%s, %dx%d)", origin, image.MediaType, image.Width, image.Height)
+	}
+
+	return fmt.Sprintf("%s (%s)", origin, image.MediaType)
 }
 
 // activityMessage renders one half of a tool-call pair.

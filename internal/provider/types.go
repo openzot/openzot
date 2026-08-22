@@ -99,6 +99,81 @@ type ChatMessage struct {
 	// model's continuity at best, and at worst the upstream rejects the request
 	// once the chain has grown. Opaque by design: zot never inspects it.
 	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
+
+	// Images are shown alongside Content. Marshalled into content parts rather
+	// than a field of their own - see MarshalJSON - because that is the only
+	// shape the API accepts them in.
+	//
+	// Only a user message may carry them: an OpenAI-compatible endpoint rejects
+	// image parts on a tool result, which is why a tool that produces an image
+	// returns text and the engine attaches the image to a message of its own.
+	Images []Image `json:"-"`
+}
+
+// MarshalJSON renders the message for the wire, promoting content to an array
+// of parts when the message carries images.
+//
+// It lives here rather than in the transport because every path that sends a
+// message goes through this type, and a message that quietly dropped its images
+// on one of them would be a bug nobody sees until a model insists it was shown
+// nothing.
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	// alias sheds the method so the default encoding is still reachable
+	type alias ChatMessage
+
+	encoded, err := json.Marshal(alias(m))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(m.Images) == 0 {
+		return encoded, nil
+	}
+
+	images := make([]any, 0, len(m.Images))
+
+	for _, image := range m.Images {
+		if !image.Ready() {
+			continue // a blob that went missing; the text still describes it
+		}
+
+		url := map[string]any{"url": image.DataURL()}
+
+		if image.Detail != "" {
+			url["detail"] = image.Detail
+		}
+
+		images = append(images, map[string]any{"type": "image_url", "image_url": url})
+	}
+
+	// nothing sendable survived: send the plain string rather than an array
+	// with a lone text part, which is a shape some endpoints are fussier about
+	if len(images) == 0 {
+		return encoded, nil
+	}
+
+	parts := make([]any, 0, len(images)+1)
+
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+
+	parts = append(parts, images...)
+
+	object := map[string]json.RawMessage{}
+
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		return nil, err
+	}
+
+	content, err := json.Marshal(parts)
+	if err != nil {
+		return nil, err
+	}
+
+	object["content"] = content
+
+	return json.Marshal(object)
 }
 
 // Tool is a tool definition offered to the model.

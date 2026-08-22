@@ -107,6 +107,12 @@ type Message struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text"`
 	Activity *Activity `json:"activity,omitempty"`
+
+	// Images are what an attachment message showed the model. The record keeps
+	// their shape and digest; the bytes live in a blob beside this log, because
+	// a megabyte of base64 on one line would defeat both of the reasons this
+	// format is JSON Lines.
+	Images []provider.Image `json:"images,omitempty"`
 }
 
 // Activity is a tool call recorded in a log.
@@ -176,6 +182,11 @@ type Writer struct {
 	enc  *json.Encoder
 	id   string
 	path string
+
+	// blobs is the directory image bytes are written to, a sibling of the log
+	// named after it. Created on first use: a run that never attaches an image
+	// leaves no empty directory behind.
+	blobs string
 }
 
 // NewID returns a session identifier that sorts chronologically.
@@ -231,7 +242,13 @@ func Create(dir, id string, meta Meta) (*Writer, error) {
 		return nil, fmt.Errorf("create session log: %w", err)
 	}
 
-	writer := &Writer{file: file, enc: json.NewEncoder(file), id: id, path: path}
+	writer := &Writer{
+		file:  file,
+		enc:   json.NewEncoder(file),
+		id:    id,
+		path:  path,
+		blobs: filepath.Join(dir, id+BlobSuffix),
+	}
 
 	meta.ID = id
 
@@ -312,12 +329,82 @@ func (w *Writer) Close() error {
 	return err
 }
 
+// BlobSuffix names the directory holding a session's image blobs. A sibling of
+// the log rather than a shared store, so a session stays one self-contained
+// thing: copying or caching a log carries its images, and deleting it is two
+// paths rather than a reference count.
+const BlobSuffix = ".blobs"
+
+// Blobs returns the directory this writer keeps image bytes in.
+func (w *Writer) Blobs() string { return w.blobs }
+
+// StoreImage writes an image's bytes beside the log and returns the record to
+// serialise in its place.
+//
+// Content-addressed: the same screenshot attached twice is stored once, and a
+// record can never name bytes that are not the ones it describes. The returned
+// image carries no Bytes - what goes in the log is the shape, not the payload.
+func (w *Writer) StoreImage(image provider.Image) (provider.Image, error) {
+	if len(image.Bytes) == 0 {
+		return image, nil // already stored, or nothing to store
+	}
+
+	if w.blobs == "" {
+		// no directory to write to: keep it inline rather than lose it
+		image.Source = provider.SourceInline
+		image.Data = image.Encoded()
+		image.Bytes = nil
+
+		return image, nil
+	}
+
+	if err := os.MkdirAll(w.blobs, 0o700); err != nil {
+		return image, fmt.Errorf("create blob directory: %w", err)
+	}
+
+	path := filepath.Join(w.blobs, blobName(image))
+
+	// the digest is the name, so an existing file is already these bytes
+	if _, err := os.Stat(path); err != nil {
+		if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
+			return image, fmt.Errorf("write image blob: %w", err)
+		}
+	}
+
+	image.Source = provider.SourceBlob
+	image.Bytes = nil
+	image.Data = ""
+
+	return image, nil
+}
+
+// blobName is an image's file name: its digest, with the extension for its type
+// so the directory can be browsed by a human.
+func blobName(image provider.Image) string {
+	digest := image.Digest
+
+	if index := strings.Index(digest, ":"); index >= 0 {
+		digest = digest[index+1:]
+	}
+
+	if digest == "" {
+		digest = provider.Digest(image.Bytes)[len("sha256:"):]
+	}
+
+	return digest + "." + image.Extension()
+}
+
 // Session is a log read back from disk.
 type Session struct {
 	Meta     Meta
 	Messages []Message
 	Events   []Event
 	Result   *Result
+
+	// Blobs is where this log's image bytes live, empty for a session parsed
+	// from a reader with no path behind it. An image whose bytes cannot be
+	// found is not sent - the text that described it is what remains.
+	Blobs string
 
 	// Truncated reports that the log ended mid-record, which is what a crashed
 	// or killed run leaves behind. The records before it are still usable.
@@ -340,7 +427,45 @@ func Load(path string) (*Session, error) {
 
 	defer file.Close()
 
-	return Read(file)
+	session, err := Read(file)
+
+	if session != nil {
+		session.Blobs = strings.TrimSuffix(path, ".jsonl") + BlobSuffix
+	}
+
+	return session, err
+}
+
+// LoadImage restores an image's bytes from wherever the record says they are.
+//
+// A missing blob is not an error: logs are copied, pruned and cached, and a run
+// that refused to resume because a screenshot from an hour ago had been deleted
+// would be worse than one that resumes with the description of it. The image is
+// returned unready, and the wire drops it.
+func (s *Session) LoadImage(image provider.Image) provider.Image {
+	if len(image.Bytes) > 0 || image.Data != "" {
+		return image
+	}
+
+	if s == nil || s.Blobs == "" {
+		return image
+	}
+
+	data, err := os.ReadFile(filepath.Join(s.Blobs, blobName(image)))
+
+	if err != nil {
+		return image
+	}
+
+	// the name is the digest, so a file that does not hash to it is not this
+	// image - a truncated copy, or a directory someone edited
+	if image.Digest != "" && provider.Digest(data) != image.Digest {
+		return image
+	}
+
+	image.Bytes = data
+
+	return image
 }
 
 // Read parses a session log from a reader.
@@ -413,6 +538,11 @@ type Entry struct {
 
 	// Reason is the recorded stop reason, empty for an unfinished run.
 	Reason string
+
+	// ResumedFrom names the session this one continues, empty if it started
+	// clean. Listed rather than left inside the log so a caller can walk a
+	// chain of resumes without loading every session in the directory.
+	ResumedFrom string
 }
 
 // List enumerates the sessions in dir, newest first.
@@ -447,10 +577,11 @@ func List(dir string) ([]Entry, error) {
 		}
 
 		entry := Entry{
-			ID:       strings.TrimSuffix(file.Name(), ".jsonl"),
-			Path:     path,
-			Task:     session.Meta.Task,
-			Complete: session.Complete(),
+			ID:          strings.TrimSuffix(file.Name(), ".jsonl"),
+			Path:        path,
+			Task:        session.Meta.Task,
+			Complete:    session.Complete(),
+			ResumedFrom: session.Meta.ResumedFrom,
 		}
 
 		if info, err := file.Info(); err == nil {

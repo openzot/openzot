@@ -29,6 +29,20 @@ func (r *Recorder) RecordMessage(message agent.Message) error {
 
 	entry := Message{Type: string(message.Type), Text: message.Text}
 
+	// the bytes go to a blob beside the log; the record keeps the shape
+	for _, image := range message.Images {
+		stored, err := r.writer.StoreImage(image)
+
+		if err != nil {
+			// a log that cannot hold an image is not a reason to fail the run:
+			// the model has already seen it, and the text still describes it
+			stored = image
+			stored.Bytes = nil
+		}
+
+		entry.Images = append(entry.Images, stored)
+	}
+
 	if activity := message.Activity; activity != nil {
 		entry.Activity = &Activity{
 			Kind:             string(activity.Kind),
@@ -130,6 +144,10 @@ func (s *Session) AgentMessages() []agent.Message {
 
 	for _, message := range s.Messages {
 		entry := agent.Message{Type: agent.MessageType(message.Type), Text: message.Text}
+
+		for _, image := range message.Images {
+			entry.Images = append(entry.Images, s.LoadImage(image))
+		}
 
 		if activity := message.Activity; activity != nil {
 			entry.Activity = &agent.Activity{

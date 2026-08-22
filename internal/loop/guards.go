@@ -23,10 +23,47 @@ const (
 	// rounds: a single round can request many tools.
 	DefaultMaxCalls = 1000
 
-	// DefaultMaxContinuations caps recovery attempts - output truncated, an
-	// empty turn, or a retriable provider error. Distinct from iterations,
-	// which count normal progress.
+	// DefaultMaxContinuations caps CONSECUTIVE recovery attempts - output
+	// truncated, or a retriable provider error - with no good turn between
+	// them. Distinct from iterations, which count normal progress.
+	//
+	// Consecutive, not lifetime, because a recovery that worked is not
+	// evidence of anything. A run-lifetime count meant twenty transient blips
+	// spread over four hours - each one recovered from, each one followed by
+	// real work - left the run with no budget at all, and the twenty-first
+	// blip ended it however healthy it was. The bound is meant to catch a run
+	// that cannot get going again, so it asks that question and no other: it
+	// zeroes the moment a turn comes back whole, exactly like the empty and
+	// cycle counters.
 	DefaultMaxContinuations = 20
+
+	// DefaultMaxRecoveries caps recovery attempts across a whole run, however
+	// they are spaced: the point at which a provider stops being given the
+	// benefit of the doubt.
+	//
+	// MaxContinuations catches a provider refusing right now - twenty in a row
+	// and the run is stuck. It cannot catch the other shape: one that answers
+	// often enough to keep resetting the consecutive count, while the run
+	// spends most of its life retrying rather than working. Every good turn
+	// says the upstream is fine and the tally says it is not, and without this
+	// the tally is never consulted.
+	//
+	// So the number has to be one a run can actually reach. A healthy run
+	// spends recoveries in tens - a truncated answer continued, the occasional
+	// 500, a context-limit compaction - across an iteration budget that
+	// defaults to a thousand. Two hundred is a fifth of that budget spent on
+	// recovery instead of progress, which no working provider does. Set high
+	// enough not to punish a long, output-heavy run that legitimately
+	// continues a lot; low enough that a chronically failing endpoint is
+	// called what it is instead of nursed for hours.
+	//
+	// Deliberately absolute rather than a multiple of MaxContinuations. The two
+	// answer unrelated questions, and tying them together means lowering the
+	// consecutive bound - the obvious thing to want, to fail fast on a stuck
+	// provider - silently lowers this one into a range a long healthy run
+	// reaches, which is the accumulating budget the consecutive count exists to
+	// get rid of.
+	DefaultMaxRecoveries = 200
 
 	// DefaultMaxCycles is how many times the loop will nudge a model out of a
 	// detected repetition before giving up on it.
@@ -114,14 +151,15 @@ const (
 	// StopCalls - the tool-call budget ran out.
 	StopCalls StopReason = "calls"
 
-	// StopTime - the wall-clock time budget ran out.
-	StopTime StopReason = "time"
-
-	// StopContinuations - too many recovery attempts.
+	// StopContinuations - too many recovery attempts, either in a row or
+	// across the run.
 	StopContinuations StopReason = "continuations"
 
 	// StopCycle - the model kept repeating itself after being nudged.
 	StopCycle StopReason = "cycle"
+
+	// StopTime - the wall-clock time budget ran out.
+	StopTime StopReason = "time"
 
 	// StopEmpty - too many turns produced nothing at all.
 	StopEmpty StopReason = "empty"
@@ -138,12 +176,19 @@ const (
 
 // Budget tracks what a run has spent.
 type Budget struct {
-	Iterations    int
-	Calls         int
+	Iterations int
+	Calls      int
+
+	// Continuations counts CONSECUTIVE recovery attempts; a turn that comes
+	// back whole zeroes it. Recoveries is the total across the run, which only
+	// ever rises - it is what the run is reported to have spent, and what
+	// DefaultMaxRecoveries backstops.
 	Continuations int
-	Cycles        int
-	Empties       int
-	Settles       int
+	Recoveries    int
+
+	Cycles  int
+	Empties int
+	Settles int
 
 	// InputTokens and OutputTokens accumulate the provider-reported prompt and
 	// completion tokens across the run - the actual billed usage, not the local
@@ -192,4 +237,11 @@ func normalizeCheckpoints(configured []int) []int {
 	sort.Ints(out)
 
 	return out
+}
+
+// spendContinuation records one recovery attempt against both counts: the
+// consecutive run of them, and the total across the run.
+func (b *Budget) spendContinuation() {
+	b.Continuations++
+	b.Recoveries++
 }

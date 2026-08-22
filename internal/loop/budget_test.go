@@ -75,8 +75,8 @@ func TestToolRoundsDoNotSpendTheContinuationBudget(t *testing.T) {
 		MaxContinuations: 1,
 	})
 
-	if result.Budget.Continuations != 0 {
-		t.Errorf("tool rounds spent %d continuations, want 0", result.Budget.Continuations)
+	if result.Budget.Recoveries != 0 {
+		t.Errorf("tool rounds spent %d continuations, want 0", result.Budget.Recoveries)
 	}
 
 	if result.Budget.Calls != 2 {
@@ -99,8 +99,8 @@ func TestTruncationSpendsTheContinuationBudget(t *testing.T) {
 		MaxIterations: 10,
 	})
 
-	if result.Budget.Continuations != 1 {
-		t.Errorf("Continuations = %d, want 1", result.Budget.Continuations)
+	if result.Budget.Recoveries != 1 {
+		t.Errorf("Continuations = %d, want 1", result.Budget.Recoveries)
 	}
 }
 
@@ -122,8 +122,8 @@ func TestTheTwoBudgetsAreIndependent(t *testing.T) {
 		t.Errorf("Reason = %q, want the iteration budget to be what stops it", result.Reason)
 	}
 
-	if result.Budget.Continuations != 0 {
-		t.Errorf("Continuations = %d, want the continuation budget untouched", result.Budget.Continuations)
+	if result.Budget.Recoveries != 0 {
+		t.Errorf("Continuations = %d, want the continuation budget untouched", result.Budget.Recoveries)
 	}
 
 	// and the other way round: truncated forever, with plenty of iterations
@@ -606,8 +606,8 @@ func TestRetriableFailuresAreSpacedOut(t *testing.T) {
 		t.Fatalf("reason = %q, want the run to end on the provider failure", result.Reason)
 	}
 
-	if result.Budget.Continuations != 3 {
-		t.Fatalf("continuations = %d, want the budget spent", result.Budget.Continuations)
+	if result.Budget.Recoveries != 3 {
+		t.Fatalf("continuations = %d, want the budget spent", result.Budget.Recoveries)
 	}
 
 	// 20ms, then 40ms, then 80ms: the doubling means three retries cannot fit
@@ -788,8 +788,8 @@ func TestARateLimitIsWaitedOutRatherThanFatal(t *testing.T) {
 		t.Fatalf("reason = %q (%v), want the run to survive the rate limit", result.Reason, result.Err)
 	}
 
-	if result.Budget.Continuations != 1 {
-		t.Errorf("continuations = %d, want the rate limit to cost exactly one", result.Budget.Continuations)
+	if result.Budget.Recoveries != 1 {
+		t.Errorf("continuations = %d, want the rate limit to cost exactly one", result.Budget.Recoveries)
 	}
 
 	// the provider asked for a second; honouring that is the whole point, so a
@@ -872,8 +872,8 @@ func TestRepeated429WithZeroRetryAfterStillBacksOff(t *testing.T) {
 		t.Fatalf("reason = %q, want the run to end once the budget is spent", result.Reason)
 	}
 
-	if result.Budget.Continuations != 3 {
-		t.Fatalf("continuations = %d, want the budget spent", result.Budget.Continuations)
+	if result.Budget.Recoveries != 3 {
+		t.Fatalf("continuations = %d, want the budget spent", result.Budget.Recoveries)
 	}
 
 	// 20ms, then 40ms, then 80ms: the advised zero must not undercut the floor
@@ -954,8 +954,8 @@ func TestBackoffRestartsAfterASuccessfulTurn(t *testing.T) {
 		t.Fatalf("reason = %q (%v), want the run to finish", result.Reason, result.Err)
 	}
 
-	if result.Budget.Continuations != 3 {
-		t.Fatalf("continuations = %d, want 3", result.Budget.Continuations)
+	if result.Budget.Recoveries != 3 {
+		t.Fatalf("continuations = %d, want 3", result.Budget.Recoveries)
 	}
 
 	// base + 2x base + base = 4x base when the counter resets on success; a
@@ -1037,8 +1037,8 @@ func TestOtherContinuationsDoNotEscalateTheBackoff(t *testing.T) {
 		t.Fatalf("reason = %q (%v), want the run to finish", result.Reason, result.Err)
 	}
 
-	if result.Budget.Continuations != 4 {
-		t.Fatalf("continuations = %d, want 3 truncations plus 1 retry", result.Budget.Continuations)
+	if result.Budget.Recoveries != 4 {
+		t.Fatalf("continuations = %d, want 3 truncations plus 1 retry", result.Budget.Recoveries)
 	}
 
 	// one failure, one wait of base. Keyed off the shared budget it would have
@@ -1092,5 +1092,264 @@ func TestAnEmptyTurnEmitsAVisibleNotice(t *testing.T) {
 
 	if !noticed {
 		t.Errorf("the empty-turn nudge must be visible; silence reads as a hang (notices: %v)", notices)
+	}
+}
+
+// The continuation bound asks "can this run get going again", not "how much has
+// gone wrong since it started". Blips that were each recovered from are not
+// evidence of anything, and a run that has been working for hours must not be
+// ended by its twenty-first one.
+func TestRecoveredBlipsDoNotAddUp(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+
+	// alternating: blip, good turn, blip, good turn... six blips in all, well
+	// past a continuation budget of two, none of them consecutive
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		request := requests
+		mu.Unlock()
+
+		if request%2 == 1 && request <= 11 {
+			w.WriteHeader(http.StatusInternalServerError)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if request <= 11 {
+			fmt.Fprintf(w, "data: %s\n\n", tool(fmt.Sprintf("c%d", request), "echo", `{}`))
+		} else {
+			fmt.Fprintf(w, "data: %s\n\n", tool("done", SuccessTool, `{"summary":"done"}`))
+		}
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	calls := 0
+
+	result := run(t, Options{
+		Client:           client,
+		Tools:            echoTool(&calls),
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 2,
+		MaxIterations:    40,
+		MaxSettles:       5,
+		// the identical echo rounds are the point of the fixture, not a
+		// repetition the run should be nudged out of
+		MaxCycles:    10_000,
+		RetryBackoff: -1,
+	})
+
+	if result.Reason != StopSettled {
+		t.Fatalf("reason = %q (%v), want the run to finish - no two failures were consecutive", result.Reason, result.Err)
+	}
+
+	if result.Budget.Recoveries != 6 {
+		t.Fatalf("total continuations = %d, want all 6 blips recorded", result.Budget.Recoveries)
+	}
+
+	if result.Budget.Continuations != 0 {
+		t.Errorf("consecutive continuations = %d, want the count reset by the last good turn", result.Budget.Continuations)
+	}
+}
+
+// The other side of the reset: consecutive failures still end the run, and at
+// the bound rather than somewhere past it.
+func TestConsecutiveFailuresStillEndTheRun(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	result := run(t, Options{
+		Client:           client,
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 3,
+		MaxIterations:    50,
+		RetryBackoff:     -1,
+	})
+
+	if result.Reason != StopError {
+		t.Fatalf("reason = %q, want the run to end once the consecutive budget is spent", result.Reason)
+	}
+
+	if result.Budget.Recoveries != 3 {
+		t.Fatalf("continuations = %d, want exactly the bound", result.Budget.Recoveries)
+	}
+}
+
+// The shape MaxContinuations cannot see: a provider that answers just often
+// enough to keep resetting the consecutive count, while the run spends its life
+// retrying rather than working. Every good turn says the upstream is fine and
+// the tally says it is not, so the tally has to be the thing that ends it.
+//
+// Iterations are set far above the recovery bound so it is unambiguous which
+// one fired.
+func TestAChronicallyFailingProviderIsCalledBroken(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+
+	// every odd request fails; every even one is an empty-ish tool round that
+	// resets the consecutive count. This never settles on its own.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		request := requests
+		mu.Unlock()
+
+		if request%2 == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", tool(fmt.Sprintf("c%d", request), "echo", `{}`))
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	calls := 0
+
+	const recoveries = 20
+
+	result := run(t, Options{
+		Client:   client,
+		Tools:    echoTool(&calls),
+		Messages: []Message{{Type: TypeUser, Text: "go"}},
+		// generous, so a consecutive bound cannot be what fires
+		MaxContinuations: 1_000,
+		MaxRecoveries:    recoveries,
+		// far above what the backstop allows, so it is the backstop that stops
+		// this and not the round budget
+		MaxIterations: 10_000,
+		MaxCycles:     10_000,
+		RetryBackoff:  -1,
+	})
+
+	if result.Reason != StopError {
+		t.Fatalf("reason = %q (%v), want the recovery bound to end it", result.Reason, result.Err)
+	}
+
+	// the run ends naming the provider failure it kept papering over, not a
+	// bare "budget spent" - the last error is what an operator needs
+	if result.Err == nil {
+		t.Error("the run must carry the provider failure that ended it")
+	}
+
+	if result.Budget.Recoveries != recoveries {
+		t.Fatalf("recoveries = %d, want the backstop at %d", result.Budget.Recoveries, recoveries)
+	}
+}
+
+// The bound is deliberately absolute rather than a multiple of
+// MaxContinuations, because tying them together would put this bug back: a
+// caller who lowers the consecutive bound to fail fast on a stuck provider
+// would silently lower the total too, and a long healthy run would then die of
+// scattered blips it had already recovered from - the accumulating budget the
+// consecutive count exists to get rid of.
+func TestALowConsecutiveBoundDoesNotShrinkTheRecoveryBound(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+
+	// blip, good turn, blip, good turn ... twenty blips, none consecutive
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		request := requests
+		mu.Unlock()
+
+		if request%2 == 1 && request <= 39 {
+			w.WriteHeader(http.StatusInternalServerError)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if request <= 39 {
+			fmt.Fprintf(w, "data: %s\n\n", tool(fmt.Sprintf("c%d", request), "echo", `{}`))
+		} else {
+			fmt.Fprintf(w, "data: %s\n\n", tool("done", SuccessTool, `{"summary":"done"}`))
+		}
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := provider.New(provider.Config{
+		Provider: provider.Custom,
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("provider.New: %v", err)
+	}
+
+	calls := 0
+
+	// the tightest useful consecutive bound - fail fast on a stuck provider
+	result := run(t, Options{
+		Client:           client,
+		Tools:            echoTool(&calls),
+		Messages:         []Message{{Type: TypeUser, Text: "go"}},
+		MaxContinuations: 1,
+		MaxIterations:    100,
+		MaxCycles:        10_000,
+		MaxSettles:       5,
+		RetryBackoff:     -1,
+	})
+
+	if result.Reason != StopSettled {
+		t.Fatalf("reason = %q (%v), want 20 recovered blips not to end a run that fails fast in a row", result.Reason, result.Err)
+	}
+
+	if result.Budget.Recoveries != 20 {
+		t.Errorf("recoveries = %d, want all 20 recorded", result.Budget.Recoveries)
 	}
 }

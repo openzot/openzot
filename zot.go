@@ -21,6 +21,7 @@ import (
 
 	"github.com/openzot/openzot/agent"
 
+	"github.com/openzot/openzot/internal/catalogue"
 	"github.com/openzot/openzot/internal/config"
 	"github.com/openzot/openzot/internal/session"
 	"github.com/openzot/openzot/internal/version"
@@ -379,9 +380,19 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 
 	contextWindow := 0
 
+	// What the model can do: the catalogue's answer, then whatever the operator
+	// stated for this model. An uncatalogued model resolves to the conservative
+	// default - tools yes, images no - so a model zot has never heard of is
+	// never offered a tool for looking at pictures it may not be able to see.
+	capabilities := catalogue.Lookup(model)
+
 	if mc, ok := providerConfig.Models[model]; ok {
 		if mc.Model != "" {
 			model = mc.Model
+
+			// the override names a real model, so start from what the catalogue
+			// knows about that one before applying the rest
+			capabilities = catalogue.Lookup(model)
 		}
 		if mc.MaxIterations > 0 {
 			maxIterations = mc.MaxIterations
@@ -395,6 +406,8 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 		if mc.Context > 0 {
 			contextWindow = mc.Context
 		}
+
+		capabilities = mc.Capabilities(capabilities)
 	}
 
 	if driver == "" {
@@ -425,13 +438,17 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	maxDuration, _ := cfg.Agent.MaxDuration()
 
 	opts := agent.ExecuteWithToolsOptions{
-		Instructions:     instructions,
-		Tools:            agent.DefaultToolsWith(cfg.Agent.MaxToolOutput),
+		Instructions: instructions,
+		Tools: agent.DefaultToolsFor(agent.ToolOptions{
+			MaxOutput: cfg.Agent.MaxToolOutput,
+			Vision:    capabilities.SupportsVision,
+		}),
 		Skills:           cfg.Skills,
 		MaxIterations:    maxIterations,
 		MaxSettles:       cfg.Agent.MaxSettles,
 		MaxCalls:         cfg.Agent.MaxCalls,
 		MaxContinuations: cfg.Agent.MaxContinuations,
+		MaxRecoveries:    cfg.Agent.MaxRecoveries,
 		MaxCycles:        cfg.Agent.MaxCycles,
 		MaxEmpties:       cfg.Agent.MaxEmpties,
 		MaxDuration:      maxDuration,

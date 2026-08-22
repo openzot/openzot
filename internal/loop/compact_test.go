@@ -105,8 +105,8 @@ func TestContextLimitTriggersCompaction(t *testing.T) {
 		t.Errorf("the request was not retried after compaction (%d requests)", *requests)
 	}
 
-	if result.Budget.Continuations != 1 {
-		t.Errorf("continuations = %d, want the compaction to count as one", result.Budget.Continuations)
+	if result.Budget.Recoveries != 1 {
+		t.Errorf("continuations = %d, want the compaction to count as one", result.Budget.Recoveries)
 	}
 
 	// the condensed history must be in the thread, and the originals gone
@@ -351,8 +351,8 @@ func TestNonRetriableErrorEndsTheRun(t *testing.T) {
 		t.Errorf("reason = %q, want error", result.Reason)
 	}
 
-	if result.Budget.Continuations != 0 {
-		t.Errorf("continuations = %d, want no retries for a credential problem", result.Budget.Continuations)
+	if result.Budget.Recoveries != 0 {
+		t.Errorf("continuations = %d, want no retries for a credential problem", result.Budget.Recoveries)
 	}
 }
 

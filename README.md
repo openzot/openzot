@@ -129,6 +129,10 @@ The harness is zot's own, in the [`agent`](agent) package:
   or a budget or guard stops it.
 - `agent.DefaultTools()` gives it the toolbox: `read`, `write`, `list` and
   `shell` for the work, plus `plan` and `progress` to structure and narrate it.
+  `agent.DefaultToolsFor(agent.ToolOptions{Vision: true})` adds `view`, which
+  shows the model an image file rather than describing one - offered only to a
+  model that can actually see, which zot takes from its catalogue and the
+  operator's config.
 
 That package is importable, so the same engine drives more than coding:
 [Rook](https://github.com/pdparchitect/rook), an AI bug-hunting and security-audit

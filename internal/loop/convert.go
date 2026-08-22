@@ -196,6 +196,14 @@ func toChatMessages(messages []Message) []provider.ChatMessage {
 				Content: message.Text,
 			})
 
+		case TypeAttachment:
+			// the one role an OpenAI-compatible endpoint accepts image parts on
+			converted = append(converted, provider.ChatMessage{
+				Role:    provider.RoleUser,
+				Content: message.Text,
+				Images:  message.Images,
+			})
+
 		default:
 			converted = append(converted, provider.ChatMessage{
 				Role:    provider.RoleUser,

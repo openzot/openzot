@@ -306,3 +306,49 @@ func TestEveryModelLeavesRoomForTheAnswer(t *testing.T) {
 		}
 	}
 }
+
+func TestVisionIsOffUnlessTheCatalogueSaysOtherwise(t *testing.T) {
+	// the asymmetry that protects an unattended run: a model nobody has heard
+	// of is assumed to take tools, because otherwise it cannot work at all, and
+	// assumed blind, because being wrong there means an attachment the endpoint
+	// rejects mid-run
+	unknown := Lookup("stealth/ox-alpha")
+
+	if unknown.SupportsVision {
+		t.Error("an uncatalogued model must not be assumed to see")
+	}
+
+	if !unknown.SupportsTools {
+		t.Error("an uncatalogued model is still assumed to take tools")
+	}
+
+	if Default.SupportsVision {
+		t.Error("the default must be blind")
+	}
+}
+
+func TestKnownMultimodalModelsReportVision(t *testing.T) {
+	for _, model := range []string{"gpt-5.4", "claude-5-sonnet", "gemini-3-pro", "llama-4", "grok-4.5"} {
+		if !Lookup(model).SupportsVision {
+			t.Errorf("%s should be catalogued as seeing", model)
+		}
+	}
+
+	for _, model := range []string{"deepseek-v4-pro", "sonar", "mistral-large"} {
+		if Lookup(model).SupportsVision {
+			t.Errorf("%s is text-only and must not be catalogued as seeing", model)
+		}
+	}
+}
+
+func TestVisionFollowsThePrefixMatchLikeEveryOtherCapability(t *testing.T) {
+	// a dated variant resolves through its parent entry, so it inherits vision
+	// rather than dropping to the blind default
+	if !Lookup("gpt-5.4-2026-03-01").SupportsVision {
+		t.Error("a dated variant of a seeing model should still see")
+	}
+
+	if !Lookup("openrouter/anthropic/claude-5-opus").SupportsVision {
+		t.Error("a gateway-qualified name should resolve to the same entry")
+	}
+}

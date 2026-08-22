@@ -79,9 +79,16 @@ agent:
   # failure mode, so raise or lower them with care. Unlike calls and time, these
   # cannot be turned off; zero just means "use the default".
   #
-  # Recovery attempts within a run - a truncated response, an empty turn, or a
-  # retriable provider error. Default 20.
+  # Recovery attempts in a row - a truncated response, or a retriable provider
+  # error - with no good turn between them. A turn that comes back whole resets
+  # the count. Default 20.
   # max_continuations: 20
+  #
+  # Recovery attempts across the whole run, however they are spaced. Where
+  # max_continuations catches a provider refusing right now, this catches one
+  # that answers just often enough to keep resetting it while the run spends its
+  # life retrying rather than working. Default 200.
+  # max_recoveries: 200
   #
   # How many times the loop nudges the model out of a detected repetition before
   # giving up on it. Default 2.
