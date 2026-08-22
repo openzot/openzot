@@ -86,6 +86,48 @@ var gatewaysQualifyModels = map[string]bool{
 	Cloudflare: true,
 }
 
+// attributionProviders are the gateways that read app-attribution headers and
+// publish rankings from them - OpenRouter's site rankings, Vercel's AI Gateway
+// leaderboards. Both settled on the same two headers, so this is one
+// implementation rather than one per gateway.
+//
+// Only gateways belong here. Sending an unsolicited Referer to a first-party
+// API tells the model provider which tool is calling for no benefit to anyone,
+// and a header nobody reads is a header that can only ever break a request.
+var attributionProviders = map[string]bool{
+	OpenRouter: true,
+	Vercel:     true,
+}
+
+// Attribution identifies zot to a gateway that ranks the apps calling it.
+//
+// It carries nothing about the user or the run: the tool's name and its project
+// URL, the same two values for every zot in the world. That is what makes it
+// safe to send by default - it says "a zot did this", never which one.
+type Attribution struct {
+	// Name is the app name a gateway lists. Empty uses DefaultAttributionName.
+	Name string
+
+	// URL is the project link a gateway lists. Empty uses DefaultAttributionURL.
+	URL string
+
+	// Disabled sends nothing at all. A bool that defaults to off, so the zero
+	// value is the documented behaviour rather than a silent opt-out.
+	Disabled bool
+}
+
+// The identity zot presents to a ranking gateway.
+const (
+	DefaultAttributionName = "zot"
+	DefaultAttributionURL  = "https://github.com/openzot/openzot"
+)
+
+// Attribution header names, as both gateways document them.
+const (
+	headerReferer = "HTTP-Referer"
+	headerTitle   = "X-Title"
+)
+
 // gatewaySlugs maps zot's provider name to a gateway's own creator slug, for the
 // cases where they differ. A provider absent from a gateway's map keeps its own
 // name, which is the common case.
@@ -182,8 +224,13 @@ type Config struct {
 	BaseURL string
 
 	// Headers are merged into every request, for gateways that need extra
-	// routing or attribution headers.
+	// routing or attribution headers. An entry here wins over anything Resolve
+	// would have added, including attribution.
 	Headers map[string]string
+
+	// Attribution names zot to a gateway that publishes app rankings. The zero
+	// value sends the defaults; see Attribution.
+	Attribution Attribution
 
 	// UseResponses selects the OpenAI Responses API instead of
 	// chat-completions.
@@ -276,6 +323,7 @@ func (c Config) Resolve() (Config, error) {
 	}
 
 	resolved.UseResponses = resolved.wantsResponses()
+	resolved.Headers = resolved.withAttribution()
 
 	return resolved, nil
 }
@@ -341,4 +389,55 @@ func isLoopbackURL(raw string) bool {
 // completionsURL is the chat-completions endpoint for this configuration.
 func (c Config) completionsURL() string {
 	return c.BaseURL + "/chat/completions"
+}
+
+// withAttribution returns the headers to send, with app attribution added for a
+// gateway that ranks the apps calling it.
+//
+// Explicit headers win: a user who has set HTTP-Referer or X-Title themselves -
+// to attribute a tool built on zot, say - has said what they want, and a default
+// that overrode that would be a bug rather than a courtesy. The result is always
+// a fresh map, so resolving a Config never writes through to the caller's.
+func (c Config) withAttribution() map[string]string {
+	headers := make(map[string]string, len(c.Headers)+2)
+
+	for key, value := range c.Headers {
+		headers[key] = value
+	}
+
+	if c.Attribution.Disabled || !attributionProviders[c.Provider] {
+		return headers
+	}
+
+	// Compared case-insensitively because that is what an HTTP header is, and
+	// because a user writing this by hand is as likely to type "http-referer"
+	// as the documented casing - a duplicate under a different spelling would
+	// be sent as two headers and let the default win the one that mattered.
+	set := func(name, value string) {
+		if value == "" {
+			return
+		}
+
+		for existing := range headers {
+			if strings.EqualFold(existing, name) {
+				return
+			}
+		}
+
+		headers[name] = value
+	}
+
+	set(headerReferer, firstNonEmpty(c.Attribution.URL, DefaultAttributionURL))
+	set(headerTitle, firstNonEmpty(c.Attribution.Name, DefaultAttributionName))
+
+	return headers
+}
+
+// firstNonEmpty returns value when it is set, else fallback.
+func firstNonEmpty(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+
+	return fallback
 }

@@ -14,6 +14,7 @@
 #   agent.max_time        -> ZOT_AGENT_MAX_TIME
 #   agent.max_tokens      -> ZOT_AGENT_MAX_TOKENS
 #   agent.max_continuations -> ZOT_AGENT_MAX_CONTINUATIONS
+#   agent.max_recoveries  -> ZOT_AGENT_MAX_RECOVERIES
 #   agent.max_cycles      -> ZOT_AGENT_MAX_CYCLES
 #   agent.max_empties     -> ZOT_AGENT_MAX_EMPTIES
 #   agent.context_strategy -> ZOT_AGENT_CONTEXT_STRATEGY
@@ -21,6 +22,9 @@
 #   ui.color              -> ZOT_UI_COLOR
 #   ui.scrollback         -> ZOT_UI_SCROLLBACK
 #   default_provider       -> ZOT_DEFAULT_PROVIDER
+#   attribution.name      -> ZOT_ATTRIBUTION_NAME
+#   attribution.url       -> ZOT_ATTRIBUTION_URL
+#   attribution.disabled  -> ZOT_ATTRIBUTION_DISABLED
 #
 # Credentials: put the key DIRECTLY in this file, or reference an environment
 # variable with $VAR - either works. Each built-in provider also reads its
@@ -167,6 +171,21 @@ ui:
 # environment variable. Its `models` block is optional too: omit it to use any
 # model (with catalogued models providing known capabilities), or define it as a
 # custom allowlist of aliases for this connection.
+# How zot names itself to a gateway that ranks the apps calling it - OpenRouter's
+# site rankings, the Vercel AI Gateway leaderboards. Both read the same two
+# headers (HTTP-Referer, X-Title) and both ignore them if absent.
+#
+# Nothing about you or the run travels with this: it is zot's own name and
+# project URL, identical for every zot in the world, and it is sent only to those
+# two gateways - never to a first-party API, which would learn which tool is
+# calling for no benefit to anyone. Set `name`/`url` to attribute a tool built on
+# zot instead, or `disabled: true` to send nothing. A header you set yourself
+# under `providers.<name>` wins over all of this.
+# attribution:
+#   name: zot
+#   url: https://github.com/openzot/openzot
+#   disabled: false
+
 default_provider: zai
 
 providers:

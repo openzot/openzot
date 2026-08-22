@@ -31,6 +31,22 @@ type Config struct {
 	// ships with one for each provider it knows, and a config file can override
 	// their credentials or endpoint, or add custom model entries.
 	Providers map[string]ProviderConfig `yaml:"providers"`
+	// Attribution is how zot names itself to a gateway that ranks the apps
+	// calling it. The zero value sends zot's own name and project URL.
+	Attribution Attribution `yaml:"attribution"`
+}
+
+// Attribution is the app identity sent to gateways that publish rankings from
+// it - OpenRouter's site rankings, Vercel's AI Gateway leaderboards. Nothing
+// about the user or the run travels with it: it is the same two values for
+// every zot in the world, and it is sent only to those gateways.
+type Attribution struct {
+	// Name is the app name a gateway lists. Empty sends "zot".
+	Name string `yaml:"name"`
+	// URL is the project link a gateway lists. Empty sends zot's repository.
+	URL string `yaml:"url"`
+	// Disabled sends no attribution headers at all.
+	Disabled bool `yaml:"disabled"`
 }
 
 // ProviderConfig is a named model-provider connection zot can run against.

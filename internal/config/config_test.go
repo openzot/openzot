@@ -996,3 +996,61 @@ func TestModelCapabilitiesParseFromYAML(t *testing.T) {
 		t.Error("an unstated capability must stay unstated, so the catalogue decides")
 	}
 }
+
+// Attribution is what puts zot on OpenRouter's and Vercel's app rankings, so it
+// has to be reachable from a config file and from the environment - the latter
+// because the containers and CI jobs that do most of zot's calling never write
+// a config file. The bool matters as much as the strings: opting out is the
+// half someone will actually need.
+func TestAttributionIsConfigurableFromFileAndEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+
+	path := writeConfig(t, `
+attribution:
+  name: acme-bot
+  url: https://acme.example
+  disabled: true
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Attribution.Name != "acme-bot" {
+		t.Errorf("name = %q, want acme-bot from the file", cfg.Attribution.Name)
+	}
+
+	if cfg.Attribution.URL != "https://acme.example" {
+		t.Errorf("url = %q, want the file's value", cfg.Attribution.URL)
+	}
+
+	if !cfg.Attribution.Disabled {
+		t.Error("disabled was not read from the file")
+	}
+
+	// and the same three from the environment, with no file at all
+	t.Setenv("ZOT_ATTRIBUTION_NAME", "env-bot")
+	t.Setenv("ZOT_ATTRIBUTION_URL", "https://env.example")
+	t.Setenv("ZOT_ATTRIBUTION_DISABLED", "true")
+
+	fromEnv, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if fromEnv.Attribution.Name != "env-bot" || fromEnv.Attribution.URL != "https://env.example" {
+		t.Errorf("attribution = %+v, want the ZOT_ATTRIBUTION_* values", fromEnv.Attribution)
+	}
+
+	if !fromEnv.Attribution.Disabled {
+		t.Error("ZOT_ATTRIBUTION_DISABLED did not reach the config")
+	}
+
+	// the default is on, and named: an empty config attributes zot itself
+	def, err := Load("")
+	if err == nil && def.Attribution.Name != "" && !def.Attribution.Disabled {
+		t.Error("a bare config must leave attribution unset so the provider defaults apply")
+	}
+}
