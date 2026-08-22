@@ -1,7 +1,7 @@
 # Configuration, flags, sessions & project context
 
 How to configure a run, the flags and keys, where the session logs live, and how
-zot picks up `AGENT.md` and skills. For choosing and configuring a provider, see
+zot picks up `AGENTS.md` and skills. For choosing and configuring a provider, see
 [providers.md](providers.md); for the agent itself, the [README](../README.md).
 
 ## The config file and env vars
@@ -218,12 +218,12 @@ still going and a killed run still leaves everything up to the kill. Use
 `--no-session` to record nothing, or `--session-dir` (or `ZOT_SESSION_DIR`) to
 put the logs somewhere else.
 
-## Project context (`AGENT.md` & skills)
+## Project context (`AGENTS.md` & skills)
 
 On startup zot folds in context from two places - the **config directory**
 (`~/.config/zot/`, global) and the **working directory** (`--dir`, per-project):
 
-- **`AGENT.md`** - at the **root** of either directory; its contents are
+- **`AGENTS.md`** - at the **root** of either directory; its contents are
   appended to the agent's instructions (config first, then project). Use it for
   conventions the agent should always follow.
 - **skills** - each `<name>/SKILL.md` (with `name` / `description` YAML front
@@ -233,7 +233,7 @@ On startup zot folds in context from two places - the **config directory**
 
 ```
 ~/.config/zot/          ./ (your project, --dir)
-├── AGENT.md            ├── AGENT.md
+├── AGENTS.md           ├── AGENTS.md
 └── skills/             └── .skills/
     └── greet/              └── deploy/
         └── SKILL.md            └── SKILL.md

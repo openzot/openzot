@@ -145,9 +145,9 @@ Use a key scoped to the narrowest thing that works - a project-scoped provider
 key rather than an account-wide one. A container run unattended is exactly the
 case the scoping is for.
 
-### Config, `AGENT.md` and skills
+### Config, `AGENTS.md` and skills
 
-Per-project context needs nothing: `AGENT.md` and `.skills/` are read from the
+Per-project context needs nothing: `AGENTS.md` and `.skills/` are read from the
 working directory, which is the volume you mounted.
 
 Global context lives in the config directory, so mount it read-only:

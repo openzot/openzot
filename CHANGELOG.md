@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] - 2026-08-22
+
+### Changed
+
+- **BREAKING: project context is read from `AGENTS.md`, not `AGENT.md`.** Every other agent that reads instructions out of a repository looks for `AGENTS.md`, and a project that already has one had to keep a second, near-identical file with a name only zot recognised - or, more often, wrote `AGENTS.md` and quietly got no project context at all, because a missing file is indistinguishable from an empty one. zot now looks for `AGENTS.md` in each context directory (the config directory, then the working directory), and only that name: `AGENT.md` is no longer read, so a stale one is ignored rather than silently competing with the file everything else uses. Skills are unchanged (`.skills/` or `skills/` in either location), as is the rule that the file augments the built-in instructions rather than replacing them. **Migration:** `git mv AGENT.md AGENTS.md` in each project, and rename `~/.config/zot/AGENT.md` if you keep global conventions there.
+
 ## [0.15.0] - 2026-08-22
 
 ### Changed

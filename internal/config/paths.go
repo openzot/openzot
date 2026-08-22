@@ -22,7 +22,7 @@ func DefaultConfigPath() string {
 }
 
 // ConfigDir returns the directory that holds the config file - and any global
-// AGENT.md / skills - for the given --config value ("" uses the default path).
+// AGENTS.md / skills - for the given --config value ("" uses the default path).
 func ConfigDir(path string) string {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultConfigPath()
