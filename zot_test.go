@@ -1036,3 +1036,82 @@ func TestQuitOnDoneDefaultsOff(t *testing.T) {
 		t.Fatal("QuitOnDone must default off - a single order holds its screen for review")
 	}
 }
+
+// The end-to-end shape of the capability gate: what the model can be shown
+// decides whether it is offered a tool for looking, and the operator has the
+// last word over the catalogue.
+func TestVisionDecidesWhetherTheViewToolIsOffered(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter")
+
+	resolveWith := func(t *testing.T, body string) agent.ExecuteWithToolsOptions {
+		t.Helper()
+
+		cfg, err := Load(writeCfg(t, body))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		_, opts, err := resolve(cfg, DefaultInstructions)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+
+		return opts
+	}
+
+	// the arcade's case: a model the catalogue has never heard of
+	uncatalogued := resolveWith(t, `
+agent:
+  model: stealth/ox-alpha
+default_provider: openrouter
+`)
+
+	if _, ok := uncatalogued.Tools["view"]; ok {
+		t.Error("an uncatalogued model must not be offered view - it may not be able to see at all")
+	}
+
+	// a catalogued multimodal model gets it without any configuration
+	catalogued := resolveWith(t, `
+agent:
+  model: gpt-5.4
+default_provider: openrouter
+`)
+
+	if _, ok := catalogued.Tools["view"]; !ok {
+		t.Error("a model the catalogue records as seeing must be offered view")
+	}
+
+	// and the operator can say what zot could not know
+	overridden := resolveWith(t, `
+agent:
+  model: stealth/ox-alpha
+default_provider: openrouter
+providers:
+  openrouter:
+    models:
+      stealth/ox-alpha:
+        vision: true
+`)
+
+	if _, ok := overridden.Tools["view"]; !ok {
+		t.Error("vision: true must offer view for a model zot has not catalogued")
+	}
+
+	// in both directions
+	disabled := resolveWith(t, `
+agent:
+  model: gpt-5.4
+default_provider: openrouter
+providers:
+  openrouter:
+    models:
+      gpt-5.4:
+        vision: false
+`)
+
+	if _, ok := disabled.Tools["view"]; ok {
+		t.Error("vision: false must withdraw view even from a catalogued model")
+	}
+}

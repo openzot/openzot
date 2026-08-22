@@ -347,8 +347,8 @@ func TestCompactionDoesNotRepeatAfterAFailedTurn(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if result.Budget.Continuations != 1 {
-		t.Fatalf("continuations = %d, want 1 - the retriable failure must have been retried", result.Budget.Continuations)
+	if result.Budget.Recoveries != 1 {
+		t.Fatalf("continuations = %d, want 1 - the retriable failure must have been retried", result.Budget.Recoveries)
 	}
 
 	if summaries != 1 {

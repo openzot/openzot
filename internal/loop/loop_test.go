@@ -223,8 +223,8 @@ func TestTruncatedOutputIsContinued(t *testing.T) {
 		t.Errorf("reason = %q, want stop", result.Reason)
 	}
 
-	if result.Budget.Continuations != 1 {
-		t.Errorf("continuations = %d, want 1", result.Budget.Continuations)
+	if result.Budget.Recoveries != 1 {
+		t.Errorf("continuations = %d, want 1", result.Budget.Recoveries)
 	}
 
 	// the continuation notice must be in the thread, telling the model to pick

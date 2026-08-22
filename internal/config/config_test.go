@@ -7,7 +7,10 @@ import (
 	"sort"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/openzot/openzot/agent"
+	"github.com/openzot/openzot/internal/catalogue"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -602,6 +605,7 @@ func TestEveryBudgetHasAnEnvOverride(t *testing.T) {
 	t.Setenv("ZOT_AGENT_MAX_TIME", "45m")
 	t.Setenv("ZOT_AGENT_MAX_TOKENS", "5")
 	t.Setenv("ZOT_AGENT_MAX_CONTINUATIONS", "6")
+	t.Setenv("ZOT_AGENT_MAX_RECOVERIES", "9")
 	t.Setenv("ZOT_AGENT_MAX_CYCLES", "7")
 	t.Setenv("ZOT_AGENT_MAX_EMPTIES", "8")
 
@@ -617,6 +621,7 @@ func TestEveryBudgetHasAnEnvOverride(t *testing.T) {
 		"max_calls":         a.MaxCalls,
 		"max_tokens":        a.MaxTokens,
 		"max_continuations": a.MaxContinuations,
+		"max_recoveries":    a.MaxRecoveries,
 		"max_cycles":        a.MaxCycles,
 		"max_empties":       a.MaxEmpties,
 	} {
@@ -918,5 +923,76 @@ providers:
 	}
 	if got := cfg.Providers["openai"].APIKey; got != "sk-proxy" {
 		t.Errorf("openai key = %q, want the explicitly configured one", got)
+	}
+}
+
+func TestModelCapabilitiesDeferToTheCatalogueWhenUnset(t *testing.T) {
+	base := catalogue.Model{SupportsTools: true, SupportsReasoning: true, ContextWindow: 200_000}
+
+	got := ModelConfig{}.Capabilities(base)
+
+	if got != base {
+		t.Errorf("Capabilities changed %+v to %+v with nothing set", base, got)
+	}
+}
+
+func TestModelCapabilitiesTurnAFeatureOnAndOff(t *testing.T) {
+	base := catalogue.Model{SupportsTools: true}
+
+	on := true
+	off := false
+
+	if got := (ModelConfig{Vision: &on}).Capabilities(base); !got.SupportsVision {
+		t.Error("vision: true must let a model zot has not catalogued be shown images")
+	}
+
+	seeing := catalogue.Model{SupportsTools: true, SupportsVision: true}
+
+	if got := (ModelConfig{Vision: &off}).Capabilities(seeing); got.SupportsVision {
+		t.Error("vision: false must be able to turn off what the catalogue believes")
+	}
+
+	if got := (ModelConfig{Tools: &off}).Capabilities(base); got.SupportsTools {
+		t.Error("tools: false must be honoured")
+	}
+
+	if got := (ModelConfig{Reasoning: &on}).Capabilities(base); !got.SupportsReasoning {
+		t.Error("reasoning: true must be honoured")
+	}
+}
+
+func TestModelCapabilitiesApplyTheContextOverrideToo(t *testing.T) {
+	base := catalogue.Model{ContextWindow: 1_000_000}
+
+	if got := (ModelConfig{Context: 32_000}).Capabilities(base); got.ContextWindow != 32_000 {
+		t.Errorf("context window = %d, want the override", got.ContextWindow)
+	}
+
+	if got := (ModelConfig{}).Capabilities(base); got.ContextWindow != 1_000_000 {
+		t.Errorf("context window = %d, want the catalogue's when unset", got.ContextWindow)
+	}
+}
+
+func TestModelCapabilitiesParseFromYAML(t *testing.T) {
+	var parsed struct {
+		Models map[string]ModelConfig `yaml:"models"`
+	}
+
+	source := "models:\n  stealth/ox-alpha:\n    vision: true\n  blinkered:\n    vision: false\n  quiet: {}\n"
+
+	if err := yaml.Unmarshal([]byte(source), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if parsed.Models["stealth/ox-alpha"].Vision == nil || !*parsed.Models["stealth/ox-alpha"].Vision {
+		t.Error("vision: true must parse as an explicit yes")
+	}
+
+	if parsed.Models["blinkered"].Vision == nil || *parsed.Models["blinkered"].Vision {
+		t.Error("vision: false must parse as an explicit no, not as absent")
+	}
+
+	if parsed.Models["quiet"].Vision != nil {
+		t.Error("an unstated capability must stay unstated, so the catalogue decides")
 	}
 }

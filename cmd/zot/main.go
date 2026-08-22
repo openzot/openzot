@@ -370,7 +370,9 @@ type oneRun struct {
 // re-queues it. An unfinished run of this order continues automatically: the
 // order is the contract, and abandoning half its work because nobody typed
 // --resume wastes everything the earlier run learned. Only a run that concluded
-// - settled or declared failed - starts over; fresh forces a clean start.
+// - settled or declared failed - starts over; fresh forces a clean start. A
+// chain of resumes that keeps not concluding starts clean too, at
+// MaxResumeDepth: past that the transcript has become the problem.
 func (r oneRun) execute(o order.Order, quitOnDone bool) error {
 	return r.executeAt(o, quitOnDone, 0, 0)
 }
@@ -1049,6 +1051,12 @@ func unfinishedRunOf(dir, task string) (*session.Session, bool) {
 		return nil, false
 	}
 
+	byID := make(map[string]session.Entry, len(entries))
+
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+
 	// newest first: only the most recent run of the order counts - older
 	// unfinished runs were superseded by whatever came after them
 	for _, entry := range entries {
@@ -1057,6 +1065,14 @@ func unfinishedRunOf(dir, task string) (*session.Session, bool) {
 		}
 
 		if entry.Complete && (entry.Reason == "settled" || entry.Reason == "failed") {
+			return nil, false
+		}
+
+		if depth := resumeDepth(byID, entry); depth >= MaxResumeDepth {
+			fmt.Fprintf(os.Stderr,
+				"zot: this order has been continued %d times without concluding; starting it clean (--fresh forces this, editing the order clears it)\n",
+				depth)
+
 			return nil, false
 		}
 
@@ -1069,4 +1085,38 @@ func unfinishedRunOf(dir, task string) (*session.Session, bool) {
 	}
 
 	return nil, false
+}
+
+// MaxResumeDepth is how many times an order may be continued before the next
+// attempt starts clean instead.
+//
+// The other half of "continue an unfinished run": resuming is right when the
+// last attempt was interrupted, and wrong once the transcript itself is what
+// keeps failing. An unattended schedule turns that difference into a ratchet -
+// each run resumes a longer, more damaged conversation, gets less far, and
+// hands an even longer one to the next - and nothing in the ledger stops it,
+// because a run that errors is neither settled nor failed. A resume that
+// concludes clears this on its own: the chain ends and the next run starts
+// from nothing, so this counts a losing streak rather than a lifetime.
+const MaxResumeDepth = 3
+
+// resumeDepth counts the unbroken chain of resumes behind a session.
+//
+// Walks ResumedFrom back through the listing. A link whose session is gone -
+// pruned, or restored from a cache that did not carry it - ends the walk at
+// what is actually known rather than assuming the worst.
+func resumeDepth(byID map[string]session.Entry, entry session.Entry) int {
+	depth := 0
+
+	for depth < MaxResumeDepth && entry.ResumedFrom != "" {
+		previous, ok := byID[entry.ResumedFrom]
+		if !ok {
+			break
+		}
+
+		depth++
+		entry = previous
+	}
+
+	return depth
 }

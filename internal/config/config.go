@@ -78,6 +78,44 @@ type ModelConfig struct {
 	// upstream that reports overflow opaquely gives the recovery path nothing
 	// to detect. Zero uses the catalogue.
 	Context int `yaml:"context"`
+
+	// Vision, Tools and Reasoning override what the catalogue believes this
+	// model can do. Unset defers to the catalogue, which is why they are
+	// pointers: "not stated" and "stated as false" are different answers, and
+	// only the second should be able to turn a capability off.
+	//
+	// The catalogue cannot know about a private deployment, a gateway that
+	// strips capabilities on the way through, or a model released after this
+	// binary was built. Vision is the one that matters most in practice:
+	// an uncatalogued model is assumed blind, so a model that can in fact see
+	// needs saying so here before it is offered a tool for looking.
+	Vision    *bool `yaml:"vision"`
+	Tools     *bool `yaml:"tools"`
+	Reasoning *bool `yaml:"reasoning"`
+}
+
+// Capabilities applies this model's overrides to what the catalogue believes.
+//
+// The resolution order is the same one Context follows: an explicit setting
+// wins, otherwise the catalogue, otherwise its conservative default.
+func (m ModelConfig) Capabilities(base catalogue.Model) catalogue.Model {
+	if m.Vision != nil {
+		base.SupportsVision = *m.Vision
+	}
+
+	if m.Tools != nil {
+		base.SupportsTools = *m.Tools
+	}
+
+	if m.Reasoning != nil {
+		base.SupportsReasoning = *m.Reasoning
+	}
+
+	if m.Context > 0 {
+		base.ContextWindow = m.Context
+	}
+
+	return base
 }
 
 // builtinProviders are the providers zot ships with. Each falls back to its
@@ -193,10 +231,16 @@ type Agent struct {
 	// an endpoint with a small context window, where one large result can
 	// overflow the whole request and be rejected wholesale.
 	MaxToolOutput int `yaml:"max_tool_output"`
-	// MaxContinuations caps recovery attempts within a run - a truncated
-	// response, an empty turn, or a retriable provider error. Zero uses the
+	// MaxContinuations caps CONSECUTIVE recovery attempts - a truncated
+	// response, or a retriable provider error - with no good turn between
+	// them; a turn that comes back whole resets the count. Zero uses the
 	// built-in default.
 	MaxContinuations int `yaml:"max_continuations"`
+	// MaxRecoveries caps recovery attempts across a whole run, however they are
+	// spaced - where max_continuations catches a provider refusing right now,
+	// this catches one that answers just often enough to keep resetting it.
+	// Zero uses the built-in default.
+	MaxRecoveries int `yaml:"max_recoveries"`
 	// MaxCycles is how many times the loop nudges the model out of a detected
 	// repetition before giving up. Zero uses the built-in default. A safety
 	// guard - the default encodes a real failure, so raise it with care.

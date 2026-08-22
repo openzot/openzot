@@ -90,6 +90,26 @@ var retriablePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)the stream (?:ended|stalled)`),
 }
 
+// stallPatterns match a stream that stopped producing - the upstream went
+// quiet, rather than the request being wrong.
+//
+// These are the one wording allowed to outrank the status, because gateways
+// report a stall with whatever status they please and at least one of them
+// picks a 4xx: OpenRouter answers "Upstream idle timeout exceeded", and the
+// status verdict below would refuse that forever. A stall is transient by
+// definition - nothing about the request changes by trying it again, and the
+// next attempt routes to whatever the gateway has available.
+//
+// Deliberately narrow. A bare "timeout" is not enough: "timeout must be a
+// positive integer" is a rejected parameter, and retrying it is the burnt
+// budget the status rule exists to prevent. Each pattern names the thing that
+// went quiet, or says the wait itself elapsed.
+var stallPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:idle|stream|read|upstream|inactivity)[ _-]?timeout\b`),
+	regexp.MustCompile(`(?i)\btimeout exceeded\b`),
+	regexp.MustCompile(`(?i)\b(?:request|upstream|connection) timed out\b`),
+}
+
 // trailingStatusPattern matches the status some providers append to a message.
 //
 // Worth recovering even when the error carries no status field: a status is
@@ -122,7 +142,8 @@ func statusOf(err error) (int, bool) {
 // The status is authoritative in both directions when present: a 5xx retries and
 // a 4xx does not, whatever the message happens to say. A 4xx is caused by the
 // request itself - a bad key, a model the provider does not have - and retrying
-// only burns the budget.
+// only burns the budget. Two carve-outs, both about time rather than the
+// request: a 408, and a message that names a stalled stream (see stallPatterns).
 //
 // 429 is deliberately excluded. A rate limit needs Retry-After backoff, not a
 // tight retry loop, and retrying it aggressively makes the throttling worse.
@@ -145,11 +166,22 @@ func IsRetriable(err error) bool {
 		return true
 	}
 
-	if status, ok := statusOf(err); ok {
-		return status >= 500 && status <= 599
+	message := err.Error()
+
+	// A stall outranks the status; see stallPatterns for why this one wording
+	// is allowed to, and why it is kept this narrow.
+	for _, pattern := range stallPatterns {
+		if pattern.MatchString(message) {
+			return true
+		}
 	}
 
-	message := err.Error()
+	// 408 joins the 5xx range: Request Timeout is the one 4xx that says the
+	// exchange ran out of time rather than that the request was wrong, and a
+	// gateway reaches for it when the upstream it is proxying went quiet.
+	if status, ok := statusOf(err); ok {
+		return status == http.StatusRequestTimeout || (status >= 500 && status <= 599)
+	}
 
 	if message == "" {
 		return false

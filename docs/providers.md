@@ -114,6 +114,38 @@ When a custom list exists, selecting any other model is a configuration error.
 This makes the list useful as an intentional connection boundary. Omit it when
 you want Zot's permissive built-in/unknown-model behavior.
 
+### Overriding what a model can do
+
+A model entry can also correct what zot believes about the model's
+capabilities. Each is a tri-state: unset defers to the catalogue, `true` and
+`false` decide.
+
+```yaml
+providers:
+  openrouter:
+    models:
+      stealth/ox-alpha:
+        vision: true       # zot has never heard of it, but it can be shown images
+        context: 200000
+      gpt-5.4:
+        vision: false      # this deployment strips image parts
+```
+
+| Key | Overrides |
+| --- | --- |
+| `vision` | whether the model can be shown images, which decides whether it is offered the `view` tool |
+| `tools` | whether it accepts tool definitions |
+| `reasoning` | whether it emits a reasoning channel |
+| `context` | its total context window, in tokens |
+
+**`vision` is the one worth knowing about.** The catalogue's default for an
+unrecognised model is *blind*, deliberately: a model wrongly assumed to take
+tools fails on its first turn, loudly and cheaply, while a model wrongly assumed
+to see is sent an attachment its endpoint rejects in the middle of a long
+unattended run - or silently drops, leaving it to describe a picture it never
+received. So an uncatalogued model is never offered `view`, and never told
+images exist, until you say otherwise here.
+
 ## Gateways and prefixed models
 
 `openrouter` and `vercel` are model gateways: one endpoint fronting many

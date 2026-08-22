@@ -2560,3 +2560,91 @@ providers:
 		t.Errorf("--fresh must not resume, but ResumedFrom = %q", continued.Meta.ResumedFrom)
 	}
 }
+
+// writeSession lays down a session log for the resume tests: a meta record, and
+// a result record only when the run concluded.
+func writeSession(t *testing.T, dir, id, task, resumedFrom, reason string) {
+	t.Helper()
+
+	writer, err := session.Create(dir, id, session.Meta{Task: task, ResumedFrom: resumedFrom})
+	if err != nil {
+		t.Fatalf("session.Create(%s): %v", id, err)
+	}
+
+	if reason != "" {
+		if err := writer.Result(session.Result{Reason: reason}); err != nil {
+			t.Fatalf("session.Result(%s): %v", id, err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("session.Close(%s): %v", id, err)
+	}
+}
+
+// Continuing an unfinished run is right when the last attempt was interrupted,
+// and wrong once the transcript itself is what keeps failing. Left unbounded on
+// a schedule it becomes a ratchet: a run that errors is neither settled nor
+// failed, so the next one resumes a longer and more damaged conversation, gets
+// less far, and hands an even longer one on.
+func TestResumingStopsAfterAChainThatNeverConcludes(t *testing.T) {
+	const task = "make a game"
+
+	dir := t.TempDir()
+
+	// a clean start plus MaxResumeDepth continuations of it, none concluding:
+	// the next attempt is the one that has to start over
+	writeSession(t, dir, "0001", task, "", "")
+	writeSession(t, dir, "0002", task, "0001", "")
+	writeSession(t, dir, "0003", task, "0002", "")
+	writeSession(t, dir, "0004", task, "0003", "")
+
+	if _, ok := unfinishedRunOf(dir, task); ok {
+		t.Fatalf("a chain of %d unconcluded resumes must start clean rather than resume again", MaxResumeDepth)
+	}
+
+	// one link shorter and resuming is still the right call
+	shallow := t.TempDir()
+
+	writeSession(t, shallow, "0001", task, "", "")
+	writeSession(t, shallow, "0002", task, "0001", "")
+	writeSession(t, shallow, "0003", task, "0002", "")
+
+	if _, ok := unfinishedRunOf(shallow, task); !ok {
+		t.Error("a short chain must still be continued: interrupted work is worth picking up")
+	}
+}
+
+// The chain is a losing streak, not a lifetime count. A run that concludes ends
+// it - the next run starts from nothing, with ResumedFrom empty - so a long
+// history of successful shifts must not make the next interruption unresumable.
+func TestASettledRunClearsTheResumeChain(t *testing.T) {
+	const task = "make a game"
+
+	dir := t.TempDir()
+
+	writeSession(t, dir, "0001", task, "", "")
+	writeSession(t, dir, "0002", task, "0001", "")
+	writeSession(t, dir, "0003", task, "0002", "settled")
+
+	// the shift after the settled one started clean, and was interrupted
+	writeSession(t, dir, "0004", task, "", "")
+
+	if _, ok := unfinishedRunOf(dir, task); !ok {
+		t.Error("a settled run breaks the chain; the interruption after it must still be resumable")
+	}
+}
+
+// A session the listing cannot see - pruned, or a cache restored without it -
+// ends the walk at what is known rather than at the worst case.
+func TestAMissingLinkDoesNotCountAsAChain(t *testing.T) {
+	const task = "make a game"
+
+	dir := t.TempDir()
+
+	writeSession(t, dir, "0009", task, "gone", "")
+
+	if _, ok := unfinishedRunOf(dir, task); !ok {
+		t.Error("an unresolvable predecessor must not be assumed to be a long chain")
+	}
+}

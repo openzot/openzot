@@ -366,3 +366,58 @@ func TestResponsesRefusesStopSequences(t *testing.T) {
 		t.Errorf("error = %v, want it to name what could not be honoured", failed)
 	}
 }
+
+func TestResponsesInputCarriesImagesAsInputImageParts(t *testing.T) {
+	image := NewImage([]byte{7, 7, 7}, "image/png", 40, 20)
+	image.Detail = "high"
+
+	_, items := toResponsesInput([]ChatMessage{
+		{Role: RoleUser, Content: "Attached: /tmp/shot.png", Images: []Image{image}},
+	})
+
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want one message", len(items))
+	}
+
+	content, ok := items[0].Content.([]map[string]any)
+
+	if !ok {
+		t.Fatalf("content is %T, want an array of parts", items[0].Content)
+	}
+
+	if len(content) != 2 {
+		t.Fatalf("got %d parts, want the text and the image", len(content))
+	}
+
+	if content[0]["type"] != "input_text" {
+		t.Errorf("first part = %v, want the text", content[0])
+	}
+
+	// the Responses spelling differs from chat-completions: a flat image_url
+	// string rather than a nested object
+	if content[1]["type"] != "input_image" {
+		t.Fatalf("second part = %v, want input_image", content[1])
+	}
+
+	url, _ := content[1]["image_url"].(string)
+
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Errorf("image_url = %q, want a data URL", url)
+	}
+
+	if content[1]["detail"] != "high" {
+		t.Errorf("detail = %v, want the hint carried", content[1]["detail"])
+	}
+}
+
+func TestResponsesInputSkipsAnImageWithNoBytes(t *testing.T) {
+	_, items := toResponsesInput([]ChatMessage{
+		{Role: RoleUser, Content: "described only", Images: []Image{{MediaType: "image/png", Digest: "sha256:gone"}}},
+	})
+
+	content := items[0].Content.([]map[string]any)
+
+	if len(content) != 1 || content[0]["type"] != "input_text" {
+		t.Errorf("content = %v, want just the text when the bytes are gone", content)
+	}
+}

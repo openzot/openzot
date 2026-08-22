@@ -35,6 +35,17 @@ type Model struct {
 	// and on OpenAI the provider prefers the Responses API, because
 	// chat-completions has nowhere to carry reasoning state between tool rounds.
 	SupportsReasoning bool
+
+	// SupportsVision reports whether the model can be shown images.
+	//
+	// The safe assumption here is the opposite of SupportsTools, because the
+	// failure modes are not alike. A model wrongly assumed to take tools fails
+	// on its first turn, loudly and cheaply. A model wrongly assumed to see is
+	// sent an attachment its endpoint rejects mid-run - or worse, silently
+	// drops, leaving the model to describe a picture it never received. So the
+	// zero value is false, the table names only the models known to see, and an
+	// uncatalogued model is blind until its config says otherwise.
+	SupportsVision bool
 }
 
 // DefaultContextWindow is assumed for models the catalogue has not heard of.
@@ -77,57 +88,59 @@ var Default = Model{
 var models = map[string]Model{
 	// ---------------------------------------------------------------- OpenAI
 
-	"gpt-5.6-sol":   {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.6-terra": {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.6-luna":  {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.5":       {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.4":       {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.4-pro":   {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.4-mini":  {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.4-nano":  {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.2":       {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5.1":       {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5":         {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5-mini":    {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"gpt-5-nano":    {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"o4-mini":       {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true},
-	"o3-mini":       {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true},
-	"o3":            {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true},
+	"gpt-5.6-sol":   {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.6-terra": {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.6-luna":  {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.5":       {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.4":       {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.4-pro":   {Provider: "openai", ContextWindow: 1_050_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.4-mini":  {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.4-nano":  {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.2":       {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5.1":       {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5":         {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5-mini":    {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gpt-5-nano":    {Provider: "openai", ContextWindow: 400_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"o4-mini":       {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"o3-mini":       {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"o3":            {Provider: "openai", ContextWindow: 200_000, MaxOutputTokens: 100_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+
 	// ------------------------------------------------------------- Anthropic
 
-	"claude-5-opus":     {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-5-sonnet":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-5-haiku":    {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true},
-	"claude-4.8-opus":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4.7-opus":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4.6-opus":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4.6-sonnet": {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4.5-opus":   {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4.5-sonnet": {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4.5-haiku":  {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true},
-	"claude-4.1-opus":   {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 32_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-4-opus":     {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 8_192, SupportsTools: true, SupportsReasoning: true},
-	"claude-4-sonnet":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 8_192, SupportsTools: true, SupportsReasoning: true},
+	"claude-5-opus":     {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-5-sonnet":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-5-haiku":    {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsVision: true},
+	"claude-4.8-opus":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4.7-opus":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4.6-opus":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4.6-sonnet": {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4.5-opus":   {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4.5-sonnet": {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4.5-haiku":  {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsVision: true},
+	"claude-4.1-opus":   {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 32_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4-opus":     {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 8_192, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-4-sonnet":   {Provider: "anthropic", ContextWindow: 1_000_000, MaxOutputTokens: 8_192, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
 
 	// @note broad fallbacks, so an unrecognised Claude release lands somewhere
 	// sensible rather than on the default
-	"claude-opus":   {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 32_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-sonnet": {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"claude-haiku":  {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true},
-	"claude":        {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 32_000, SupportsTools: true, SupportsReasoning: true},
+
+	"claude-opus":   {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 32_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-sonnet": {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"claude-haiku":  {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsVision: true},
+	"claude":        {Provider: "anthropic", ContextWindow: 200_000, MaxOutputTokens: 32_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
 
 	// ---------------------------------------------------------------- Google
 
-	"gemini-3.6-flash":      {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"gemini-3.5-flash":      {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"gemini-3.1-pro":        {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"gemini-3.1-flash-lite": {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 65_000, SupportsTools: true, SupportsReasoning: true},
-	"gemini-3-flash":        {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
-	"gemini-3-pro":          {Provider: "google", ContextWindow: 1_048_576, MaxOutputTokens: 65_536, SupportsTools: true, SupportsReasoning: true},
-	"gemini-2.5-pro":        {Provider: "google", ContextWindow: 1_048_576, MaxOutputTokens: 8_192, SupportsTools: true, SupportsReasoning: true},
-	"gemini-2.5-flash":      {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 65_536, SupportsTools: true, SupportsReasoning: true},
-	"gemini-2.5-flash-lite": {Provider: "google", ContextWindow: 1_048_576, MaxOutputTokens: 65_535, SupportsTools: true},
-	"gemini":                {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
+	"gemini-3.6-flash":      {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-3.5-flash":      {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-3.1-pro":        {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-3.1-flash-lite": {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 65_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-3-flash":        {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-3-pro":          {Provider: "google", ContextWindow: 1_048_576, MaxOutputTokens: 65_536, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-2.5-pro":        {Provider: "google", ContextWindow: 1_048_576, MaxOutputTokens: 8_192, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-2.5-flash":      {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 65_536, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
+	"gemini-2.5-flash-lite": {Provider: "google", ContextWindow: 1_048_576, MaxOutputTokens: 65_535, SupportsTools: true, SupportsVision: true},
+	"gemini":                {Provider: "google", ContextWindow: 1_000_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
 	"gemma-4-31b":           {Provider: "google", ContextWindow: 262_144, MaxOutputTokens: 65_536, SupportsTools: true, SupportsReasoning: true},
 	"gemma":                 {Provider: "google", ContextWindow: 262_144, MaxOutputTokens: 65_536, SupportsTools: true, SupportsReasoning: true},
 
@@ -137,7 +150,7 @@ var models = map[string]Model{
 	"glm-5.2":       {Provider: "zai", ContextWindow: 1_000_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
 	"glm-5.1":       {Provider: "zai", ContextWindow: 202_000, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
 	"glm-5-turbo":   {Provider: "zai", ContextWindow: 202_800, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
-	"glm-5v-turbo":  {Provider: "zai", ContextWindow: 200_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
+	"glm-5v-turbo":  {Provider: "zai", ContextWindow: 200_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
 	"glm-5":         {Provider: "zai", ContextWindow: 202_800, MaxOutputTokens: 64_000, SupportsTools: true, SupportsReasoning: true},
 	"glm-4.7-flash": {Provider: "zai", ContextWindow: 200_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
 	"glm-4.7":       {Provider: "zai", ContextWindow: 200_000, MaxOutputTokens: 40_000, SupportsTools: true, SupportsReasoning: true},
@@ -191,12 +204,12 @@ var models = map[string]Model{
 
 	// --------------------------------------------------------------------- xAI
 
-	"grok-4.5": {Provider: "xai", ContextWindow: 500_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true},
+	"grok-4.5": {Provider: "xai", ContextWindow: 500_000, MaxOutputTokens: 128_000, SupportsTools: true, SupportsReasoning: true, SupportsVision: true},
 	"grok":     {Provider: "xai", ContextWindow: 256_000, MaxOutputTokens: 32_768, SupportsTools: true, SupportsReasoning: true},
 
 	// ------------------------------------------------------------------- Meta
 
-	"llama-4": {Provider: "meta", ContextWindow: 1_000_000, MaxOutputTokens: 16_384, SupportsTools: true},
+	"llama-4": {Provider: "meta", ContextWindow: 1_000_000, MaxOutputTokens: 16_384, SupportsTools: true, SupportsVision: true},
 	"llama-3": {Provider: "meta", ContextWindow: 128_000, MaxOutputTokens: 8_192, SupportsTools: true},
 	"llama":   {Provider: "meta", ContextWindow: 128_000, MaxOutputTokens: 8_192, SupportsTools: true},
 

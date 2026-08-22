@@ -9,6 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/openzot/openzot/internal/imaging"
+	"github.com/openzot/openzot/internal/provider"
 )
 
 // DefaultMaxToolOutput is the byte ceiling on a single tool result when the
@@ -32,13 +35,35 @@ func DefaultTools() Tools {
 // that overflows the window is rejected wholesale, and the run cannot recover
 // from a message it cannot even send. Zero or negative uses the default.
 func DefaultToolsWith(maxOutput int) Tools {
+	return DefaultToolsFor(ToolOptions{MaxOutput: maxOutput})
+}
+
+// ToolOptions configures the standard tool set.
+type ToolOptions struct {
+	// MaxOutput is the ceiling on a single tool result. Zero uses the default.
+	MaxOutput int
+
+	// Vision offers the model a tool for looking at images.
+	//
+	// Off by default, and deliberately expressed by leaving the tool out rather
+	// than by refusing calls to it: a tool the model cannot use is a tool it
+	// will try anyway, spending a round to find out. What a model can be shown
+	// is not something zot can discover at runtime, so the caller says - from
+	// the catalogue, or from what the operator configured for the model.
+	Vision bool
+}
+
+// DefaultToolsFor returns the standard tool set for a set of options.
+func DefaultToolsFor(options ToolOptions) Tools {
+	maxOutput := options.MaxOutput
+
 	if maxOutput <= 0 {
 		maxOutput = DefaultMaxToolOutput
 	}
 
-	s := toolSet{maxOutput: maxOutput}
+	s := toolSet{maxOutput: maxOutput, vision: options.Vision}
 
-	return Tools{
+	tools := Tools{
 		"read": {
 			Description: "Read a range of lines from a file. startLine and endLine are required: read a bounded section, not the whole file, so a large file cannot flood the context. The result is line-numbered and reports the file's total length, so you can read a further range to see more.",
 			Parameters: FunctionParameters{
@@ -124,6 +149,23 @@ func DefaultToolsWith(maxOutput int) Tools {
 			Handler: progressHandler,
 		},
 	}
+
+	if options.Vision {
+		tools["view"] = ToolDefinition{
+			Description: "Look at an image file - a screenshot, a diagram, a rendering - and see it rather than reason about its bytes. Use it to check that something you produced actually looks right.",
+			Parameters: FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"path":   map[string]any{"type": "string", "description": "The image file to look at"},
+					"detail": map[string]any{"type": "string", "description": "Resolution hint: auto, low or high", "enum": []string{"auto", "low", "high"}},
+				},
+				"required": []string{"path"},
+			},
+			Handler: s.view,
+		}
+	}
+
+	return tools
 }
 
 // planHandler records the model's plan.
@@ -165,6 +207,10 @@ func progressHandler(_ context.Context, args map[string]any) (any, error) {
 // which a per-run or per-model override could not vary.
 type toolSet struct {
 	maxOutput int
+
+	// vision is whether this run's model can be shown images. read consults it
+	// to explain itself when it is handed one.
+	vision bool
 }
 
 // truncate bounds what a tool may return.
@@ -224,6 +270,25 @@ func (s toolSet) read(_ context.Context, args map[string]any) (any, error) {
 		return nil, err
 	}
 
+	// An image split on newlines is mojibake: thousands of replacement
+	// characters that cost the same context as real content and tell the model
+	// nothing. Say what the file is instead, and where to go from there - which
+	// depends on whether this model can be shown one at all.
+	if mediaType := imaging.MediaType(content); mediaType != "" {
+		description := fmt.Sprintf("%s is a %s image, %d bytes", path, mediaType, len(content))
+
+		if width, height, ok := imaging.Dimensions(content); ok {
+			description = fmt.Sprintf("%s is a %s image, %dx%d, %d bytes", path, mediaType, width, height, len(content))
+		}
+
+		if s.vision {
+			return description + ". Use view to look at it.", nil
+		}
+
+		return description + ". This model cannot be shown images, so read cannot render it; " +
+			"inspect it with a command instead if you need to know what it contains.", nil
+	}
+
 	lines := strings.Split(string(content), "\n")
 	total := len(lines)
 
@@ -250,6 +315,56 @@ func (s toolSet) read(_ context.Context, args map[string]any) (any, error) {
 	}
 
 	return s.truncate(b.String()), nil
+}
+
+// view attaches an image to the conversation.
+//
+// The handler returns the bytes and nothing else: it does no I/O beyond reading
+// the file, so it stays testable, and it knows nothing about session logs - the
+// recorder is what decides where the bytes are kept. Normalisation happens here
+// rather than at the wire because the digest, the blob and what the model is
+// shown must all be the same object, and downscaling later would make them
+// three different ones.
+func (s toolSet) view(_ context.Context, args map[string]any) (any, error) {
+	path, err := stringArg(args, "path")
+	if err != nil {
+		return nil, err
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if imaging.MediaType(content) == "" {
+		return nil, fmt.Errorf("%s is not an image; use read for text files", path)
+	}
+
+	normalized, err := imaging.Normalize(content, imaging.DefaultMaxEdge)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	image := provider.NewImage(normalized.Data, normalized.MediaType, normalized.Width, normalized.Height)
+	image.Origin = path
+
+	if detail, _ := args["detail"].(string); detail == "auto" || detail == "low" || detail == "high" {
+		image.Detail = detail
+	}
+
+	text := fmt.Sprintf("attached %s (%s", path, image.MediaType)
+
+	if image.Width > 0 && image.Height > 0 {
+		text += fmt.Sprintf(", %dx%d", image.Width, image.Height)
+	}
+
+	text += ")"
+
+	if normalized.Resized {
+		text += fmt.Sprintf("; reduced from the file on disk to fit %dpx", imaging.DefaultMaxEdge)
+	}
+
+	return ToolResult{Text: text, Images: []provider.Image{image}}, nil
 }
 
 func (s toolSet) write(_ context.Context, args map[string]any) (any, error) {

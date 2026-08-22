@@ -123,6 +123,51 @@ func TestIsRetriableUsesStatusOverProse(t *testing.T) {
 	}
 }
 
+// A stalled upstream is the one condition allowed to outrank the status,
+// because gateways report it with whatever status they please - and at least
+// one of them picks a 4xx, which the status rule would refuse forever.
+//
+// This is not hypothetical: an OpenRouter shift died to exactly the first case
+// here, with no retry attempted, sixteen minutes of work lost to an upstream
+// that had simply gone quiet.
+func TestIsRetriableTreatsAStalledUpstreamAsTransient(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			"a gateway's idle timeout retries whatever status it wears",
+			&Error{Status: 400, Message: "Upstream idle timeout exceeded"},
+			true,
+		},
+		{"a 408 retries", &Error{Status: 408, Message: "Request Timeout"}, true},
+		{"a status-less stream timeout retries", errors.New("read timeout"), true},
+		{"a bare request timed out retries", errors.New("upstream connection timed out"), true},
+		{
+			// the reason the patterns name what went quiet rather than matching
+			// "timeout": this one is a rejected parameter, and retrying it
+			// burns the budget on a request that can never succeed
+			"a rejected timeout parameter does not retry",
+			&Error{Status: 400, Message: "timeout must be a positive integer"},
+			false,
+		},
+		{
+			"an auth failure does not retry however it is worded",
+			&Error{Status: 401, Message: "invalid api key"},
+			false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsRetriable(test.err); got != test.want {
+				t.Errorf("IsRetriable = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestIsContextLimit(t *testing.T) {
 	limit := &Error{Status: 400, Message: "This model's maximum context length is 128000 tokens"}
 

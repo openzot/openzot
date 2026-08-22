@@ -158,12 +158,32 @@ func toResponsesInput(messages []ChatMessage) (instructions string, items []resp
 			}
 
 		default:
+			content := []map[string]any{}
+
+			if message.Content != "" || len(message.Images) == 0 {
+				content = append(content, map[string]any{"type": "input_text", "text": message.Content})
+			}
+
+			// the Responses spelling of an image part; the chat-completions one
+			// is built by ChatMessage.MarshalJSON
+			for _, image := range message.Images {
+				if !image.Ready() {
+					continue
+				}
+
+				part := map[string]any{"type": "input_image", "image_url": image.DataURL()}
+
+				if image.Detail != "" {
+					part["detail"] = image.Detail
+				}
+
+				content = append(content, part)
+			}
+
 			items = append(items, responseItem{
-				Type: "message",
-				Role: RoleUser,
-				Content: []map[string]any{
-					{"type": "input_text", "text": message.Content},
-				},
+				Type:    "message",
+				Role:    RoleUser,
+				Content: content,
 			})
 		}
 	}

@@ -117,6 +117,10 @@ const (
 	// TypeActivity is one half of a tool-call pair; the call itself is in Meta.
 	TypeActivity = loop.TypeActivity
 
+	// TypeAttachment carries images a tool produced, in the one role the wire
+	// accepts them on.
+	TypeAttachment = loop.TypeAttachment
+
 	// TypeInstructions is system context.
 	TypeInstructions = loop.TypeInstructions
 
@@ -166,11 +170,16 @@ type Summary struct {
 	// Code is the process exit code the reason maps to.
 	Code int
 
-	Iterations    int
-	Calls         int
+	Iterations int
+	Calls      int
+
+	// Continuations is how many recovery attempts the run spent in total, not
+	// how many it had left: the bound is on consecutive attempts, which zeroes
+	// whenever a turn comes back whole.
 	Continuations int
-	Cycles        int
-	Settles       int
+
+	Cycles  int
+	Settles int
 }
 
 // Message is one entry in a conversation.
@@ -188,6 +197,11 @@ type Message struct {
 	// `map[string]any` would make every read a type assertion that can fail
 	// silently and every key a runtime spelling test.
 	Activity *Activity `json:"activity,omitempty"`
+
+	// Images are what the model is shown alongside Text, on a TypeAttachment
+	// message. A tool produces them by returning a ToolResult; the engine
+	// attaches them, because the wire will not take them on a tool result.
+	Images []Image `json:"images,omitempty"`
 }
 
 // Activity is one half of a tool-call pair. See the loop package for detail.
@@ -212,7 +226,26 @@ const (
 type FunctionParameters = map[string]any
 
 // ToolHandler executes a tool call and returns its result.
+//
+// The result is usually a string, or anything JSON-encodable. Return a
+// ToolResult to hand back something a tool result cannot carry on the wire -
+// today, images.
 type ToolHandler func(ctx context.Context, args map[string]any) (any, error)
+
+// ToolResult is what a handler returns when a tool produces more than text.
+// Text is what the model reads as the result; Images are attached to the
+// conversation after the turn's tool results, because no OpenAI-compatible
+// endpoint accepts image parts on a tool message.
+type ToolResult = loop.ToolResult
+
+// Image is one image shown to a model. Build one with NewImage.
+type Image = provider.Image
+
+// NewImage describes encoded image bytes: it computes the content digest and
+// the token estimate that the engine, the log and the budget all quote.
+func NewImage(data []byte, mediaType string, width, height int) Image {
+	return provider.NewImage(data, mediaType, width, height)
+}
 
 // ToolDefinition describes a tool the model may call.
 type ToolDefinition struct {
@@ -269,10 +302,17 @@ type ExecuteWithToolsOptions struct {
 	// count is a hard default backstop.
 	MaxCalls int
 
-	// MaxContinuations bounds recovery attempts within a run - a truncated
-	// response, an empty turn, or a retriable provider error. Zero uses the
-	// default.
+	// MaxContinuations bounds CONSECUTIVE recovery attempts - a truncated
+	// response, or a retriable provider error - with no good turn between
+	// them. A turn that comes back whole zeroes the count; MaxRecoveries bounds
+	// the total separately. Zero uses the default.
 	MaxContinuations int
+
+	// MaxRecoveries bounds recovery attempts across the whole run, however they
+	// are spaced. Where MaxContinuations catches a provider refusing right now,
+	// this catches one that answers just often enough to keep resetting it
+	// while the run spends its life retrying. Zero uses the default.
+	MaxRecoveries int
 
 	// RetryBackoff is the pause before the first retry of a retriable provider
 	// failure, doubling per consecutive retry up to a cap. Zero uses the default.
@@ -388,6 +428,7 @@ func ExecuteWithTools(
 			MaxIterations:       options.MaxIterations,
 			MaxCalls:            options.MaxCalls,
 			MaxContinuations:    options.MaxContinuations,
+			MaxRecoveries:       options.MaxRecoveries,
 			RetryBackoff:        options.RetryBackoff,
 			MaxCycles:           options.MaxCycles,
 			MaxEmpties:          options.MaxEmpties,
@@ -461,7 +502,7 @@ func ExecuteWithTools(
 				Code:          exitCode(result.Reason),
 				Iterations:    result.Budget.Iterations,
 				Calls:         result.Budget.Calls,
-				Continuations: result.Budget.Continuations,
+				Continuations: result.Budget.Recoveries,
 				Cycles:        result.Budget.Cycles,
 				Settles:       result.Budget.Settles,
 			})
@@ -612,6 +653,7 @@ func toLoopMessages(options ExecuteWithToolsOptions) []loop.Message {
 			Type:     message.Type,
 			Text:     message.Text,
 			Activity: message.Activity,
+			Images:   message.Images,
 		})
 	}
 
@@ -646,6 +688,7 @@ func fromLoopMessages(messages []loop.Message) []Message {
 			Type:     message.Type,
 			Text:     message.Text,
 			Activity: message.Activity,
+			Images:   message.Images,
 		})
 	}
 
