@@ -1,7 +1,11 @@
 package provider
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -499,5 +503,187 @@ func TestACustomEndpointExplainsWhyItNeedsItsOwnKey(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "proxy.example.com") {
 		t.Errorf("error = %v, want it to name the endpoint that needs the key", err)
+	}
+}
+
+// zot calls OpenRouter and the Vercel AI Gateway, both of which publish
+// rankings of the apps calling them and both of which read the same two
+// headers. Sending nothing meant zot was invisible on both.
+func TestAttributionIsSentToRankingGatewaysOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		want     bool
+	}{
+		{"openrouter ranks apps", OpenRouter, true},
+		{"vercel ranks apps", Vercel, true},
+		{
+			// a first-party API reads neither header, so sending one only tells
+			// the model provider which tool is calling
+			"a first-party provider is told nothing",
+			OpenAI,
+			false,
+		},
+		{"a local provider is told nothing", Ollama, false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := Config{Provider: test.provider, Model: "m", APIKey: "k"}.Resolve()
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+
+			referer, title := resolved.Headers[headerReferer], resolved.Headers[headerTitle]
+
+			if !test.want {
+				if referer != "" || title != "" {
+					t.Errorf("attribution sent to %s: %q / %q", test.provider, referer, title)
+				}
+
+				return
+			}
+
+			if referer != DefaultAttributionURL {
+				t.Errorf("%s = %q, want %q", headerReferer, referer, DefaultAttributionURL)
+			}
+
+			if title != DefaultAttributionName {
+				t.Errorf("%s = %q, want %q", headerTitle, title, DefaultAttributionName)
+			}
+		})
+	}
+}
+
+// The default is a courtesy, not a policy: a tool built on zot attributes
+// itself, and a user who wants to appear nowhere says so.
+func TestAttributionIsConfigurable(t *testing.T) {
+	custom, err := Config{
+		Provider:    OpenRouter,
+		Model:       "m",
+		APIKey:      "k",
+		Attribution: Attribution{Name: "acme-bot", URL: "https://acme.example"},
+	}.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if got := custom.Headers[headerTitle]; got != "acme-bot" {
+		t.Errorf("%s = %q, want the configured name", headerTitle, got)
+	}
+
+	if got := custom.Headers[headerReferer]; got != "https://acme.example" {
+		t.Errorf("%s = %q, want the configured URL", headerReferer, got)
+	}
+
+	off, err := Config{
+		Provider:    OpenRouter,
+		Model:       "m",
+		APIKey:      "k",
+		Attribution: Attribution{Disabled: true},
+	}.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if len(off.Headers) != 0 {
+		t.Errorf("headers = %v, want nothing sent when attribution is disabled", off.Headers)
+	}
+}
+
+// An explicit header is the caller having already said what they want, so a
+// default that overrode it would be a bug rather than a courtesy. Matched
+// case-insensitively because that is what an HTTP header is - otherwise a
+// hand-written "http-referer" would be joined by zot's own, not replaced by it.
+func TestAnExplicitHeaderBeatsAttribution(t *testing.T) {
+	resolved, err := Config{
+		Provider: OpenRouter,
+		Model:    "m",
+		APIKey:   "k",
+		Headers:  map[string]string{"http-referer": "https://mine.example"},
+	}.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if got := resolved.Headers["http-referer"]; got != "https://mine.example" {
+		t.Errorf("http-referer = %q, want the caller's value kept", got)
+	}
+
+	if _, duplicated := resolved.Headers[headerReferer]; duplicated {
+		t.Error("zot added its own referer alongside the caller's; one header, one value")
+	}
+
+	// the title was not set by the caller, so it still gets the default
+	if got := resolved.Headers[headerTitle]; got != DefaultAttributionName {
+		t.Errorf("%s = %q, want the default to still apply", headerTitle, got)
+	}
+}
+
+// Resolving must not write through to the caller's map: a Config is a value,
+// and a caller that resolved twice would otherwise accumulate zot's headers in
+// the map it passed in.
+func TestResolveDoesNotMutateTheCallersHeaders(t *testing.T) {
+	original := map[string]string{"X-Route": "eu"}
+
+	if _, err := (Config{
+		Provider: OpenRouter,
+		Model:    "m",
+		APIKey:   "k",
+		Headers:  original,
+	}).Resolve(); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if len(original) != 1 {
+		t.Errorf("the caller's header map grew to %v", original)
+	}
+}
+
+// Resolving the headers is not the same as sending them. This drives a real
+// request at a local server and reads what arrived - which is also the only way
+// to see what Go's header canonicalisation does to "HTTP-Referer" on the wire.
+func TestAttributionReachesTheWire(t *testing.T) {
+	var got http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	// Custom with an openrouter base URL would not attribute - the provider
+	// identifier is what selects it - so name the provider and point it here.
+	client, err := New(Config{
+		Provider: OpenRouter,
+		Model:    "m",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	//nolint:errcheck // the stub answers with an empty stream; the headers are the point
+	_, _, _, _ = client.Complete(context.Background(), Request{
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+	})
+
+	if got == nil {
+		t.Fatal("the server saw no request")
+	}
+
+	// http.Header.Get is case-insensitive, which is what an HTTP header is and
+	// what both gateways match on - the canonical form Go writes ("Http-Referer")
+	// is the same header as the "HTTP-Referer" their docs spell.
+	if referer := got.Get(headerReferer); referer != DefaultAttributionURL {
+		t.Errorf("%s = %q, want %q", headerReferer, referer, DefaultAttributionURL)
+	}
+
+	if title := got.Get(headerTitle); title != DefaultAttributionName {
+		t.Errorf("%s = %q, want %q", headerTitle, title, DefaultAttributionName)
 	}
 }

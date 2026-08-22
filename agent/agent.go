@@ -60,9 +60,20 @@ type ClientOptions struct {
 	// self-hosted deployments. Must be https unless it is loopback.
 	BaseURL string
 
-	// Headers are merged into every request.
+	// Headers are merged into every request. An entry here wins over the
+	// attribution headers below.
 	Headers map[string]string
+
+	// Attribution names the calling app to a gateway that publishes rankings
+	// from it. The zero value sends zot's own name and project URL; set
+	// Disabled to send nothing, or Name/URL to attribute a tool built on zot.
+	Attribution Attribution
 }
+
+// Attribution is the app identity sent to gateways that rank the apps calling
+// them. Only OpenRouter and the Vercel AI Gateway read it, and it carries
+// nothing about the user or the run - see the provider package for the details.
+type Attribution = provider.Attribution
 
 // NewClient validates the options and returns a client.
 func NewClient(options ClientOptions) (*Client, error) {
@@ -72,6 +83,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		APIKey:   options.APIKey,
 		BaseURL:  options.BaseURL,
 		Headers:  options.Headers,
+
+		Attribution: options.Attribution,
 	})
 	if err != nil {
 		return nil, err

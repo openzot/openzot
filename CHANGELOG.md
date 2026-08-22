@@ -2,6 +2,14 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.17.1] - 2026-08-22
+
+### Added
+
+- **zot names itself to the gateways that rank the apps calling them.** OpenRouter publishes site rankings and Vercel's AI Gateway publishes app leaderboards, both built from two optional headers on each request - and zot sent neither, so every call it had ever made was anonymous and zot appeared on neither list. Both gateways settled on the same pair (`HTTP-Referer` for the project link, `X-Title` for the name), so this is one implementation rather than one per gateway. Applied in `Config.Resolve`, the single point every configuration passes through, so it reaches a run however the client was built.
+
+  What travels is zot's own name and repository URL - the same two values for every zot in the world, carrying nothing about the user, the run or the work. It is sent **only** to those two gateways: a first-party API reads neither header, so sending one there would tell a model provider which tool is calling for no benefit to anyone. Configurable through a top-level `attribution:` block (`name`, `url`, `disabled`) and the matching `ZOT_ATTRIBUTION_*` variables - set `name`/`url` to attribute a tool built on zot, or `disabled: true` to appear nowhere. An explicit header on the provider connection still wins, matched case-insensitively so a hand-written `http-referer` is respected rather than joined by a second one.
+
 ## [0.17.0] - 2026-08-22
 
 ### Added

@@ -428,6 +428,12 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 		Model:    model,
 		APIKey:   credential,
 		BaseURL:  providerConfig.BaseURL,
+
+		Attribution: agent.Attribution{
+			Name:     cfg.Attribution.Name,
+			URL:      cfg.Attribution.URL,
+			Disabled: cfg.Attribution.Disabled,
+		},
 	})
 	if err != nil {
 		return nil, empty, fmt.Errorf("provider %q: %w", cfg.DefaultProvider, err)
