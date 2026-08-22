@@ -302,3 +302,185 @@ func write(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// A title is a label for people. A declared one wins; without one the file name
+// is already a perfectly good name, because order files are named from their
+// objective. Sentence case, not Title Case - the name is a sentence.
+func TestDisplayTitlePrefersTheDeclaredOneThenTheFileName(t *testing.T) {
+	tests := []struct {
+		name  string
+		order Order
+		want  string
+	}{
+		{
+			name:  "a declared title wins",
+			order: Order{Title: "Rate limiting", Path: "/book/.zot/orders/add-rate-limiting-to-the-api.yaml"},
+			want:  "Rate limiting",
+		},
+		{
+			name:  "the file name becomes one",
+			order: Order{Path: "/book/.zot/orders/fix-the-flaky-test.yaml"},
+			want:  "Fix the flaky test",
+		},
+		{
+			name:  "underscores read as spaces too",
+			order: Order{Path: "fix_the_flaky_test.yaml"},
+			want:  "Fix the flaky test",
+		},
+		{
+			name:  "a one-word name still capitalises",
+			order: Order{Path: "cleanup.yaml"},
+			want:  "Cleanup",
+		},
+		{
+			name:  "an already-capitalised name is left alone",
+			order: Order{Path: "API-cleanup.yaml"},
+			want:  "API cleanup",
+		},
+		{
+			name:  "a name that is only separators yields nothing to show",
+			order: Order{Path: "---.yaml"},
+			want:  "",
+		},
+		{
+			name:  "an order that was never a file has no name to show",
+			order: Order{Objective: "a synthesized order with a very long objective nobody wants as a title"},
+			want:  "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.order.DisplayTitle(); got != test.want {
+				t.Errorf("DisplayTitle = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// The title is a label for humans and never reaches the model: the objective is
+// the contract, and spending context on a name for it would be paying twice for
+// the same words.
+func TestTheTitleStaysOutOfTheTask(t *testing.T) {
+	o := Order{
+		Title:      "Rate limiting",
+		Objective:  "add rate limiting to the api",
+		Acceptance: []string{"the suite passes"},
+	}
+
+	if strings.Contains(o.Task(), "Rate limiting") {
+		t.Errorf("the title must not enter the task the agent is given:\n%s", o.Task())
+	}
+
+	if !strings.Contains(o.Task(), "add rate limiting to the api") {
+		t.Errorf("the objective must still be the task:\n%s", o.Task())
+	}
+}
+
+// The field is optional in both directions: an order without one parses as it
+// always did, and one with a title round-trips through the file.
+func TestTitleIsOptionalAndRoundTrips(t *testing.T) {
+	plain, err := Parse([]byte("objective: do the thing\n"))
+	if err != nil {
+		t.Fatalf("an order without a title must parse: %v", err)
+	}
+
+	if plain.Title != "" {
+		t.Errorf("Title = %q, want empty", plain.Title)
+	}
+
+	titled, err := Parse([]byte("title: The Thing\nobjective: do the thing\n"))
+	if err != nil {
+		t.Fatalf("an order with a title must parse: %v", err)
+	}
+
+	if titled.Title != "The Thing" {
+		t.Errorf("Title = %q, want %q", titled.Title, "The Thing")
+	}
+
+	// through a file and back
+	dir := t.TempDir()
+
+	path, err := Scaffold(dir, titled)
+	if err != nil {
+		t.Fatalf("Scaffold: %v", err)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("a scaffolded titled order does not load: %v", err)
+	}
+
+	if reloaded.Title != "The Thing" {
+		t.Errorf("the title did not survive the file: %q", reloaded.Title)
+	}
+}
+
+// An untitled scaffold advertises the field without implying it is expected -
+// a stub nobody has to fill in, because the file name already names the order.
+func TestAnUntitledScaffoldMentionsTheField(t *testing.T) {
+	dir := t.TempDir()
+
+	path, err := Scaffold(dir, Order{Objective: "do the thing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(data), "# title:") {
+		t.Errorf("the scaffold should show the optional title field:\n%s", data)
+	}
+
+	// commented out, so it stays optional and the file still loads
+	if _, err := Load(path); err != nil {
+		t.Errorf("the scaffold must still load: %v", err)
+	}
+}
+
+// A drafted order is named by its title, not its objective. An objective is
+// however the thought arrived; slugging one gives
+// the-new-command-should-have-an-interactive-versi.yaml, which is hard to tell
+// from its neighbours in the directory where orders are actually browsed.
+func TestScaffoldNamesTheFileByTitleWhenThereIsOne(t *testing.T) {
+	dir := t.TempDir()
+
+	titled, err := Scaffold(dir, Order{
+		Title:     "Interactive zot new",
+		Objective: "the new command should have an interactive version where I can continuously type new brain farts that get recorded as orders",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := filepath.Base(titled); got != "interactive-zot-new.yaml" {
+		t.Errorf("file name = %q, want it named from the title", got)
+	}
+
+	// without a title the objective still names it, exactly as before
+	untitled, err := Scaffold(dir, Order{Objective: "fix the flaky test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := filepath.Base(untitled); got != "fix-the-flaky-test.yaml" {
+		t.Errorf("file name = %q, want it named from the objective", got)
+	}
+
+	// and a name already taken is still uniquified rather than overwritten
+	again, err := Scaffold(dir, Order{Title: "Interactive zot new", Objective: "something else"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if again == titled {
+		t.Error("scaffolding the same title twice must not overwrite the first")
+	}
+
+	if got := filepath.Base(again); got != "interactive-zot-new-2.yaml" {
+		t.Errorf("the second file is %q, want it uniquified from the title", got)
+	}
+}

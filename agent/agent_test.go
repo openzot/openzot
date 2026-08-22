@@ -602,6 +602,8 @@ func (r *recordingRecorder) RecordEvent(kind, tool, _ string, _ int) error {
 	return nil
 }
 
+func (r *recordingRecorder) RecordFailure(*Failure) error { return nil }
+
 func (r *recordingRecorder) RecordReset() error {
 	r.messages = nil
 	r.resets++
@@ -770,6 +772,7 @@ type failingRecorder struct{}
 func (failingRecorder) RecordReset() error                      { return errTest }
 func (failingRecorder) RecordMessage(Message) error             { return errTest }
 func (failingRecorder) RecordEvent(_, _, _ string, _ int) error { return errTest }
+func (failingRecorder) RecordFailure(*Failure) error            { return errTest }
 func (failingRecorder) RecordResult(Summary) error              { return errTest }
 
 var errTest = errors.New("disk full")
@@ -793,6 +796,13 @@ func (r *lockedRecorder) RecordEvent(kind, tool, text string, iteration int) err
 	defer r.mu.Unlock()
 
 	return r.inner.RecordEvent(kind, tool, text, iteration)
+}
+
+func (r *lockedRecorder) RecordFailure(f *Failure) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.inner.RecordFailure(f)
 }
 
 func (r *lockedRecorder) RecordReset() error {
@@ -981,4 +991,64 @@ func TestACancelledRunStillDeliversTheExitEvent(t *testing.T) {
 	if !sawExit {
 		t.Fatal("a draining consumer must still receive the exit event after cancellation")
 	}
+}
+
+// A usage event's numbers live in fields the recorder interface does not
+// carry; they must be rendered into the recorded text, or the session log
+// holds a usage event that says nothing - and "why did this run cost 567k
+// tokens" is exactly the question a session has to answer after the fact.
+func TestUsageEventsAreRecordedWithTheirNumbers(t *testing.T) {
+	server := sseServer(t, []string{
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1234,"completion_tokens":56}}`,
+	})
+
+	recorder := &textRecorder{}
+
+	events, errs := ExecuteWithTools(context.Background(), newTestClient(t, server), ExecuteWithToolsOptions{
+		Text:     []string{"go"},
+		Recorder: recorder,
+	})
+
+	for range events {
+	}
+
+	if err := <-errs; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	var recorded string
+
+	recorder.mu.Lock()
+
+	for _, event := range recorder.events {
+		if strings.HasPrefix(event, "usage ") && recorded == "" {
+			recorded = event
+		}
+	}
+
+	recorder.mu.Unlock()
+
+	if !strings.Contains(recorded, "input 1234") || !strings.Contains(recorded, "output 56") {
+		t.Errorf("usage event = %q, want the provider-reported numbers in the text", recorded)
+	}
+}
+
+// textRecorder captures recorded events as "kind text" strings.
+type textRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *textRecorder) RecordMessage(Message) error  { return nil }
+func (r *textRecorder) RecordReset() error           { return nil }
+func (r *textRecorder) RecordResult(Summary) error   { return nil }
+func (r *textRecorder) RecordFailure(*Failure) error { return nil }
+
+func (r *textRecorder) RecordEvent(kind, _, text string, _ int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.events = append(r.events, kind+" "+text)
+
+	return nil
 }

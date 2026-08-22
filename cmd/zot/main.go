@@ -10,13 +10,13 @@
 //
 //	export OPENAI_API_KEY="your-api-key"
 //
-//	# write an order, then run it
+//	# write an order, then run it - orders and their records live under .zot/
 //	zot new "add a /health endpoint to the Go server and a test for it"
-//	zot orders/add-a-health-endpoint-to-the-go-server-and-a-te.yaml
+//	zot
 //
-//	# run a batch: each order is its own run, in sequence, stopping at the
-//	# first that fails
-//	zot orders/*.yaml
+//	# a bare zot runs the whole book, in filename order, skipping what the
+//	# ledger already records as done; naming orders runs exactly those
+//	zot .zot/orders/add-a-health-endpoint-to-the-go-server-and-a-te.yaml
 //
 //	# every run is logged; pick one up where it stopped
 //	zot sessions
@@ -25,12 +25,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -90,6 +93,11 @@ func run() error {
 	resume := pflag.String("resume", "", "continue an earlier session: an id, a path, or \"last\"")
 	sessionDir := pflag.String("session-dir", "", "where session logs are written (default: "+config.DefaultSessionDir()+")")
 	noSession := pflag.Bool("no-session", false, "do not record a session log for this run")
+	ordersFlag := pflag.String("orders-dir", "", "where this project's orders live, run by a bare `zot` (default: <dir>/"+order.BookDir+"/orders)")
+	watchFlag := pflag.Bool("watch", false, "stay up and run work orders as they arrive, instead of running once and exiting: bare --watch watches this project's orders directory, or name a folder or glob to watch instead")
+	recordsDir := pflag.String("records-dir", "", "where run records are written (default: <dir>/"+order.BookDir+"/records)")
+	rerun := pflag.Bool("rerun", false, "run orders even when the ledger already records a successful run of the same content")
+	fresh := pflag.Bool("fresh", false, "start orders from scratch even when an unfinished run of the same order exists")
 	showVersion := pflag.Bool("version", false, "print version and exit")
 	pflag.Usage = usage
 	pflag.Parse()
@@ -125,9 +133,41 @@ func run() error {
 		sessions = abs
 	}
 
+	// The ledger defaults to the book of the project being worked on, not the
+	// book beside whatever order file was named: an order may be read from
+	// anywhere, and its receipt belongs with the work, not with the brief.
+	// Resolved here for the same reason the session directory is.
+	records := *recordsDir
+	if records == "" {
+		records = order.RecordsDir(*dir)
+	}
+
+	if abs, err := filepath.Abs(records); err == nil {
+		records = abs
+	}
+
+	ledger := order.Ledger{Root: records}
+
+	// The other half of the book: where this project's own orders live. It is
+	// what a bare `zot` runs and what a bare `--watch` watches, so it is
+	// resolved here too - before the chdir, because a relative --orders-dir
+	// means what was typed.
+	ordersRoot := *ordersFlag
+	if ordersRoot == "" {
+		ordersRoot = order.OrdersDir(*dir)
+	}
+
+	if abs, err := filepath.Abs(ordersRoot); err == nil {
+		ordersRoot = abs
+	}
+
 	var resumed *session.Session
 
 	if *resume != "" {
+		if *watchFlag {
+			return fmt.Errorf("--watch runs orders as they arrive; --resume continues one specific session - use one, not both")
+		}
+
 		path, err := session.Resolve(sessions, *resume)
 		if err != nil {
 			return err
@@ -141,13 +181,46 @@ func run() error {
 		fmt.Fprintf(os.Stderr, "zot: resuming %s (%d messages)\n", resumed.Meta.ID, len(resumed.Messages))
 	}
 
-	// Orders are loaded - all of them, so a bad batch fails before any run
-	// starts - while the original working directory is still current, because
-	// their paths mean what the user typed, not what they happen to mean after
-	// the chdir below.
-	orders, err := resolveOrders(pflag.Args(), resumed != nil)
-	if err != nil {
-		return err
+	// The watch target is resolved like an order path: against the invoking
+	// directory, while it is still current, so `zot --dir proj --watch orders`
+	// watches the folder that was named rather than one that happens to exist
+	// inside proj. Orders themselves are loaded the same way, in the other half.
+	var (
+		watchTarget string
+		orders      []order.Order
+	)
+
+	if *watchFlag {
+		// A watch has one target, not a batch of them: it is a place work
+		// arrives at, and two places would interleave two streams of runs into
+		// one screen. Bare --watch watches this project's own orders.
+		if len(pflag.Args()) > 1 {
+			return fmt.Errorf(
+				"--watch takes one folder or glob to watch; %q names several",
+				strings.Join(pflag.Args(), " "))
+		}
+
+		watchTarget = ordersRoot
+
+		if len(pflag.Args()) == 1 {
+			target, err := filepath.Abs(pflag.Args()[0])
+			if err != nil {
+				return fmt.Errorf("resolve --watch %q: %w", pflag.Args()[0], err)
+			}
+
+			watchTarget = target
+		}
+	} else {
+		// Orders are loaded - all of them, so a bad batch fails before any run
+		// starts - while the original working directory is still current,
+		// because their paths mean what the user typed, not what they happen to
+		// mean after the chdir below.
+		loaded, err := resolveOrders(pflag.Args(), resumed != nil, ordersRoot)
+		if err != nil {
+			return err
+		}
+
+		orders = loaded
 	}
 
 	cfg, err := zot.Load(*configPath)
@@ -204,11 +277,29 @@ func run() error {
 	report := checkForUpdate()
 	defer report(os.Stderr)
 
+	// A signal cancels the run rather than killing the process outright, so the
+	// engine records its aborted outcome - and, mid-failure, dumps the exchange -
+	// before exiting. Without this a `kill` (or a supervisor stopping the
+	// process) left the session with no ending at all. SIGKILL is uncatchable;
+	// the incrementally-written conversation is the answer there.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// A resumed run inherits its objective from the session it continues; it is
 	// "keep going", never "start over".
 	if resumed != nil {
-		return zot.RunWith(context.Background(), cfg,
+		return zot.RunWith(ctx, cfg,
 			resumed.Meta.Task, zot.RunOptions{SessionDir: sessions, Resume: resumed})
+	}
+
+	// Watch mode: stay up and run every order the target yields, as it arrives.
+	// It shares the batch's per-order treatment (oneRun), so an order runs the
+	// same whether it was named on the command line or dropped into the folder
+	// after startup - and one failed order is one order's story, not the
+	// watch's.
+
+	if *watchFlag {
+		return startWatch(ctx, watchTarget, newWatchRunner(ctx, cfg, sessions, ledger, *rerun, *fresh))
 	}
 
 	// Each order is its own run: a fresh conversation, its own session log, its
@@ -216,14 +307,28 @@ func run() error {
 	// end in success, because later orders usually assume the earlier ones
 	// landed - running order three against the wreckage of order two produces
 	// confident garbage.
+	runs := oneRun{
+		ctx:      ctx,
+		cfg:      cfg,
+		sessions: sessions,
+		ledger:   ledger,
+		rerun:    *rerun,
+		fresh:    *fresh,
+		run:      zot.RunWith,
+	}
+
 	for i, o := range orders {
 		if len(orders) > 1 {
 			fmt.Fprintf(os.Stderr, "zot: order %d/%d: %s\n", i+1, len(orders), o.Path)
 		}
 
-		options := zot.RunOptions{SessionDir: sessions}
+		if err := runs.executeAt(o, i < len(orders)-1, i+1, len(orders)); err != nil {
+			// a deliberate stop - q or Ctrl-C - is the operator's decision,
+			// not an order failing; report it as what it is
+			if errors.Is(err, tui.ErrCancelled) {
+				return fmt.Errorf("batch stopped: %w", err)
+			}
 
-		if err := zot.RunWith(context.Background(), cfg, o.Task(), options); err != nil {
 			if len(orders) > 1 {
 				return fmt.Errorf("order %s stopped the batch: %w", o.Path, err)
 			}
@@ -235,9 +340,124 @@ func run() error {
 	return nil
 }
 
-// resolveOrders loads every order named on the command line, or explains why it
-// will not.
-func resolveOrders(args []string, resuming bool) ([]order.Order, error) {
+// oneRun is everything a single order's run needs. The batch loop and watch
+// mode both go through execute, so an order runs identically however it was
+// named: a fresh conversation, its own session log, its own recorded outcome.
+type oneRun struct {
+	ctx      context.Context
+	cfg      zot.Config
+	sessions string
+
+	// ledger is where the run's outcome is recorded and where doneness is read
+	// from. A zero Ledger records nothing and satisfies nothing.
+	ledger order.Ledger
+
+	// Doneness comes from the ledger, never from mutating the order; rerun and
+	// fresh carry the operator's overrides of that, as on the command line.
+	rerun bool
+	fresh bool
+
+	// run is the engine entry point - zot.RunWith everywhere in production,
+	// replaced by tests so no provider is ever reached.
+	run func(context.Context, zot.Config, string, zot.RunOptions) error
+}
+
+// execute runs one order as its own run and records how it ended.
+//
+// A satisfied order is skipped, so restarting a batch - or pointing a watch at
+// a folder whose work already happened - picks up where things left off instead
+// of re-executing finished work; editing the order changes its hash and
+// re-queues it. An unfinished run of this order continues automatically: the
+// order is the contract, and abandoning half its work because nobody typed
+// --resume wastes everything the earlier run learned. Only a run that concluded
+// - settled or declared failed - starts over; fresh forces a clean start.
+func (r oneRun) execute(o order.Order, quitOnDone bool) error {
+	return r.executeAt(o, quitOnDone, 0, 0)
+}
+
+// executeAt is execute with the order's position in a batch, which the viewer
+// shows as "order 2/5" so a long queue reports how much of itself is left.
+func (r oneRun) executeAt(o order.Order, quitOnDone bool, index, size int) error {
+	if record, done := r.ledger.Satisfied(o); done && !r.rerun {
+		fmt.Fprintf(os.Stderr,
+			"zot: order %s already satisfied by run %s (%s); edit the order or pass --rerun to run it again\n",
+			o.Path, record.Run, record.At.Format("2006-01-02 15:04"))
+
+		return nil
+	}
+
+	// An unfinished run continues automatically unless --fresh says otherwise;
+	// see execute's doc comment for why this is not opt-in.
+	var seed *session.Session
+
+	if !r.fresh && r.sessions != "" {
+		if unfinished, ok := unfinishedRunOf(r.sessions, o.Task()); ok {
+			seed = unfinished
+
+			fmt.Fprintf(os.Stderr,
+				"zot: continuing unfinished run %s of this order (--fresh to start over)\n",
+				seed.Meta.ID)
+		}
+	}
+
+	var runID, sessionPath string
+
+	options := zot.RunOptions{
+		SessionDir: r.sessions,
+		Resume:     seed,
+
+		// what a person calls this order: its own title, or its file name
+		Title: o.DisplayTitle(),
+
+		BatchIndex: index,
+		BatchSize:  size,
+
+		OnSession: func(path string) {
+			sessionPath = path
+			runID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		},
+
+		// intermediate orders auto-advance: a held final screen would stall the
+		// rest of the batch until a keypress nobody unattended will make. The
+		// last order holds for review as usual - watch mode holds none.
+		QuitOnDone: quitOnDone,
+	}
+
+	if err := r.run(r.ctx, r.cfg, o.Task(), options); err != nil {
+		return err
+	}
+
+	// a successful run enters the ledger; a failed or aborted one does not, so
+	// it runs again next time - failure is not doneness
+	if runID == "" {
+		runID = session.NewID(time.Now())
+	}
+
+	if err := r.ledger.Record(o, runID, "settled", time.Now(), r.evidenceOf(runID, sessionPath)); err != nil {
+		fmt.Fprintf(os.Stderr, "zot: could not record the outcome for %s: %v\n", o.Path, err)
+	}
+
+	return nil
+}
+
+// evidenceOf reads back what the run recorded about itself, so the receipt
+// carries proof rather than only a claim. The log the run just wrote is the
+// only honest source: anything reconstructed here would be zot vouching for
+// zot. A run with no log to read yields evidence that says so.
+func (r oneRun) evidenceOf(runID, sessionPath string) order.Evidence {
+	if sessionPath == "" {
+		return order.EvidenceFrom(runID, nil, nil)
+	}
+
+	loaded, err := session.Load(sessionPath)
+
+	return order.EvidenceFrom(runID, loaded, err)
+}
+
+// resolveOrders loads the orders this invocation is about: the ones named on
+// the command line, or - when none are - everything in the project's own orders
+// directory. It explains itself rather than failing silently either way.
+func resolveOrders(args []string, resuming bool, ordersRoot string) ([]order.Order, error) {
 	// A resume continues the order its session was started with. New orders
 	// belong to new runs - silently mixing the two would blur which outcome
 	// belongs to which order.
@@ -249,10 +469,20 @@ func resolveOrders(args []string, resuming bool) ([]order.Order, error) {
 		return nil, nil
 	}
 
+	// Nothing named: run the book. The ledger then decides what actually runs -
+	// a satisfied order is skipped - so a bare `zot` in a project means "carry
+	// out whatever work is still outstanding here", which is the shape of the
+	// whole tool in one word. Naming orders explicitly still works exactly as
+	// before, and still reads them from anywhere.
 	if len(args) == 0 {
-		usage()
+		found, err := listOrdersRoot(ordersRoot)
+		if err != nil {
+			return nil, err
+		}
 
-		return nil, fmt.Errorf("no order given (write one with `zot new \"the objective\"`)")
+		fmt.Fprintf(os.Stderr, "zot: running %d order(s) from %s\n", len(found), ordersRoot)
+
+		args = found
 	}
 
 	orders := make([]order.Order, 0, len(args))
@@ -270,19 +500,62 @@ func resolveOrders(args []string, resuming bool) ([]order.Order, error) {
 			return nil, err
 		}
 
+		// the run chdirs into --dir, so the order's path - and with it the
+		// ledger derived from that path - must survive the move
+		if abs, absErr := filepath.Abs(loaded.Path); absErr == nil {
+			loaded.Path = abs
+		}
+
 		orders = append(orders, loaded)
 	}
 
 	return orders, nil
 }
 
-// newOrder scaffolds a work order under ./orders and says how to run it.
+// listOrdersRoot lists the orders directory for a bare invocation, or explains
+// what to do instead. An empty book is not an error state to decode - it is
+// someone who has not written an order yet.
+func listOrdersRoot(ordersRoot string) ([]string, error) {
+	var found []string
+
+	if ordersRoot != "" {
+		var err error
+
+		if found, err = order.List(ordersRoot); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(found) == 0 {
+		usage()
+
+		where := "no orders directory is configured"
+		if ordersRoot != "" {
+			where = ordersRoot + " holds none"
+		}
+
+		return nil, fmt.Errorf("no order given, and %s (write one with `zot new \"the objective\"`)", where)
+	}
+
+	return found, nil
+}
+
+// newOrder scaffolds a work order under ./.zot/orders - or under
+// <dir>/.zot/orders when --dir names another working directory - and says how
+// to run it.
 //
 // Three levels of help, all landing in the same reviewable file: bare `zot new`
 // writes the blank form, `zot new "objective"` fills the objective in, and
 // `zot new --draft "objective"` additionally has the configured model propose
 // the acceptance criteria and constraints. The model only ever drafts - the
 // operator's edit is what makes the criteria a contract.
+//
+// --dir exists because the order is written for a project the invoker may not
+// be standing in: `zot new --dir ~/work/api ...` run from anywhere scaffolds
+// into that project and surveys that project, leaving the invoking directory
+// untouched. --orders-dir files the order somewhere else again - a shared
+// folder of briefs, a drop box a watcher is pointed at - while --dir still says
+// which project it is for.
 func newOrder(args []string, out io.Writer) error {
 	set := pflag.NewFlagSet("new", pflag.ContinueOnError)
 
@@ -290,12 +563,35 @@ func newOrder(args []string, out io.Writer) error {
 	configPath := set.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
 	providerFlag := set.String("provider", "", "provider for --draft (default: the configured one)")
 	modelFlag := set.String("model", "", "model for --draft (default: the configured one)")
+	dir := set.String("dir", ".", "working directory the order is for: the scaffold lands under <dir>/"+order.BookDir+"/orders and a --draft survey reads there")
+	ordersFlag := set.String("orders-dir", "", "where to write the order (default: <dir>/"+order.BookDir+"/orders)")
 
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 
 	objective := strings.TrimSpace(strings.Join(set.Args(), " "))
+
+	// A provider or model without --draft would be silently ignored - and the
+	// operator who typed them almost certainly expected the drafting survey to
+	// start. Refuse and say the missing word rather than scaffold something
+	// other than what was asked for.
+	if !*draft && (*providerFlag != "" || *modelFlag != "") {
+		return fmt.Errorf("--provider and --model configure the drafting survey; add --draft to run one")
+	}
+
+	// The command is anchored at --dir: the scaffold lands in that project's
+	// book, and a drafting survey reads the tree it drafts for. --orders-dir
+	// separates the two, because where an order is filed and which project it
+	// is about are different questions - a shared folder of briefs is written
+	// from many projects, and a survey must still read the one being drafted
+	// for. A relative path means what was typed here, in the invoking
+	// directory, so it is joined before any chdir below - and the "then run:"
+	// hint is a path that resolves from where the command was invoked.
+	ordersDir := *ordersFlag
+	if ordersDir == "" {
+		ordersDir = order.OrdersDir(*dir)
+	}
 
 	o := order.Order{Objective: objective}
 
@@ -331,18 +627,43 @@ func newOrder(args []string, out io.Writer) error {
 			return err
 		}
 
-		o, err = draftOrder(context.Background(), cfg, client, objective)
+		// The survey reads the tree the order is about, so it runs with the
+		// working directory set to --dir - exactly where a real run of the
+		// finished order will work.
+		restore, err := chdirInto(*dir)
 		if err != nil {
-			// a failed draft writes nothing: the operator asked for a drafted
-			// order, and silently handing back the plain scaffold would hide
-			// that they did not get one
-			return fmt.Errorf("%w (or scaffold without --draft and write the criteria yourself)", err)
+			return err
 		}
+
+		drafted, draftErr := draftOrder(context.Background(), cfg, client, objective)
+
+		restore()
+
+		// A failed draft must not cost the operator what they typed. Drafting
+		// is the optional half - the objective is the part only they can write,
+		// and discarding it because a provider fell over loses the one thing
+		// that was not recoverable. So the plain scaffold is written anyway and
+		// the failure is reported loudly: the danger was ever handing it back
+		// *silently*, as though the criteria had been drafted.
+		if draftErr != nil {
+			path, scaffoldErr := order.Scaffold(ordersDir, o)
+			if scaffoldErr != nil {
+				return fmt.Errorf("%w (and the objective could not be scaffolded either: %v)", draftErr, scaffoldErr)
+			}
+
+			fmt.Fprintf(out, "wrote %s\n", path)
+
+			return fmt.Errorf(
+				"%w - the objective was scaffolded to %s without criteria; edit them in, or retry with --draft",
+				draftErr, path)
+		}
+
+		o = drafted
 
 		edit = "review its drafted acceptance criteria"
 	}
 
-	path, err := order.Scaffold("orders", o)
+	path, err := order.Scaffold(ordersDir, o)
 	if err != nil {
 		return err
 	}
@@ -350,6 +671,23 @@ func newOrder(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "wrote %s\n%s, then run:\n\n  zot %s\n", path, edit, path)
 
 	return nil
+}
+
+// chdirInto enters dir - as a real run would - and returns the function that
+// puts the process back where it was. Callers scaffold from paths joined
+// against the invoking directory, so the restore has to happen before that,
+// error paths included.
+func chdirInto(dir string) (func(), error) {
+	previous, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.Chdir(dir); err != nil {
+		return nil, fmt.Errorf("cannot enter --dir %q: %w", dir, err)
+	}
+
+	return func() { _ = os.Chdir(previous) }, nil
 }
 
 // draftOrder runs the draft as what it is: a small autonomous run through the
@@ -367,7 +705,7 @@ func draftOrder(ctx context.Context, cfg zot.Config, client *agent.Client, objec
 	opts := agent.ExecuteWithToolsOptions{
 		Instructions:  order.DraftInstructions(objective),
 		Text:          []string{"Survey the working directory, then record the draft."},
-		Tools:         draftTools(),
+		Tools:         draftTools(cfg.Agent.MaxToolOutput),
 		MaxIterations: draftMaxIterations,
 		MaxDuration:   3 * time.Minute,
 		// a draft is a convenience, not a run of record: fail fast rather than
@@ -410,11 +748,13 @@ const draftMaxIterations = 25
 
 // draftTools is the read-only subset of the default toolbox. A draft surveys
 // the tree; a survey that can edit files or run commands is not a survey.
-func draftTools() agent.Tools {
+func draftTools(maxOutput int) agent.Tools {
 	tools := agent.Tools{}
 
+	full := agent.DefaultToolsWith(maxOutput)
+
 	for _, name := range []string{"read", "list"} {
-		tools[name] = agent.DefaultTools()[name]
+		tools[name] = full[name]
 	}
 
 	return tools
@@ -619,13 +959,13 @@ func clearModelIterations(cfg *zot.Config) {
 	if !ok {
 		return
 	}
-
 	model.MaxIterations = 0
 
 	provider.Models[cfg.Agent.Model] = model
 }
 
 func firstNonEmpty(values ...string) string {
+
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
 			return v
@@ -642,28 +982,91 @@ durable objective, the acceptance criteria that define "done", and the
 constraints the work must hold to. Each order is one autonomous run.
 
 Usage:
-  zot [flags] <order.yaml> ...
-  zot new [--draft] ["the objective"]
+  zot [flags] [<order.yaml> ...]
+  zot new [--draft] [--dir <dir>] [--orders-dir <dir>] ["the objective"]
   zot config
   zot sessions
+  zot --watch [<folder-or-glob>]
 
 Examples:
+  zot
   zot new "add input validation to the signup handler and a test"
   zot new --draft "add rate limiting to the API"
-  zot orders/add-input-validation-to-the-signup-handler-and.yaml
-  zot --dir ./scratch orders/*.yaml
+  zot new --dir ~/work/api "fix the flaky test"
+  zot new --orders-dir ~/briefs "fix the flaky test"
+  zot .zot/orders/add-input-validation-to-the-signup-handler-and.yaml
+  zot --dir ./scratch .zot/orders/*.yaml
   zot --resume last
 
+The book: a project keeps its orders and the record of what has been run from
+them under .zot in its root - .zot/orders/<slug>.yaml written by zot new, and
+.zot/records/<slug>/<run>.yaml written by a successful run. Bare zot runs
+that book: every order in it, in filename order, with the ledger deciding which
+are still outstanding - so writing an order and typing zot is the whole loop.
+Naming order files instead runs exactly those, read from any path in any tree;
+running an order needs no book at all.
+
+Both halves of the book are yours to move: --orders-dir is where zot new files
+an order and where a bare zot looks for work, --records-dir is where the ledger
+is written. The ledger defaults to <dir>/.zot/records - the book of the project
+being worked on, not one beside whatever order file was named, because the
+receipt belongs with the work rather than with the brief.
+
 A batch runs each order as its own run, in sequence, and stops at the first
-order that does not end in success.
+order that does not end in success. A successful run enters the ledger, and a
+satisfied order is skipped on the next invocation - editing the order re-queues
+it, --rerun forces it. An order whose last run did not conclude is continued
+automatically; --fresh starts it from scratch instead.
+
+Watch mode keeps zot up and runs work as it arrives instead of exiting when the
+batch ends. Bare zot --watch watches the orders directory; name a folder
+(zot --watch ~/inbox) or a glob (zot --watch "~/inbox/*.yaml") to watch that
+instead. Every *.yaml that shows up - including orders already sitting there -
+runs as its own run, one at a time. The ledger applies, so an order that already
+ran is skipped; a failed order is reported and the watch goes on; Ctrl-C stops
+watching.
 
 Commands:
-  new        scaffold a work order under ./orders - bare for the blank form,
-             with an objective to fill it in, --draft to have the configured
-             model propose the acceptance criteria for your review
+  new        scaffold a work order under ./.zot/orders - under <dir>/.zot/orders
+             with --dir, or anywhere with --orders-dir. Bare for the blank
+             form, with an objective to fill it in, --draft to have the
+             configured model propose the acceptance criteria for your review
+             (surveying --dir, when given)
   config     edit the config file in $EDITOR (creates it on first run)
   sessions   list previous runs, newest first
 
 Flags:`)
 	pflag.PrintDefaults()
+}
+
+// unfinishedRunOf finds the newest session of this exact order that did not
+// conclude - no recorded outcome (killed, crashed), or an interruption
+// (aborted, a guard stop, a provider error). A settled run is done and a
+// declared failure is a conclusion; neither is resumed.
+func unfinishedRunOf(dir, task string) (*session.Session, bool) {
+	entries, err := session.List(dir)
+	if err != nil {
+		return nil, false
+	}
+
+	// newest first: only the most recent run of the order counts - older
+	// unfinished runs were superseded by whatever came after them
+	for _, entry := range entries {
+		if entry.Task != task {
+			continue
+		}
+
+		if entry.Complete && (entry.Reason == "settled" || entry.Reason == "failed") {
+			return nil, false
+		}
+
+		resumed, err := session.Load(entry.Path)
+		if err != nil {
+			return nil, false
+		}
+
+		return resumed, true
+	}
+
+	return nil, false
 }

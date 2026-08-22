@@ -31,12 +31,14 @@ func (r *Recorder) RecordMessage(message agent.Message) error {
 
 	if activity := message.Activity; activity != nil {
 		entry.Activity = &Activity{
-			Kind:      string(activity.Kind),
-			ID:        activity.ID,
-			Name:      activity.Name,
-			Arguments: activity.Arguments,
-			Result:    activity.Result,
-			Failure:   activity.Failure,
+			Kind:             string(activity.Kind),
+			ID:               activity.ID,
+			Name:             activity.Name,
+			Arguments:        activity.Arguments,
+			Result:           activity.Result,
+			Failure:          activity.Failure,
+			ReasoningItems:   activity.ReasoningItems,
+			ReasoningDetails: activity.ReasoningDetails,
 		}
 	}
 
@@ -61,6 +63,19 @@ func (r *Recorder) RecordEvent(kind, tool, text string, iteration int) error {
 	return r.writer.Event(Event{Kind: kind, Tool: tool, Text: text, Iteration: iteration})
 }
 
+// RecordFailure writes the failing exchange to disk immediately, so a run
+// killed mid-retry still leaves it behind. Dev-gated, like the end-of-run
+// dump: the request body is the whole prompt.
+func (r *Recorder) RecordFailure(failure *agent.Failure) error {
+	if r == nil || r.writer == nil {
+		return nil
+	}
+
+	r.dumpFailure(failure)
+
+	return nil
+}
+
 // RecordReset discards the messages recorded so far.
 func (r *Recorder) RecordReset() error {
 	if r == nil || r.writer == nil {
@@ -76,9 +91,29 @@ func (r *Recorder) RecordResult(summary agent.Summary) error {
 		return nil
 	}
 
+	var failure *Failure
+
+	if summary.Failure != nil {
+		failure = &Failure{
+			Status:       summary.Failure.Status,
+			ResponseBody: summary.Failure.ResponseBody,
+			RequestBytes: summary.Failure.RequestBytes,
+		}
+
+		// A developer build dumps the exact refused exchange next to the
+		// session log - the one artifact that makes an opaque upstream 400
+		// diagnosable. Gated on the build, like .env loading: the request body
+		// is the whole prompt, not something a released binary should spill to
+		// disk beside every failed run. The session record keeps only the
+		// bounded response; the full request lives solely in the dump.
+		r.dumpFailure(summary.Failure)
+	}
+
 	return r.writer.Result(Result{
 		Reason:        summary.Reason,
 		Message:       summary.Message,
+		Error:         summary.Error,
+		Failure:       failure,
 		Code:          summary.Code,
 		Iterations:    summary.Iterations,
 		Calls:         summary.Calls,
@@ -98,12 +133,14 @@ func (s *Session) AgentMessages() []agent.Message {
 
 		if activity := message.Activity; activity != nil {
 			entry.Activity = &agent.Activity{
-				Kind:      agent.ActivityKind(activity.Kind),
-				ID:        activity.ID,
-				Name:      activity.Name,
-				Arguments: activity.Arguments,
-				Result:    activity.Result,
-				Failure:   activity.Failure,
+				Kind:             agent.ActivityKind(activity.Kind),
+				ID:               activity.ID,
+				Name:             activity.Name,
+				Arguments:        activity.Arguments,
+				Result:           activity.Result,
+				Failure:          activity.Failure,
+				ReasoningItems:   activity.ReasoningItems,
+				ReasoningDetails: activity.ReasoningDetails,
 			}
 		}
 

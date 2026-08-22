@@ -276,6 +276,7 @@ providers:
         model: gpt-5
         max_iterations: 50
         api_key: $OPENAI_API_KEY
+        context: 32000
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -290,6 +291,11 @@ providers:
 	}
 	if opts.MaxIterations != 50 {
 		t.Errorf("max iterations = %d, want 50 (from custom model)", opts.MaxIterations)
+	}
+
+	// the operator declared the endpoint's real window; the run must budget to it
+	if opts.ContextWindow != 32000 {
+		t.Errorf("context window = %d, want the per-model override", opts.ContextWindow)
 	}
 }
 
@@ -824,6 +830,148 @@ func TestDefaultInstructionsNamesOnlyRealTools(t *testing.T) {
 	}
 }
 
+// zot has no input channel: no stdin, no chat turn, no approval prompt - a run
+// is a work order, a provider and a read-only viewer. An agent that does not
+// know that asks a question and waits, and waiting is fatal in a way no other
+// prompt mistake is: nothing answers, the run burns its budget until a guard
+// kills it, and the work it never wrote is lost. These pin the directives that
+// prevent it. A prompt cannot be tested against a model here, so the patterns
+// are deliberately loose - they assert the directive survives a rewrite of the
+// wording, not the wording itself.
+var nonInteractiveDirectives = []struct {
+	need    string
+	pattern *regexp.Regexp
+}{
+	{"say the run is non-interactive", regexp.MustCompile(`(?i)non-interactive`)},
+	{"say nothing reaches the user", regexp.MustCompile(`(?i)nothing you address to the user is delivered|no reader|will never be seen|no one is watching`)},
+	{"forbid waiting for input", regexp.MustCompile(`(?i)never stop to wait|do not (stop and )?wait|NO further input`)},
+	{"name approval and confirmation as things not to wait for", regexp.MustCompile(`(?i)approval, permission or confirmation|approval|confirmation`)},
+	{"forbid ending a turn with a question", regexp.MustCompile(`(?i)never end your turn with a question|do not ask`)},
+	{"require deciding and recording the assumption instead", regexp.MustCompile(`(?i)assumption`)},
+	{"require a terminal tool call to end the task", regexp.MustCompile(`(?i)"success".*\n?.*"failure"|"failure"`)},
+	{"forbid simply stopping", regexp.MustCompile(`(?i)do not simply stop`)},
+}
+
+// assertNonInteractive checks that every directive above is present in what the
+// engine would send.
+func assertNonInteractive(t *testing.T, where, instructions string) {
+	t.Helper()
+
+	for _, directive := range nonInteractiveDirectives {
+		if !directive.pattern.MatchString(instructions) {
+			t.Errorf("%s does not %s:\n%s", where, directive.need, instructions)
+		}
+	}
+}
+
+// The built-in prompt carries the contract.
+func TestDefaultInstructionsForbidWaitingForTheUser(t *testing.T) {
+	assertNonInteractive(t, "DefaultInstructions", DefaultInstructions)
+
+	if n := strings.Count(DefaultInstructions, contractHeading); n != 1 {
+		t.Errorf("the contract appears %d times in the default prompt, want once", n)
+	}
+}
+
+// contractHeading is how the contract is spotted in an assembled prompt.
+const contractHeading = "## Non-interactive contract"
+
+// Overriding the instructions replaces zot's prompt - that is what an override
+// is for - but it cannot hand the agent an interactivity the run does not have.
+// A custom prompt that forgot to say "never wait" would otherwise produce runs
+// that hang on a question nobody can answer, and the operator would have no way
+// to tell that from a slow model.
+func TestCustomInstructionsKeepTheNonInteractiveContract(t *testing.T) {
+	cfg, err := Load(writeCfg(t, `
+agent:
+  model: test-model
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: http://127.0.0.1:1
+    api_key: test-key
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	cfg.Agent.Instructions = "You are a haiku bot. Write only haiku.\n"
+
+	_, opts, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	// the override really did replace the built-in prompt...
+	if !strings.Contains(opts.Instructions, "haiku bot") {
+		t.Errorf("the custom instructions were not used:\n%s", opts.Instructions)
+	}
+
+	if strings.Contains(opts.Instructions, "Your tools:") {
+		t.Error("an override should replace the built-in prompt, not be appended to it")
+	}
+
+	// ...and the contract came along anyway
+	assertNonInteractive(t, "custom instructions", opts.Instructions)
+}
+
+// The contract must not pile up. The default prompt already carries it, and so
+// does a default prompt that LoadProjectContext extended with an AGENT.md;
+// re-attaching it there would spend context repeating the same paragraph.
+func TestResolvedInstructionsCarryTheContractExactlyOnce(t *testing.T) {
+	configPath := writeCfg(t, `
+agent:
+  model: test-model
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: http://127.0.0.1:1
+    api_key: test-key
+`)
+
+	project := t.TempDir()
+
+	mustWrite(t, filepath.Join(project, "AGENT.md"), "PROJECT CONVENTIONS")
+
+	for _, test := range []struct {
+		name    string
+		prepare func(*Config)
+	}{
+		{"the built-in prompt", func(*Config) {}},
+		{"the built-in prompt plus AGENT.md", func(cfg *Config) {
+			if err := LoadProjectContext(cfg, project); err != nil {
+				t.Fatalf("LoadProjectContext: %v", err)
+			}
+		}},
+		{"a custom prompt", func(cfg *Config) { cfg.Agent.Instructions = "Do the thing." }},
+		{"a custom prompt that already quotes the contract", func(cfg *Config) {
+			cfg.Agent.Instructions = "Do the thing.\n\n" + nonInteractiveContract
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			test.prepare(&cfg)
+
+			_, opts, err := resolve(cfg, DefaultInstructions)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+
+			assertNonInteractive(t, test.name, opts.Instructions)
+
+			if n := strings.Count(opts.Instructions, contractHeading); n != 1 {
+				t.Errorf("the contract appears %d times, want once:\n%s", n, opts.Instructions)
+			}
+		})
+	}
+}
+
 // The settle and call budgets are configurable, and the config values have to
 // actually reach the run - otherwise the knob in the example config is a lie.
 // max_settles is the one the operator most wants: how hard zot pushes the model
@@ -871,5 +1019,20 @@ func TestRunBudgetsComeFromConfig(t *testing.T) {
 
 	if opts.MaxSettles != 0 {
 		t.Errorf("MaxSettles = %d, want 0 (the sentinel for 'use the default')", opts.MaxSettles)
+	}
+}
+
+// A single order must hold its final screen for review: QuitOnDone defaults
+// off, and only the batch loop switches it on for intermediate orders.
+func TestQuitOnDoneDefaultsOff(t *testing.T) {
+	cfg := stubProvider(t)
+
+	_, opts, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if viewerMeta(cfg, "task", "/w", opts).QuitOnDone {
+		t.Fatal("QuitOnDone must default off - a single order holds its screen for review")
 	}
 }

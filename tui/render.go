@@ -297,3 +297,69 @@ func pad(s string, n int) string {
 	}
 	return s
 }
+
+// shortPath fits a directory into max columns from the right, because the
+// informative end of a path is the last segment, not the first.
+//
+// truncate keeps the head, which for /workspaces/monorepo-zot/repos/zot/tool
+// yields "/workspaces/monorepo-zot/repos/z…" - every character spent on the
+// part shared by every project on the machine, and the one word naming this one
+// cut off. This drops whole leading segments instead and marks the cut with a
+// leading "…/", so the same path reads "…/repos/zot/tool".
+//
+// Segments are kept whole: half a directory name is not a directory name, and a
+// path is read by recognising its parts. Only when the final segment alone will
+// not fit is it cut, and then from the left, so the end of the name survives.
+func shortPath(path string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+
+	path = strings.ReplaceAll(path, "\n", " ")
+
+	if utf8.RuneCountInString(path) <= max {
+		return path
+	}
+
+	separator := "/"
+	if !strings.Contains(path, "/") && strings.Contains(path, `\`) {
+		separator = `\`
+	}
+
+	segments := strings.Split(strings.TrimRight(path, separator), separator)
+
+	// grow from the right while the whole thing, plus the "…/" marker, fits
+	kept := ""
+
+	for i := len(segments) - 1; i >= 0; i-- {
+		if segments[i] == "" {
+			continue
+		}
+
+		candidate := segments[i]
+		if kept != "" {
+			candidate += separator + kept
+		}
+
+		if utf8.RuneCountInString(candidate)+2 > max {
+			break
+		}
+
+		kept = candidate
+	}
+
+	// not even the last segment fits whole: cut it from the left, keeping the
+	// end of the name, which is where a project's identity usually lives
+	if kept == "" {
+		last := segments[len(segments)-1]
+		runes := []rune(last)
+
+		if len(runes) > max-1 {
+			runes = runes[len(runes)-(max-1):]
+		}
+
+		return "…" + string(runes)
+	}
+
+	return "…" + separator + kept
+}

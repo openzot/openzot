@@ -99,6 +99,11 @@ type chunk struct {
 			ReasoningContent string `json:"reasoning_content"`
 			Reasoning        string `json:"reasoning"`
 
+			// ReasoningDetails are the gateway's structured reasoning blocks,
+			// streamed as fragments and reassembled for replay - see
+			// detailAssembler.
+			ReasoningDetails []json.RawMessage `json:"reasoning_details"`
+
 			ToolCalls []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -122,6 +127,73 @@ type chunk struct {
 	} `json:"error"`
 }
 
+// detailAssembler reassembles streamed reasoning_details fragments into the
+// array the follow-up request must replay.
+//
+// A text detail streams as many fragments sharing an index; the replay wants
+// one block with the whole text (and the signature, which arrives on a late
+// fragment). Everything else - encrypted or summary blocks - passes through
+// verbatim, because the sequence "cannot be rearranged or modified" and zot
+// has no business looking inside it.
+type detailAssembler struct {
+	blocks []map[string]any
+	byKey  map[string]int
+}
+
+func (a *detailAssembler) add(fragments []json.RawMessage) {
+	for _, fragment := range fragments {
+		var block map[string]any
+
+		if err := json.Unmarshal(fragment, &block); err != nil {
+			continue
+		}
+
+		kind, _ := block["type"].(string)
+
+		key := fmt.Sprintf("%v/%v", kind, block["index"])
+
+		if a.byKey == nil {
+			a.byKey = map[string]int{}
+		}
+
+		at, seen := a.byKey[key]
+
+		if kind == "reasoning.text" && seen {
+			existing := a.blocks[at]
+
+			text, _ := existing["text"].(string)
+			more, _ := block["text"].(string)
+			existing["text"] = text + more
+
+			// the signature and id tend to arrive on a late fragment
+			for _, field := range []string{"signature", "id", "format"} {
+				if value, ok := block[field]; ok && value != nil {
+					existing[field] = value
+				}
+			}
+
+			continue
+		}
+
+		a.byKey[key] = len(a.blocks)
+		a.blocks = append(a.blocks, block)
+	}
+}
+
+// raw renders the assembled array, or nil when the turn carried no details.
+func (a *detailAssembler) raw() json.RawMessage {
+	if len(a.blocks) == 0 {
+		return nil
+	}
+
+	data, err := json.Marshal(a.blocks)
+	if err != nil {
+		return nil
+	}
+
+	return data
+}
+
 // consumeSSE parses the event stream and assembles tool calls.
 //
 // Tool calls arrive fragmented and interleaved: the name in one chunk, the
@@ -136,6 +208,8 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	assembling := map[int]*ToolCall{}
+
+	var details detailAssembler
 
 	var order []int
 
@@ -199,6 +273,8 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 				}
 			}
 
+			details.add(choice.Delta.ReasoningDetails)
+
 			// providers disagree on the reasoning field name
 			if reasoning := choice.Delta.ReasoningContent; reasoning != "" {
 				if !send(ctx, events, Event{ReasoningToken: reasoning}) {
@@ -246,7 +322,7 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 		return errTruncatedStream
 	}
 
-	final := Event{FinishReason: finishReason, Usage: usage}
+	final := Event{FinishReason: finishReason, Usage: usage, ReasoningDetails: details.raw()}
 
 	for _, index := range order {
 		final.ToolCalls = append(final.ToolCalls, *assembling[index])

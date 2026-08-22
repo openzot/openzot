@@ -26,7 +26,9 @@ type (
 // All the autonomy lives in agent.ExecuteWithTools - it loops the model through
 // plan/act/observe/exit on its own. runAgent is a pure pump: SDK event in,
 // tea.Msg out.
-func runAgent(ctx context.Context, p *tea.Program, client *agent.Client, opts agent.ExecuteWithToolsOptions) {
+func runAgent(ctx context.Context, p *tea.Program, client *agent.Client, opts agent.ExecuteWithToolsOptions, done chan<- struct{}) {
+	defer close(done)
+
 	events, errs := agent.ExecuteWithTools(ctx, client, opts)
 
 	for ev := range events {

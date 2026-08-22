@@ -493,3 +493,46 @@ func TestRunReturnsTheRecordedOutcome(t *testing.T) {
 		t.Errorf("Message = %q, want the success summary verbatim", outcome.Message)
 	}
 }
+
+// Plain mode names the run the same way the viewer does: the title when there
+// is one, the task otherwise. A CI log scrolling past is exactly where a
+// paragraph-long header is least wanted.
+func TestPlainHeaderPrefersTheTitle(t *testing.T) {
+	task := "add rate limiting to the api\n\nAcceptance criteria - the objective is not met until every one of these holds:\n1. the suite passes"
+
+	tests := []struct {
+		name   string
+		title  string
+		want   string
+		unwant string
+	}{
+		{name: "a titled run", title: "Rate limiting", want: "Rate limiting", unwant: "Acceptance criteria"},
+		{name: "an untitled run", title: "", want: "add rate limiting to the api"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := plainServer(t, []string{plainToken("working"), plainStop()})
+
+			// how the run ends is not what this is about - the header is
+			// printed before the first token either way
+			output, _ := capture(t, func() error {
+				_ = runPlainErr(context.Background(), client,
+					Meta{Task: task, Title: test.title, Model: "m", Provider: "b", Workdir: "/w", Plain: true},
+					agent.ExecuteWithToolsOptions{MaxSettles: 1})
+
+				return nil
+			})
+
+			header := strings.SplitN(output, "\n", 2)[0]
+
+			if !strings.Contains(header, test.want) {
+				t.Errorf("header = %q, want it to name %q", header, test.want)
+			}
+
+			if test.unwant != "" && strings.Contains(header, test.unwant) {
+				t.Errorf("header = %q, want the task text to give way to the title", header)
+			}
+		})
+	}
+}

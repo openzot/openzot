@@ -131,3 +131,67 @@ func TestDraftInstructions(t *testing.T) {
 		}
 	}
 }
+
+// The survey can name the order as well as define it: a title is a label a
+// person scanning a list of orders reads, and the model that just surveyed the
+// tree is well placed to propose one.
+func TestParseDraftReadsATitle(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply string
+		want  string
+	}{
+		{
+			name:  "a proposed title is read",
+			reply: "title: Rate limiting\nacceptance:\n- the suite passes\n",
+			want:  "Rate limiting",
+		},
+		{
+			name:  "however the model cases the heading",
+			reply: "Title: Rate limiting\nacceptance:\n- the suite passes\n",
+			want:  "Rate limiting",
+		},
+		{
+			name:  "quoted, as a model told about verbatim lines may do",
+			reply: "title: \"Rate limiting\"\nacceptance:\n- the suite passes\n",
+			want:  "Rate limiting",
+		},
+		{
+			name:  "a draft without one is still a good draft",
+			reply: "acceptance:\n- the suite passes\n",
+			want:  "",
+		},
+		{
+			name:  "a criterion that merely mentions a title is not one",
+			reply: "acceptance:\n- title: is shown in the viewer\n- the suite passes\n",
+			want:  "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			drafted, err := ParseDraft("add rate limiting", test.reply)
+			if err != nil {
+				t.Fatalf("ParseDraft: %v", err)
+			}
+
+			if drafted.Title != test.want {
+				t.Errorf("Title = %q, want %q", drafted.Title, test.want)
+			}
+
+			// the draft is still the draft whatever the title did
+			if len(drafted.Acceptance) == 0 {
+				t.Error("the acceptance criteria must survive title parsing")
+			}
+		})
+	}
+}
+
+// The survey has to be asked for a title, or it will not propose one.
+func TestDraftInstructionsAskForATitle(t *testing.T) {
+	instructions := DraftInstructions("add rate limiting")
+
+	if !strings.Contains(instructions, "title:") {
+		t.Errorf("the drafting prompt does not ask for a title:\n%s", instructions)
+	}
+}

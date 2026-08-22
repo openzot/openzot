@@ -23,6 +23,18 @@ type Meta struct {
 	AppName string
 	// Task is the one-line instruction the agent is working on.
 	Task string
+
+	// BatchIndex and BatchSize place this run in a batch - order 2 of 5 - for
+	// the "order" stat. Zero means the run is not part of one, and the stat
+	// shows nothing rather than a fraction of one.
+	BatchIndex int
+	BatchSize  int
+
+	// Title is an optional short label for the work - a work order's title, or
+	// one derived from its file name. When set it is shown instead of the task
+	// text, which is the whole order rendered to prose and reads as a truncated
+	// paragraph in a one-line header. Empty falls back to Task.
+	Title string
 	// Model is the model name driving the agent.
 	Model string
 	// Provider is the name of the model provider the run targets.
@@ -98,6 +110,9 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 	}
 
 	m := newModel(meta.AppName, meta.Task, meta.Model, meta.Provider, meta.Workdir, meta.ShowDiff)
+	m.title = meta.Title
+	m.batchIndex = meta.BatchIndex
+	m.batchSize = meta.BatchSize
 	if meta.MaxScrollback > 0 {
 		m.maxEntries = meta.MaxScrollback
 	}
@@ -113,12 +128,15 @@ func Run(ctx context.Context, client *agent.Client, meta Meta, opts agent.Execut
 // runViewer owns the viewer's lifetime: it starts the agent, hands the program
 // to start, and shuts the agent down once start returns. start is a seam for
 // tests, which cannot open a terminal - Run passes (*tea.Program).Run.
+// programOptions is a seam for tests, which cannot open a terminal and need a
+// headless program that still consumes messages.
 func runViewer(
 	ctx context.Context,
 	m model,
 	client *agent.Client,
 	opts agent.ExecuteWithToolsOptions,
 	start func(*tea.Program) (tea.Model, error),
+	programOptions ...tea.ProgramOption,
 ) (Outcome, error) {
 	// Quitting the viewer stops the agent rather than merely stopping watching
 	// it. The agent has shell and file-write access, so an embedding process
@@ -127,11 +145,28 @@ func runViewer(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, append([]tea.ProgramOption{tea.WithAltScreen()}, programOptions...)...)
 
-	go runAgent(ctx, p, client, opts)
+	done := make(chan struct{})
+
+	go runAgent(ctx, p, client, opts, done)
 
 	final, err := start(p)
+
+	// The agent must conclude before this returns: quitting cancels the run,
+	// and the engine then records its aborted outcome into the session - but
+	// the caller closes the session writer as soon as this function returns,
+	// so returning immediately raced the abort record out of the log and left
+	// the session with no outcome at all. Cancel explicitly, then give the
+	// engine a bounded moment to write its ending; the timeout only exists so
+	// a pathologically hung engine cannot hold the terminal hostage.
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+	}
+
 	if err != nil {
 		return Outcome{}, err
 	}

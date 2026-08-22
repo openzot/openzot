@@ -51,7 +51,15 @@ type Config = config.Config
 // the engine zot was derived from: a run is a non-interactive background session
 // whose deliverable is the changed working tree, not prose, and which ends only
 // by recording an outcome with a terminal tool.
-const DefaultInstructions = `You are zot, a fully autonomous software engineering agent operating inside a real working directory on the user's machine.
+//
+// It is assembled rather than written out because its closing half is not the
+// caller's to drop - see nonInteractiveContract.
+const DefaultInstructions = baseInstructions + "\n\n" + nonInteractiveContract
+
+// baseInstructions is the overridable half: who the agent is, what it can call,
+// and how it is expected to work. A configuration that sets its own
+// instructions replaces this and nothing else.
+const baseInstructions = `You are zot, a fully autonomous software engineering agent operating inside a real working directory on the user's machine.
 
 This is a non-interactive session running in the background. No one is watching, and no questions or further guidance can be answered - you will receive NO further input. Complete the assigned task end to end on your own, using your tools.
 
@@ -66,9 +74,28 @@ Operating rules:
 - Begin by calling "plan" to lay out concrete, ordered steps.
 - Read before you write. After you change anything, build and run the tests, and fix what you broke.
 - Call "progress" as you complete steps.
-- Act, do not narrate. The deliverable is the changed working tree, not an explanation of it; there is no reader to address. Do not pause to summarise, interpret, or analyse tool output - keep working, and use "progress" for status.
-- Make reasonable assumptions instead of stopping. Do not ask for clarification.
-- The task is not finished until you record an outcome: call "success" with a summary when the objective is met, or "failure" with the reason when it genuinely cannot be. Do not simply stop.`
+- Act, do not narrate. The deliverable is the changed working tree, not an explanation of it; there is no reader to address. Do not pause to summarise, interpret, or analyse tool output - keep working, and use "progress" for status.`
+
+// nonInteractiveContract is the half no configuration may leave out. Every
+// other prompt rule is a preference; this one is a fact about the machine the
+// agent is running on. zot has no input channel at all - a run is a work order,
+// a provider and a read-only viewer - so an agent that asks a question is not
+// answered tersely, it is not answered at all: it waits until a guard kills the
+// run, and everything it had not yet written is lost. That failure is silent
+// and expensive, and it costs a whole run to discover, so the contract is
+// re-attached to whatever instructions a run resolves to rather than left to
+// whoever wrote them.
+//
+// It is written to stand alone, naming the terminal tools itself, because the
+// custom instructions it may be appended to need not mention them at all.
+const nonInteractiveContract = `## Non-interactive contract
+
+Nothing you address to the user is delivered. There is no reader, no reply, and no approval on its way. A question you ask is discarded unheard, and a run that stops to wait for an answer waits until a guard kills it, losing the work it had not yet finished.
+
+- Never stop to wait for input, approval, permission or confirmation. No one can grant what you asked for, so asking and waiting is the one certain way to fail the task.
+- Never end your turn with a question, an offer, or a promise to continue once told to. Continue now instead.
+- Where the task is ambiguous or underspecified, decide it the way a careful engineer would, act on the decision, and record the assumption with "progress" and again in your final summary. A stated assumption is reviewable afterwards; an unasked question is not.
+- Only a terminal tool call ends the task: "success" with a summary when the objective is met, or "failure" with the reason when it genuinely cannot be. Uncertainty is not a reason to stop - it is a reason to choose, act, and say what you chose. Do not simply stop.`
 
 // taskHeading introduces the task inside the instructions. The task lives in the
 // system prompt rather than as a user message so it survives compaction: a user
@@ -85,6 +112,20 @@ const taskKickoff = "Begin working on your task. Start by calling the plan tool 
 // already happened; this points the agent back at the gap between its plan and
 // the tree, rather than telling it to begin as though nothing had.
 const resumeKickoff = "Continue your task from where the session left off. Reconcile your plan with the current state of the working tree, then carry the task through to completion."
+
+// withNonInteractiveContract guarantees the no-questions contract reaches the
+// model whatever the instructions say. Custom instructions replace the built-in
+// prompt wholesale - that is what an override is for - but they cannot opt a run
+// into an interactivity zot does not have. Instructions that already carry the
+// contract (the defaults, or the defaults plus an AGENT.md) are left untouched,
+// so the common path is unchanged and the text is never repeated.
+func withNonInteractiveContract(instructions string) string {
+	if strings.Contains(instructions, nonInteractiveContract) {
+		return instructions
+	}
+
+	return strings.TrimRight(instructions, "\n") + "\n\n" + nonInteractiveContract
+}
 
 // withTask appends the task to the instructions, or returns them unchanged when
 // there is no task.
@@ -185,6 +226,24 @@ type RunOptions struct {
 	// OnSession is called once the log is open, with its path. Used to tell the
 	// operator where the record is before the run takes over the screen.
 	OnSession func(path string)
+
+	// BatchIndex and BatchSize place this run in a batch - order 2 of 5 - so
+	// the viewer can show how much of the queue is left. Zero for a run that is
+	// not part of a batch.
+	BatchIndex int
+	BatchSize  int
+
+	// Title is a short label for the work, shown in the viewer instead of the
+	// task text. A work order's title, or one derived from its file name;
+	// empty falls back to the task. It is presentation only and never reaches
+	// the model - the objective is the contract, a title is a label.
+	Title string
+
+	// QuitOnDone closes the viewer as soon as the run ends instead of holding
+	// the final screen. Set for the intermediate orders of a batch, where a
+	// held screen would stall the orders behind it until a keypress nobody
+	// unattended will make; the batch's last order still holds for review.
+	QuitOnDone bool
 }
 
 // Run executes one autonomous coding task, rendering the agent's activity in the
@@ -260,7 +319,13 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 		}
 	}
 
-	_, err = tui.Run(ctx, client, viewerMeta(cfg, task, workdir, opts), opts)
+	meta := viewerMeta(cfg, task, workdir, opts)
+	meta.Title = options.Title
+	meta.BatchIndex = options.BatchIndex
+	meta.BatchSize = options.BatchSize
+	meta.QuitOnDone = options.QuitOnDone
+
+	_, err = tui.Run(ctx, client, meta, opts)
 
 	return err
 }
@@ -312,6 +377,8 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	driver := config.ProviderDriver(cfg.DefaultProvider, providerConfig)
 	credential := config.ProviderCredential(providerConfig)
 
+	contextWindow := 0
+
 	if mc, ok := providerConfig.Models[model]; ok {
 		if mc.Model != "" {
 			model = mc.Model
@@ -325,6 +392,9 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 		if mc.APIKey != "" {
 			credential = mc.APIKey
 		}
+		if mc.Context > 0 {
+			contextWindow = mc.Context
+		}
 	}
 
 	if driver == "" {
@@ -337,6 +407,8 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	if instructions == "" {
 		instructions = defaultInstructions
 	}
+
+	instructions = withNonInteractiveContract(instructions)
 
 	client, err := agent.NewClient(agent.ClientOptions{
 		Provider: driver,
@@ -354,7 +426,7 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 
 	opts := agent.ExecuteWithToolsOptions{
 		Instructions:     instructions,
-		Tools:            agent.DefaultTools(),
+		Tools:            agent.DefaultToolsWith(cfg.Agent.MaxToolOutput),
 		Skills:           cfg.Skills,
 		MaxIterations:    maxIterations,
 		MaxSettles:       cfg.Agent.MaxSettles,
@@ -369,6 +441,7 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 		CompactMinTokens:    cfg.Agent.CompactMinTokens,
 		CompactMinMessages:  cfg.Agent.CompactMinMessages,
 		CompactTriggerRatio: cfg.Agent.CompactTriggerRatio,
+		ContextWindow:       contextWindow,
 	}
 
 	// MaxTokens is a pointer so that "unset" (provider decides) is distinct from

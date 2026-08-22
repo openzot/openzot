@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/charmbracelet/lipgloss"
 	"strings"
 	"testing"
 	"time"
@@ -303,20 +304,51 @@ func TestViewBeforeReady(t *testing.T) {
 	}
 }
 
-func TestFillRuleFitsTheWidth(t *testing.T) {
-	m := sized(t, 40, 20)
+// The iteration divider is a fixed short rule - long enough to read, short
+// enough to survive wrapping at any terminal width.
+func TestIterationRuleIsFixedShort(t *testing.T) {
+	m := sized(t, 100, 30)
 
-	rule := m.fillRule("iteration 1")
+	m.handleEvent(agent.IterationEvent{Iteration: 7})
 
-	if !strings.Contains(rule, "iteration 1") {
-		t.Errorf("the rule must carry its label: %q", rule)
+	entry := m.entries[len(m.entries)-1]
+
+	if got := strings.Count(entry, "─"); got != 6 {
+		t.Errorf("iteration divider has %d ─ glyphs, want exactly 6: %q", got, entry)
 	}
 
-	// a label longer than the terminal must not produce a negative pad
-	wide := m.fillRule(strings.Repeat("x", 200))
+	const want = "─── iteration 7 ───"
+	if !strings.Contains(entry, want) {
+		t.Errorf("divider must be three dashes on each side of the label: %q", entry)
+	}
+}
 
-	if wide == "" {
-		t.Error("an oversized label must still render")
+// A width-filling rule wraps at a narrow terminal and smears the divider over
+// two rows; the fixed rule must come through m.wrap as one intact line.
+func TestIterationRuleStaysOneRowAtNarrowWidth(t *testing.T) {
+	for _, width := range []int{40, 20} {
+		t.Run(fmt.Sprintf("%dcolumns", width), func(t *testing.T) {
+			m := sized(t, width, 30)
+
+			m.handleEvent(agent.IterationEvent{Iteration: 4})
+
+			rows := strings.Split(m.committedWrapped, "\n")
+
+			dividers := 0
+			for _, row := range rows {
+				if !strings.Contains(row, "iteration 4") {
+					continue
+				}
+				dividers++
+				if !strings.Contains(row, "─── iteration 4 ───") {
+					t.Errorf("divider broke across rows at width %d: %q", width, row)
+				}
+			}
+
+			if dividers != 1 {
+				t.Errorf("width %d rendered %d iteration rows, want 1: %q", width, dividers, m.committedWrapped)
+			}
+		})
 	}
 }
 
@@ -1072,6 +1104,103 @@ func TestMetaBarRendersConfiguredFieldsInOrder(t *testing.T) {
 	}
 }
 
+// metaSegments splits a rendered bar into its visible segments, so a test can
+// ask what is actually on screen without knowing how a segment is built.
+func metaSegments(bar string) []string {
+	var out []string
+
+	for _, part := range strings.Split(stripANSI(bar), "·") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+
+	return out
+}
+
+// A stat segment is shown whole or not at all. Clipping the bar to the terminal
+// width left whichever segment straddled the edge half-rendered - a truncated
+// count can be misread, which is worse than an absent one - so a segment that
+// does not fit is dropped entirely.
+//
+// The narrow renders are checked against a wide one rather than against
+// hardcoded text: what a segment says is the bar's business, and a test that
+// restated it would fail on every wording change while still not proving
+// anything about fitting.
+func TestMetaBarDropsSegmentsThatDoNotFitWhole(t *testing.T) {
+	reference := metaSegments(sized(t, 400, 30).metaBar())
+
+	if len(reference) != len(DefaultStats) {
+		t.Fatalf("a wide terminal must show every default stat: %q", reference)
+	}
+
+	for _, width := range []int{12, 20, 33, 47, 68, 95, 140} {
+		m := sized(t, width, 30)
+
+		bar := m.metaBar()
+
+		// nothing may spill past the terminal edge
+		if got := lipgloss.Width(bar); got > width {
+			t.Errorf("at width %d the bar is %d columns wide: %q", width, got, bar)
+		}
+
+		shown := metaSegments(bar)
+
+		// every segment on screen is one of the whole segments, not a prefix of
+		// one - this is the half-visible bug, stated directly
+		for i, segment := range shown {
+			if i >= len(reference) {
+				t.Errorf("at width %d the bar grew segments it should not have: %q", width, shown)
+
+				break
+			}
+
+			if segment != reference[i] {
+				t.Errorf("at width %d segment %d is %q, want the whole %q",
+					width, i, segment, reference[i])
+			}
+		}
+
+		// and what is shown is a prefix of the configured order, so segments
+		// appear and disappear predictably as the terminal is resized
+		if len(shown) > len(reference) {
+			t.Errorf("at width %d the bar shows %d segments, more than exist", width, len(shown))
+		}
+	}
+}
+
+// Narrowing the terminal only ever removes segments, and widening only ever
+// adds them back - the bar is a prefix that grows monotonically with the space
+// it has, which is what makes a resize readable rather than a reshuffle.
+func TestMetaBarGrowsMonotonicallyWithWidth(t *testing.T) {
+	previous := -1
+
+	for width := 8; width <= 400; width += 4 {
+		shown := len(metaSegments(sized(t, width, 30).metaBar()))
+
+		if shown < previous {
+			t.Fatalf("widening to %d columns dropped a segment (%d, was %d)", width, shown, previous)
+		}
+
+		previous = shown
+	}
+
+	if previous != len(DefaultStats) {
+		t.Errorf("the widest terminal shows %d segments, want every default stat (%d)",
+			previous, len(DefaultStats))
+	}
+}
+
+// A terminal too narrow for even the first segment shows an empty bar rather
+// than a fragment of one.
+func TestMetaBarIsEmptyWhenNothingFits(t *testing.T) {
+	m := sized(t, 3, 30)
+
+	if bar := m.metaBar(); strings.TrimSpace(stripANSI(bar)) != "" {
+		t.Errorf("nothing fits at 3 columns, so nothing should be drawn: %q", bar)
+	}
+}
+
 // An empty stat list falls back to the default set.
 func TestMetaBarDefaultsWhenUnset(t *testing.T) {
 	m := sized(t, 400, 30)
@@ -1201,5 +1330,173 @@ func TestQuitOnDoneClosesTheViewerOnAgentError(t *testing.T) {
 	_, cmd := m.Update(agentErrMsg{err: fmt.Errorf("provider down")})
 	if cmd == nil {
 		t.Fatal("the viewer should quit on a fatal error")
+	}
+}
+
+// The terminal error arrives after the exit event, which has already flipped
+// the status. It must still be kept - it is usually the run's only diagnostic
+// (the provider's 404, not the loop's "the provider failed").
+func TestProviderErrorAfterExitIsKeptAndShown(t *testing.T) {
+	m := sized(t, 100, 30)
+
+	m.handleEvent(agent.AgentExitEvent{Code: 1, Reason: "error", Message: "the provider failed"})
+
+	next, _ := m.Update(agentErrMsg{err: fmt.Errorf("provider: Model 'x' not found (404)")})
+	m = next.(model)
+
+	if err := m.runError(); err == nil || !strings.Contains(err.Error(), "not found (404)") {
+		t.Errorf("runError() = %v, want the provider's own words", err)
+	}
+
+	joined := strings.Join(m.entries, "\n")
+	if !strings.Contains(joined, "not found (404)") {
+		t.Errorf("the log should show the underlying error:\n%s", joined)
+	}
+}
+
+// A retry spends a continuation and then waits out a backoff; without a
+// rendered line the wait shows as empty iteration dividers stacking up - a run
+// that is surviving looks like one that is hanging.
+func TestRetryEventIsRendered(t *testing.T) {
+	m := sized(t, 100, 30)
+
+	m.handleEvent(agent.RetryEvent{Error: "provider: Provider returned error: ERROR (upstream: Stealth) (400)"})
+
+	joined := strings.Join(m.entries, "\n")
+	if !strings.Contains(joined, "retrying") || !strings.Contains(joined, "Stealth") {
+		t.Errorf("the retry should be visible with its cause:\n%s", joined)
+	}
+}
+
+// The header shows the order's title when it has one. The task is the whole
+// order rendered for the model - objective, criteria and constraints - so a
+// one-line header of it is a paragraph cut mid-word, which is exactly what
+// titles exist to replace.
+func TestTitleBarPrefersTheTitleOverTheTask(t *testing.T) {
+	task := "add rate limiting to the api\n\nAcceptance criteria - the objective is not met until every one of these holds:\n1. the suite passes"
+
+	withTitle := sized(t, 120, 30)
+	withTitle.task = task
+	withTitle.title = "Rate limiting"
+
+	bar := stripANSI(withTitle.titleBar())
+
+	if !strings.Contains(bar, "Rate limiting") {
+		t.Errorf("the title bar should show the title: %q", bar)
+	}
+
+	if strings.Contains(bar, "add rate limiting to the api") {
+		t.Errorf("the task text should give way to the title: %q", bar)
+	}
+
+	// without a title there is still something to show
+	untitled := sized(t, 120, 30)
+	untitled.task = task
+
+	if bar := stripANSI(untitled.titleBar()); !strings.Contains(bar, "add rate limiting") {
+		t.Errorf("an untitled run must fall back to the task: %q", bar)
+	}
+}
+
+// The default bar is curated, not "everything renderable". The line is one row
+// and drops what does not fit, so every default costs the stats after it.
+func TestDefaultStatsAreCuratedNotEverything(t *testing.T) {
+	defaults := map[string]bool{}
+	for _, name := range DefaultStats {
+		defaults[name] = true
+	}
+
+	// a cumulative call count climbs on every run and says nothing about
+	// whether this one is going well - available, but not worth a default slot
+	if defaults["tools"] {
+		t.Error("tools is a cumulative counter and should be opt-in, not a default")
+	}
+
+	// the rate stats are the opposite: they answer "is this run healthy now"
+	for _, want := range []string{"tps", "pace", "task", "order"} {
+		if !defaults[want] {
+			t.Errorf("%q tells the watcher something actionable and should default on", want)
+		}
+	}
+
+	// everything defaulted on must actually be renderable
+	for _, name := range DefaultStats {
+		if !IsKnownStat(name) {
+			t.Errorf("DefaultStats lists %q, which is not a known stat", name)
+		}
+	}
+}
+
+// A rate is a measurement; its absence is not zero. Until there is enough of a
+// run to divide by, the bar says so rather than reporting a confident 0.0.
+func TestRateStatsReportAbsenceRatherThanZero(t *testing.T) {
+	m := sized(t, 400, 30)
+	m.stats = []string{"tps", "pace", "task", "order"}
+
+	bar := stripANSI(m.metaBar())
+
+	for _, unmeasured := range []string{"tps -", "pace -", "task -", "order -"} {
+		if !strings.Contains(bar, unmeasured) {
+			t.Errorf("an unmeasured stat should read as absent, not zero: want %q in %q", unmeasured, bar)
+		}
+	}
+
+	// once there is something to divide, real figures appear
+	m.elapsed = 20 * time.Second
+	m.outputTokens = 1000
+	m.iteration = 4
+
+	bar = stripANSI(m.metaBar())
+
+	if !strings.Contains(bar, "tps 50.0/s") {
+		t.Errorf("1000 output tokens over 20s is 50/s: %q", bar)
+	}
+
+	// a fast run drops the decimal, which would be noise at three digits
+	m.outputTokens = 8000
+
+	if got := stripANSI(m.metaBar()); !strings.Contains(got, "tps 400/s") {
+		t.Errorf("a high rate should lose the decimal: %q", got)
+	}
+
+	if !strings.Contains(bar, "pace 5.0s") {
+		t.Errorf("4 iterations over 20s is 5s each: %q", bar)
+	}
+}
+
+// Task progress is read off the agent's own plan and progress calls - the model
+// is the only thing that knows what "done" means for its plan.
+func TestTaskProgressFollowsThePlanAndProgressCalls(t *testing.T) {
+	m := sized(t, 400, 30)
+	m.stats = []string{"task"}
+
+	step := func(name string, args map[string]any) {
+		m.trackProgress(name, args)
+	}
+
+	step("plan", map[string]any{"steps": []any{"a", "b", "c", "d"}})
+
+	if got := stripANSI(m.metaBar()); !strings.Contains(got, "task 0/4") {
+		t.Errorf("a fresh plan is 0 of its steps: %q", got)
+	}
+
+	step("progress", map[string]any{"completed": []any{"a", "b"}})
+
+	if got := stripANSI(m.metaBar()); !strings.Contains(got, "task 2/4") {
+		t.Errorf("progress should count the completed steps: %q", got)
+	}
+
+	// a model that outgrows its own plan is followed, not contradicted
+	step("progress", map[string]any{"completed": []any{"a", "b", "c", "d", "e"}})
+
+	if got := stripANSI(m.metaBar()); !strings.Contains(got, "task 5/5") {
+		t.Errorf("more done than planned means the plan grew: %q", got)
+	}
+
+	// replanning is a different task: the old count must not carry over
+	step("plan", map[string]any{"steps": []any{"x", "y"}})
+
+	if got := stripANSI(m.metaBar()); !strings.Contains(got, "task 0/2") {
+		t.Errorf("a new plan resets progress against it: %q", got)
 	}
 }

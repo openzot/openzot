@@ -17,13 +17,46 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
 
+// The book's layout. A project's orders and the ledger of what has been run
+// from them live together under one dotted directory at its root, the way every
+// other tool that keeps state in a repository does it: .zot/orders/<slug>.yaml
+// and .zot/records/<slug>/<run>.yaml. Two top-level orders/ and records/
+// directories claimed generic names in the root of somebody else's project,
+// which is not zot's to take.
+//
+// Only the defaults live here. An order may be read from anywhere, and the
+// ledger root is configurable - see Ledger - so this names the convention
+// rather than enforcing it.
+const (
+	// BookDir is the per-project directory holding both.
+	BookDir = ".zot"
+
+	ordersName  = "orders"
+	recordsName = "records"
+)
+
+// OrdersDir is where new orders for the project rooted at dir are scaffolded.
+func OrdersDir(dir string) string { return filepath.Join(dir, BookDir, ordersName) }
+
+// RecordsDir is the default ledger root for the project rooted at dir.
+func RecordsDir(dir string) string { return filepath.Join(dir, BookDir, recordsName) }
+
 // Order is one work order: a single run's brief.
 type Order struct {
+	// Title is an optional short label for the order, for people rather than
+	// for the agent. It never reaches the model - see Task - because the
+	// objective is the contract and a title is only how a human recognises it
+	// in a list or a viewer.
+	Title string `yaml:"title,omitempty"`
+
 	// Objective is the durable goal of the run. It goes into the system prompt
 	// and survives compaction, so the agent cannot forget it on a long run.
 	Objective string `yaml:"objective"`
@@ -40,6 +73,36 @@ type Order struct {
 	// Path is where the order was loaded from, for reporting. Empty for an
 	// order that never was a file (a synthesized one).
 	Path string `yaml:"-"`
+}
+
+// List returns the order files directly inside dir, in filename order - the
+// batch a bare `zot` runs. Only the top level is listed, matching the shell
+// glob the invocation is named after, and a missing directory is an empty
+// listing rather than an error: a project with no book yet simply has no
+// outstanding work.
+func List(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("read orders: %w", err)
+	}
+
+	var paths []string
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".yaml") {
+			continue
+		}
+
+		paths = append(paths, filepath.Join(dir, entry.Name()))
+	}
+
+	sort.Strings(paths)
+
+	return paths, nil
 }
 
 // Load reads and parses one order file.
@@ -72,6 +135,7 @@ func Parse(data []byte) (Order, error) {
 		return Order{}, fmt.Errorf("parse: %w", err)
 	}
 
+	order.Title = strings.TrimSpace(order.Title)
 	order.Objective = strings.TrimSpace(order.Objective)
 	order.Acceptance = cleanList(order.Acceptance)
 	order.Constraints = cleanList(order.Constraints)
@@ -101,6 +165,53 @@ func (o Order) Encode() string {
 	data, _ := yaml.Marshal(o)
 
 	return string(data)
+}
+
+// DisplayTitle is what to call this order on screen.
+//
+// A declared title wins. Failing that the file name is one: order files are
+// named from their objective already, so fix-the-flaky-test.yaml is a
+// perfectly good "Fix the flaky test" and deriving it costs the operator
+// nothing. An order that is neither titled nor a file - one synthesized in
+// memory by a dispatcher - has no name to show, and gets none: inventing a
+// label from the objective would put a truncated sentence where a title goes,
+// which is the thing having titles is meant to stop.
+func (o Order) DisplayTitle() string {
+	if o.Title != "" {
+		return o.Title
+	}
+
+	if o.Path == "" {
+		return ""
+	}
+
+	return titleFromFilename(o.Path)
+}
+
+// titleFromFilename turns an order's file name into a label: dashes and
+// underscores become spaces, and the first word is capitalised. Sentence case
+// rather than Title Case, because an objective-derived name is a sentence -
+// "Fix The Flaky Test" reads like a headline for something that is not one.
+func titleFromFilename(path string) string {
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+
+	name = strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' {
+			return ' '
+		}
+
+		return r
+	}, name)
+
+	name = strings.Join(strings.Fields(name), " ")
+	if name == "" {
+		return ""
+	}
+
+	first, size := utf8.DecodeRuneInString(name)
+
+	return string(unicode.ToUpper(first)) + name[size:]
 }
 
 // Task renders the order as the durable objective text placed in the system
@@ -143,11 +254,9 @@ func Scaffold(dir string, o Order) (string, error) {
 		return "", fmt.Errorf("create order directory: %w", err)
 	}
 
-	base := slug(o.Objective)
-
-	path := filepath.Join(dir, base+".yaml")
+	path := filepath.Join(dir, nameFor(o)+".yaml")
 	for n := 2; exists(path); n++ {
-		path = filepath.Join(dir, fmt.Sprintf("%s-%d.yaml", base, n))
+		path = filepath.Join(dir, fmt.Sprintf("%s-%d.yaml", nameFor(o), n))
 	}
 
 	if err := os.WriteFile(path, []byte(template(o)), 0o644); err != nil {
@@ -157,6 +266,23 @@ func Scaffold(dir string, o Order) (string, error) {
 	return path, nil
 }
 
+// nameFor picks the file name for an order: its title when it has one, its
+// objective otherwise.
+//
+// A title is a few deliberate words naming the change; an objective is however
+// the thought arrived, and slugging one gives
+// the-new-command-should-have-an-interactive-versi.yaml - a name that is hard
+// to tell apart from its neighbours in a directory listing, which is where
+// orders are actually browsed. The drafting survey proposes a title precisely
+// so the file can be found by it later.
+func nameFor(o Order) string {
+	if o.Title != "" {
+		return slug(o.Title)
+	}
+
+	return slug(o.Objective)
+}
+
 // template renders the scaffold. The objective is a literal block scalar, which
 // carries any text without quoting rules getting a say; filled lists are
 // rendered by the YAML encoder for the same reason.
@@ -164,6 +290,19 @@ func template(o Order) string {
 	var b strings.Builder
 
 	b.WriteString("# zot work order - what to do, and what \"done\" means.\n\n")
+
+	// The title is optional and the file name stands in for it, so an untitled
+	// order gets a commented stub: discoverable without implying the field is
+	// expected.
+	if o.Title != "" {
+		b.WriteString(encodeScalar("title", o.Title))
+	} else {
+		b.WriteString("# An optional short label for this order, shown in the viewer. Without\n" +
+			"# one the file name is used, with its dashes read as spaces.\n" +
+			"# title:\n")
+	}
+
+	b.WriteString("\n")
 
 	if o.Objective == "" {
 		b.WriteString("# The durable goal of the run. The order will not run until this is filled in.\nobjective:\n")
@@ -203,6 +342,15 @@ func template(o Order) string {
 	}
 
 	return b.String()
+}
+
+// encodeScalar renders one named scalar as YAML, so any title text is quoted
+// correctly rather than by hand.
+func encodeScalar(name, value string) string {
+	// a map of plain strings, which Marshal cannot fail on
+	data, _ := yaml.Marshal(map[string]string{name: value})
+
+	return string(data)
 }
 
 // encodeList renders one named list as YAML.

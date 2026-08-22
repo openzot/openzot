@@ -91,9 +91,12 @@ func compactEngine(t *testing.T, client *provider.Client, tweak func(*Options)) 
 	options := Options{
 		Client:  client,
 		Compact: true,
+		// the window is pinned rather than taken from the catalogue default, so
+		// the numeric expectations below survive the default changing: input
+		// budget = 128k - 32k = 96k
+		ContextWindow: 128_000,
 		// tiny ratio + floors so a modest seeded conversation crosses the trigger;
-		// the window for test-model is 96k, so 0.001 puts the threshold near 96
-		// tokens.
+		// with the 96k budget, 0.001 puts the threshold near 96 tokens.
 		CompactTriggerRatio: 0.001,
 		CompactMinTokens:    1,
 		CompactMinMessages:  2,
@@ -333,6 +336,7 @@ func TestCompactionDoesNotRepeatAfterAFailedTurn(t *testing.T) {
 		Client:              client,
 		Messages:            seededConversation(),
 		Compact:             true,
+		ContextWindow:       128_000, // pin the budget the numbers above assume
 		CompactTriggerRatio: 0.1,
 		CompactMinTokens:    1,
 		CompactMinMessages:  1,
@@ -467,5 +471,45 @@ func TestCheckpointsArePreservedNotReSummarised(t *testing.T) {
 
 	if strings.Contains((*bodies)[1], "SUMMARY-ONE") {
 		t.Error("the earlier checkpoint was fed back into the summariser - the summary-of-a-summary this design exists to prevent")
+	}
+}
+
+// The provider-reported prompt count measures the previous request AFTER the
+// thread builder trimmed it, so on its own it can sit below the trigger
+// forever while the trimmer silently drops ever more history - the model then
+// re-reads what it lost, and the run burns its budget on amnesia (a live run
+// re-read the same file sections three times over). The estimate of the whole
+// conversation must fire compaction even while reported usage looks small.
+func TestCompactionFiresOnTheEstimateWhenTrimmingHidesUsage(t *testing.T) {
+	engine, err := New(Options{
+		// the summariser call answers with a checkpoint summary
+		Client:        stub(t, []string{text("a summary of the early work"), stop()}),
+		Compact:       true,
+		ContextWindow: MinInputTokens * 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// a conversation whose estimate is far over the trigger
+	messages := []Message{{Type: TypeUser, Text: "the kickoff"}}
+
+	for i := 0; i < 40; i++ {
+		id := fmt.Sprintf("c%d", i)
+		messages = append(messages,
+			Message{Type: TypeActivity, Activity: &Activity{Kind: ActivityRequest, ID: id, Name: "read", Arguments: `{"path":"x"}`}},
+			Message{Type: TypeActivity, Activity: &Activity{Kind: ActivityResponse, ID: id, Name: "read", Result: strings.Repeat("file content ", 300)}},
+		)
+	}
+
+	// the provider reported a small trimmed request - the deadlock signal
+	compacted, ok := engine.maybeCompact(context.Background(), messages, MinInputTokens, func(Event) {})
+
+	if !ok {
+		t.Fatal("compaction must fire on the whole-conversation estimate, not wait for reported usage that trimming keeps low")
+	}
+
+	if len(compacted) >= len(messages) {
+		t.Error("compaction fired but did not shrink the conversation")
 	}
 }

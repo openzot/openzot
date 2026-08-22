@@ -134,6 +134,11 @@ type Recorder interface {
 	RecordEvent(kind, tool, text string, iteration int) error
 	RecordResult(Summary) error
 
+	// RecordFailure persists a provider failure as it happens, so a run killed
+	// mid-retry still leaves the failing exchange behind. Called once per
+	// failure; a later one supersedes the record of an earlier.
+	RecordFailure(*Failure) error
+
 	// RecordReset discards everything recorded so far, because the engine has
 	// rewritten its own history and the earlier record no longer describes the
 	// conversation the run is actually holding.
@@ -147,6 +152,16 @@ type Summary struct {
 
 	// Message explains the reason in prose.
 	Message string
+
+	// Error is the underlying failure on an error ending, in the provider's
+	// own words. Empty for every other ending.
+	Error string
+
+	// Failure is the wire evidence behind Error, when the failure was a
+	// provider response: the status, the raw body, and the size of the request
+	// that was refused. Error says what the loop concluded; this is what an
+	// operator troubleshoots with.
+	Failure *Failure
 
 	// Code is the process exit code the reason maps to.
 	Code int
@@ -313,6 +328,11 @@ type ExecuteWithToolsOptions struct {
 	CompactMinTokens    int
 	CompactMinMessages  int
 	CompactTriggerRatio float64
+
+	// ContextWindow overrides the model's total context window, in tokens, for
+	// a serving endpoint whose real ceiling is smaller than the model's card.
+	// Zero uses the catalogue.
+	ContextWindow int
 }
 
 // exitEventGrace is how long a cancelled run holds the exit event for a
@@ -379,6 +399,7 @@ func ExecuteWithTools(
 			CompactMinTokens:    options.CompactMinTokens,
 			CompactMinMessages:  options.CompactMinMessages,
 			CompactTriggerRatio: options.CompactTriggerRatio,
+			ContextWindow:       options.ContextWindow,
 
 			OnConversation: func(messages []loop.Message) {
 				log.sync(fromLoopMessages(messages))
@@ -392,7 +413,25 @@ func ExecuteWithTools(
 
 		result := engine.Run(ctx, func(event loop.Event) {
 			if recorder != nil {
-				_ = recorder.RecordEvent(string(event.Kind), event.Tool, event.Text, event.Iteration)
+				// a usage event carries its numbers in dedicated fields the
+				// recorder interface does not have; render them into the text,
+				// or the log records a usage event that says nothing - and
+				// "why did this run cost 567k tokens" is exactly the question
+				// a session has to answer after the fact
+				text := event.Text
+
+				if event.Kind == loop.EventUsage && text == "" {
+					text = fmt.Sprintf("input %d output %d", event.InputTokens, event.OutputTokens)
+				}
+
+				_ = recorder.RecordEvent(string(event.Kind), event.Tool, text, event.Iteration)
+
+				// A provider failure is persisted the instant it happens, not at
+				// the run's end - a kill mid-retry would never reach the end, and
+				// the failing exchange is exactly what the operator wants then.
+				if failure := failureOf(event.Failure); failure != nil {
+					_ = recorder.RecordFailure(failure)
+				}
 			}
 
 			// The send stays synchronous - a slow consumer throttles the run -
@@ -417,6 +456,8 @@ func ExecuteWithTools(
 			_ = recorder.RecordResult(Summary{
 				Reason:        string(result.Reason),
 				Message:       result.Message,
+				Error:         errText(result.Err),
+				Failure:       failureOf(result.Err),
 				Code:          exitCode(result.Reason),
 				Iterations:    result.Budget.Iterations,
 				Calls:         result.Budget.Calls,
@@ -502,6 +543,49 @@ func settleBudget(options ExecuteWithToolsOptions) int {
 	}
 
 	return loop.DefaultMaxSettles
+}
+
+// Failure is the wire evidence of a provider refusal.
+type Failure struct {
+	// Status is the HTTP status of the refusal.
+	Status int
+
+	// ResponseBody is the raw (bounded) body the provider returned.
+	ResponseBody string
+
+	// RequestBytes is the size of the request that was refused - against a
+	// suspected context ceiling, the number that turns a correlation into a
+	// diagnosis.
+	RequestBytes int
+
+	// RequestBody is the JSON that was refused. Populated for the developer
+	// dump; empty otherwise.
+	RequestBody string
+}
+
+// failureOf extracts the wire evidence from an error ending, when there is any.
+func failureOf(err error) *Failure {
+	var providerErr *provider.Error
+
+	if !errors.As(err, &providerErr) || providerErr.Status == 0 {
+		return nil
+	}
+
+	return &Failure{
+		Status:       providerErr.Status,
+		ResponseBody: providerErr.Body,
+		RequestBytes: providerErr.RequestBytes,
+		RequestBody:  providerErr.RequestBody,
+	}
+}
+
+// errText renders an error for the record, tolerating nil.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return err.Error()
 }
 
 // exitCode maps a stop reason onto a process-style exit code.

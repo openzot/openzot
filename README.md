@@ -36,9 +36,9 @@ constraints the work must hold to. Write one, hand it over, and walk away:
 
 ```bash
 zot new "add rate limiting to the API, with tests"
-# wrote orders/add-rate-limiting-to-the-api-with-tests.yaml - edit its
+# wrote .zot/orders/add-rate-limiting-to-the-api-with-tests.yaml - edit its
 # acceptance criteria, then:
-zot orders/add-rate-limiting-to-the-api-with-tests.yaml
+zot
 ```
 
 zot reads the repo, writes and edits the code, runs the build and the tests, and
@@ -46,9 +46,17 @@ fixes what it broke - on its own, from that one order to a recorded outcome. Whe
 it stops you have a changed working tree and a full session log of every step it
 took. No chat loop, no approving each edit: one order in, finished work out.
 
-Orders are files, so they compose: `zot orders/*.yaml` runs each order as its
-own run, in sequence, stopping at the first that does not end in success - and
-every order you ever ran stays on disk to be re-run, diffed, or committed.
+Orders are files, so they compose. A bare `zot` runs the project's whole book -
+each order as its own run, in sequence, stopping at the first that does not end
+in success - and the ledger skips the ones already done, so you write an order
+and type `zot` again. Naming order files runs exactly those, from any path. A
+project's orders and the receipts of what has been run from them live together
+under `.zot/`, and both halves point wherever you like - see
+[the book](docs/configuration.md#the-book).
+
+They also stream: `zot --watch` keeps zot up and runs every `*.yaml` order that
+lands in the folder as it arrives - a drop-box factory. See
+[watch mode](docs/configuration.md#watch-mode).
 
 `zot new` scaffolds at three levels of help, all landing in the same reviewable
 file: bare `zot new` writes the blank form, `zot new "objective"` fills the
@@ -103,7 +111,7 @@ give it a job:
 ```bash
 export ZAI_API_KEY="…"
 zot new "add input validation to the signup handler and a test"
-zot orders/add-input-validation-to-the-signup-handler-and.yaml
+zot
 ```
 
 Any OpenAI-compatible provider works - `--provider anthropic --model

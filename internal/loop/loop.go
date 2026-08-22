@@ -116,6 +116,12 @@ type Options struct {
 	CompactMinTokens    int
 	CompactMinMessages  int
 	CompactTriggerRatio float64
+
+	// ContextWindow overrides the model's total context window, in tokens.
+	// Zero uses the catalogue. The operator's escape hatch for an endpoint
+	// whose real ceiling is smaller than the model's card and whose overflow
+	// error is too opaque for the reactive recovery to detect.
+	ContextWindow int
 }
 
 // MessageType identifies what a message is.
@@ -247,6 +253,15 @@ func New(options Options) (*Engine, error) {
 
 	budget := catalogue.InputBudget(model)
 
+	if options.ContextWindow > 0 {
+		// the operator's stated window beats the catalogue: it exists because
+		// the endpoint's real ceiling disagrees with the model's card
+		budget = catalogue.Model{
+			ContextWindow:   options.ContextWindow,
+			MaxOutputTokens: options.ContextWindow / 4,
+		}.InputBudget()
+	}
+
 	if budget < MinInputTokens {
 		budget = MinInputTokens
 	}
@@ -359,6 +374,16 @@ func pickDuration(value, fallback time.Duration) time.Duration {
 
 // nonNegative clamps a budget to zero, so a negative value means the same as
 // unset - unbounded - rather than an ever-true stop condition.
+// firstNonNil returns a if it is set, else b - so an abort prefers the
+// provider failure worth diagnosing over the bare cancellation.
+func firstNonNil(a, b error) error {
+	if a != nil {
+		return a
+	}
+
+	return b
+}
+
 func nonNegative(v int) int {
 	if v < 0 {
 		return 0
@@ -456,9 +481,16 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 	// A successful turn resets this, so each new outage backs off from the base.
 	retries := 0
 
+	// The most recent provider failure, kept so an abort can carry it. A run is
+	// usually quit during a backoff wait, not during the failing call itself,
+	// so the top-of-loop cancellation check would otherwise discard the very
+	// exchange being diagnosed - the failure whose dump the operator quit to
+	// go and read.
+	var lastFailure error
+
 	for {
 		if err := ctx.Err(); err != nil {
-			return e.finish(messages, budget, StopAborted, "run cancelled", err)
+			return e.finish(messages, budget, StopAborted, "run cancelled", firstNonNil(lastFailure, err))
 		}
 
 		// hand the conversation over before spending anything on the next turn,
@@ -534,6 +566,32 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		}
 
 		if err != nil {
+			// A failed model call is not an agentic round: the recovery paths
+			// below hand the failure back to the top of the loop, and without
+			// this the round budget pays for every retry - twenty spaced
+			// retries through an outage would cost twenty iterations of work
+			// the run never got. Continuations are the bound on recovery
+			// attempts; iterations count normal progress.
+			budget.Iterations--
+
+			// remember the failure so an abort during the ensuing backoff still
+			// carries it - only a provider error, so a bare cancellation does
+			// not overwrite the exchange worth keeping
+			if provider.IsProviderError(err) {
+				lastFailure = err
+			}
+
+			// A cancellation that lands mid-call surfaces here as the provider
+			// error it caused - a cut stream, an aborted request - rather than
+			// at the top-of-loop check. It is recorded as the abort it is - a
+			// user quitting is not a provider failing - but the provider error
+			// is carried along as the evidence, so a quit during a provider
+			// failure still preserves the failing exchange (and its dump)
+			// rather than discarding the very thing being diagnosed.
+			if ctx.Err() != nil {
+				return e.finish(messages, budget, StopAborted, "run cancelled", firstNonNil(lastFailure, err))
+			}
+
 			// a context-limit rejection is recoverable: compact and retry
 			if limit, ok := provider.DetectContextLimit(err); ok && budget.Continuations < e.maxContinuations {
 				budget.Continuations++
@@ -581,7 +639,7 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 				budget.Continuations++
 				retries++
 
-				emit(Event{Kind: EventRetry, Text: err.Error()})
+				emit(Event{Kind: EventRetry, Text: err.Error(), Failure: err})
 
 				// Space the retries out. Without this the continuation budget is
 				// spent in milliseconds, so a run dies to an outage it would have
@@ -610,6 +668,14 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		// so the next one - if any - starts again from the base delay
 		retries = 0
 
+		// a turn that produced *anything* breaks the run of silences: the empty
+		// budget counts CONSECUTIVE empty turns, so single stalls scattered over a
+		// long run must not add up to a StopEmpty hours later. Same reasoning as
+		// the cycle counter, which zeroes the moment a round comes back clean.
+		if turn.Text != "" || turn.Reasoning != "" || len(turn.ToolCalls) > 0 {
+			budget.Empties = 0
+		}
+
 		// record what the model produced
 
 		if turn.Reasoning != "" {
@@ -634,6 +700,10 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 			budget.Continuations++
 
+			emit(Event{Kind: EventNotice, Text: fmt.Sprintf(
+				"answer cut off at the output limit; asking the model to continue (%d/%d)",
+				budget.Continuations, e.maxContinuations)})
+
 			messages = append(messages, Message{Type: TypeUser, Text: truncationNotice()})
 
 			continue
@@ -648,7 +718,7 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 		if len(turn.ToolCalls) > 0 {
 			var stop *Result
 
-			messages, stop = e.dispatch(ctx, messages, turn.ToolCalls, turn.ReasoningItems, &budget, emit)
+			messages, stop = e.dispatch(ctx, messages, turn.ToolCalls, turn.ReasoningItems, turn.ReasoningDetails, &budget, emit)
 
 			if stop != nil {
 				return *stop
@@ -679,6 +749,13 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 			budget.Empties++
 
+			// visible, because a stuck or stalling provider otherwise renders as
+			// bare iteration dividers with nothing between them - a run being
+			// nudged back to life looked exactly like a hang
+			emit(Event{Kind: EventNotice, Text: fmt.Sprintf(
+				"the model returned an empty turn; nudging it to continue (%d/%d)",
+				budget.Empties, e.maxEmpties)})
+
 			nudge := emptyNotice()
 			if e.settleMode() {
 				nudge = settleNotice()
@@ -700,6 +777,10 @@ func (e *Engine) Run(ctx context.Context, emit func(Event)) Result {
 
 			budget.Settles++
 
+			emit(Event{Kind: EventNotice, Text: fmt.Sprintf(
+				"the model stopped without recording an outcome; nudging it to settle (%d/%d)",
+				budget.Settles, e.maxSettles)})
+
 			messages = append(messages, Message{Type: TypeUser, Text: settleNotice()})
 
 			continue
@@ -720,6 +801,10 @@ type turnResult struct {
 	// be replayed with the calls it produced: the transport that requests it
 	// tells the provider to store nothing, so this is the only copy there is.
 	ReasoningItems []provider.ReasoningItem
+
+	// ReasoningDetails is the chat-completions reasoning state, replayed the
+	// same way on the assistant message that carries the calls.
+	ReasoningDetails json.RawMessage
 
 	// InputTokens and OutputTokens are the prompt- and completion-token counts the
 	// provider reported for this turn (zero when it reported none). Provider counts,
@@ -790,6 +875,10 @@ func (e *Engine) runTurn(ctx context.Context, request provider.Request, emit fun
 			result.ReasoningItems = event.ReasoningItems
 		}
 
+		if len(event.ReasoningDetails) > 0 {
+			result.ReasoningDetails = event.ReasoningDetails
+		}
+
 		if event.FinishReason != "" {
 			result.FinishReason = event.FinishReason
 		}
@@ -852,6 +941,7 @@ func (e *Engine) dispatch(
 	messages []Message,
 	calls []provider.ToolCall,
 	reasoningItems []provider.ReasoningItem,
+	reasoningDetails json.RawMessage,
 	budget *Budget,
 	emit func(Event),
 ) ([]Message, *Result) {
@@ -875,6 +965,7 @@ func (e *Engine) dispatch(
 		// once ahead of the calls rather than once per call
 		if first {
 			request.Activity.ReasoningItems = reasoningItems
+			request.Activity.ReasoningDetails = reasoningDetails
 
 			first = false
 		}
@@ -1038,14 +1129,21 @@ func (e *Engine) maybeCompact(ctx context.Context, messages []Message, inputToke
 		return messages, false
 	}
 
-	// The provider's reported prompt-token count drives the trigger. Real usage is
-	// the right signal: the estimate misses the system prompt, the tool schemas
-	// and the wire overhead the provider actually charges, so triggering on it
-	// would compact too late - after a request the estimate thought fit was
-	// rejected. The estimate stands in only until the first turn reports.
+	// Whichever of two signals is larger drives the trigger.
+	//
+	// The provider's reported prompt-token count is real usage - it includes
+	// the system prompt, tool schemas and wire overhead the estimate misses.
+	// But it measures the previous request AFTER the thread builder trimmed it
+	// to fit, so on its own it can sit below the trigger forever while the
+	// trimmer silently drops ever more history: the model re-reads what it
+	// lost, the conversation grows, more is trimmed - a re-reading loop that
+	// burns the run's budget on amnesia. The local estimate of the WHOLE
+	// conversation is the same measure the trimmer applies, so it is what
+	// fires compaction before trimming turns lossy.
 	used := inputTokens
-	if used == 0 {
-		used = compaction.CountMessagesTokens(e.model, toCompactionMessages(messages))
+
+	if estimated := compaction.CountMessagesTokens(e.model, toCompactionMessages(messages)); estimated > used {
+		used = estimated
 	}
 
 	pinned, head, tail := splitForCheckpoint(messages)
@@ -1224,12 +1322,39 @@ func (e *Engine) buildRequest(messages []Message, tools []provider.Tool) (provid
 
 	chat = append(chat, toChatMessages(fromThreadMessages(built.Messages))...)
 
+	// The thread builder keeps the largest suffix that fits, so the first
+	// message trimmed is the oldest - which is the run's opening user message.
+	// A conversation with no user turn at all is invalid to strict providers:
+	// they reject the whole request, deterministically, from that iteration on
+	// (bisected live against one that answered only an opaque 400). The
+	// objective itself is safe in the instructions; what must be restored is a
+	// user turn's existence.
+	hasUser := false
+
+	for _, message := range chat[1:] {
+		if message.Role == provider.RoleUser {
+			hasUser = true
+
+			break
+		}
+	}
+
+	if !hasUser {
+		rest := append([]provider.ChatMessage{{Role: provider.RoleUser, Content: trimmedKickoff}}, chat[1:]...)
+		chat = append(chat[:1], rest...)
+	}
+
 	return provider.Request{
 		Messages:  chat,
 		Tools:     tools,
 		MaxTokens: e.options.MaxTokens,
 	}, nil
 }
+
+// trimmedKickoff stands in for the opening user message once trimming has
+// dropped it. The objective lives in the instructions, so this only has to
+// exist and point there.
+const trimmedKickoff = "Continue working on your task as stated in the instructions."
 
 // instructions renders the system prompt, including the skills block.
 func (e *Engine) instructions() string {

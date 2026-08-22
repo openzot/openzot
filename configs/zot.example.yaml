@@ -69,6 +69,12 @@ agent:
   # bound response length or per-turn cost.
   # max_tokens: 8192
 
+  # Cap on the bytes a single tool result (a file read, a command's output) may
+  # return before it is truncated. Default 100000. Lower it for a model served
+  # by an endpoint with a small context window, where one large result can
+  # overflow the whole request and be rejected outright.
+  # max_tool_output: 32000
+
   # The safety guards below rarely need touching - each default encodes a real
   # failure mode, so raise or lower them with care. Unlike calls and time, these
   # cannot be turned off; zero just means "use the default".
@@ -114,7 +120,9 @@ agent:
   # window) to compact on such a model.
 
   # Optional override of the built-in system prompt. Leave blank to use the
-  # default fully-autonomous instructions.
+  # default fully-autonomous instructions. Whatever you put here, zot's
+  # non-interactive contract - never wait for input, end only by recording an
+  # outcome - is appended to it: a run has no input channel to ask through.
   # instructions: ''
 
 # Presentation. Diff, plain, and color are also command-line flags.
@@ -206,3 +214,7 @@ providers:
   #     fast:
   #       model: 'gpt-5.4-mini'
   #       max_iterations: 50
+  #       # real context window of the serving endpoint, in tokens - the escape
+  #       # hatch for a model whose endpoint ceiling is smaller than its card
+  #       # (compaction then fires before the endpoint rejects the request)
+  #       context: 32000

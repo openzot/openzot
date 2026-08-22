@@ -24,6 +24,7 @@ Explore the working directory first - the build files, the test setup, the proje
 
 Then end the run by calling "success" with a summary in exactly this shape:
 
+title: <title>
 acceptance:
 - <criterion>
 - <criterion>
@@ -31,6 +32,7 @@ constraints:
 - <constraint>
 
 Rules:
+- The title is a short label for a person scanning a list of orders - a handful of words naming the change, not a restatement of the objective and not a sentence.
 - One item per line after "- ". Each line is read verbatim - quote commands and filenames freely, no escaping is needed.
 - Each acceptance criterion must be observable: checkable by running a command or reading the working tree, never a judgement of taste.
 - Give 3 to 6 acceptance criteria.
@@ -54,6 +56,8 @@ func ParseDraft(objective, reply string) (Order, error) {
 	var acceptance, constraints []string
 	var current *[]string
 
+	var title string
+
 	for _, line := range strings.Split(stripFences(reply), "\n") {
 		line = strings.TrimSpace(line)
 
@@ -63,6 +67,13 @@ func ParseDraft(objective, reply string) (Order, error) {
 
 		case strings.EqualFold(line, "constraints:") || strings.EqualFold(line, "constraints"):
 			current = &constraints
+
+		// A title is one line rather than a list, so it is read off the
+		// heading itself. It is optional in practice whatever the prompt asks
+		// for: a draft that names no title is still a good draft, and the file
+		// name gives the order a label anyway.
+		case current == nil && hasPrefixFold(line, "title:"):
+			title = unquote(strings.TrimSpace(line[len("title:"):]))
 
 		case current != nil && (strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ")):
 			if item := unquote(strings.TrimSpace(line[2:])); item != "" {
@@ -78,10 +89,16 @@ func ParseDraft(objective, reply string) (Order, error) {
 	}
 
 	return Order{
+		Title:       title,
 		Objective:   objective,
 		Acceptance:  acceptance,
 		Constraints: constraints,
 	}, nil
+}
+
+// hasPrefixFold is strings.HasPrefix, case-insensitively.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
 // unquote strips a quote pair wrapping a whole item - a model that was told
