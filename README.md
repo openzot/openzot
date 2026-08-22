@@ -197,6 +197,24 @@ single-purpose runs - as a **skill** (`<name>/SKILL.md`), and it becomes
 available exactly when the model judges it relevant, without changing the
 engine. Orchestration is content, not framework.
 
+## The arcade
+
+**[openzot.github.io/arcade](https://openzot.github.io/arcade/)** - a live,
+unattended zot factory you can watch and play.
+
+Every 30 minutes a GitHub Actions job hands zot the same standing order: read
+the catalogue of games made so far, invent one that is unlike everything on it,
+build it as vanilla HTML, CSS and JavaScript, playtest it in a headless
+browser, and add it to the catalogue. The workflow commits whatever zot leaves
+in the tree and publishes the site. No pull request, no review, no human in the
+loop - the live site *is* the working tree.
+
+It is the shortest honest answer to "what does a fully autonomous run actually
+produce?": one order, run on a schedule, and a shelf of finished games nobody
+asked for individually. The order, the conventions zot reads before each shift,
+and every shift's commit are in
+[openzot/arcade](https://github.com/openzot/arcade).
+
 ## ⚠️ Safety
 
 `zot` is fully autonomous and has **real** file-write and shell-exec access
@@ -236,6 +254,7 @@ upgrading.
 
 | Project                                       | Role                                                                               |
 | --------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [Arcade](https://openzot.github.io/arcade/)   | A live zot factory shipping one browser game every 30 minutes, unattended          |
 | [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                                       |
 | [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic mornitoring, and incident prevention |
 | [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use                     |

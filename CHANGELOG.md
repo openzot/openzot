@@ -2,6 +2,15 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.17.2] - 2026-08-22
+
+### Fixed
+
+- **A failure delivered inside an open stream is retried.** Both transports turned an error object arriving mid-stream into a bare `Error{Status: 0}` carrying whatever prose the gateway chose, which matched no pattern and carried no status - so the classifier called it permanent and ended the run without a single retry. OpenRouter's wording for it, `JSON error injected into SSE stream`, cost an unattended shift nineteen minutes of finished work; the run before it had gone the same way to `Upstream idle timeout exceeded`, and the one before that to something else again.
+
+  Chasing each new wording is a losing game, so this is classified on structure instead. A request the provider objects to never gets a stream at all - it is refused with a 4xx before a byte of body exists - so an error that arrived *after* the response began is about the generation rather than the asking, and asking again is the right move. Both transports now mark these, and `IsRetriable` honours the mark whatever the message says. A context-length rejection is still detected first, so a thread that genuinely does not fit compacts rather than retrying, and the same prose arriving as a plain 4xx stays permanent.
+
+
 ## [0.17.1] - 2026-08-22
 
 ### Added

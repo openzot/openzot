@@ -38,6 +38,20 @@ type Error struct {
 	// error that ends a run; persisted only by a dev build.
 	RequestBody string
 
+	// midstream marks a failure that arrived inside an already-open stream:
+	// the request was accepted, the response began, and the error was written
+	// into the body instead of a delta.
+	//
+	// That shape is the classification, and it is worth more than the prose. A
+	// request the provider objects to never gets a stream at all - it is
+	// refused with a 4xx before a byte of body exists - so an error that got
+	// this far is about the generation rather than the asking, and asking again
+	// is the right move. Gateways word these endlessly ("JSON error injected
+	// into SSE stream" cost an unattended shift nineteen minutes with no retry
+	// attempted), and matching each new wording is a losing game the structure
+	// wins outright.
+	midstream bool
+
 	// upstream marks a gateway-wrapped upstream failure: the gateway reported
 	// that the provider behind it failed, not that the request was wrong. The
 	// distinction decides retriability - see IsRetriable.
@@ -144,6 +158,8 @@ func statusOf(err error) (int, bool) {
 // request itself - a bad key, a model the provider does not have - and retrying
 // only burns the budget. Two carve-outs, both about time rather than the
 // request: a 408, and a message that names a stalled stream (see stallPatterns).
+// A failure delivered inside an open stream bypasses it too, on structure
+// rather than wording - see midstream.
 //
 // 429 is deliberately excluded. A rate limit needs Retry-After backoff, not a
 // tight retry loop, and retrying it aggressively makes the throttling worse.
@@ -162,7 +178,7 @@ func IsRetriable(err error) bool {
 	// body is folded into this error's message where those patterns match.
 	var providerErr *Error
 
-	if errors.As(err, &providerErr) && providerErr.upstream {
+	if errors.As(err, &providerErr) && (providerErr.upstream || providerErr.midstream) {
 		return true
 	}
 
@@ -467,4 +483,11 @@ func IsAuth(err error) bool {
 	}
 
 	return strings.Contains(strings.ToLower(providerErr.Message), "api key")
+}
+
+// streamFailure is an error the provider wrote into a stream it had already
+// begun answering on. See Error.midstream for why that alone makes it worth
+// retrying, whatever the gateway called it.
+func streamFailure(message string) *Error {
+	return &Error{Status: 0, Message: message, midstream: true}
 }
