@@ -687,3 +687,56 @@ func TestAttributionReachesTheWire(t *testing.T) {
 		t.Errorf("%s = %q, want %q", headerTitle, title, DefaultAttributionName)
 	}
 }
+
+// A failure the provider wrote into a stream it had already begun answering on
+// is retriable on structure, not on wording. The wording is the point: this
+// exact message - OpenRouter's, not zot's - ended an unattended shift with no
+// retry attempted, because it matched no pattern and carried no status.
+func TestAMidStreamFailureIsRetriableWhateverItSays(t *testing.T) {
+	for _, message := range []string{
+		"JSON error injected into SSE stream",
+		"the provider reported a failure",
+		"something no pattern here has ever seen",
+	} {
+		if !IsRetriable(streamFailure(message)) {
+			t.Errorf("a mid-stream failure saying %q was treated as permanent", message)
+		}
+	}
+
+	// the same prose arriving as a plain refusal is *not* retriable: no stream
+	// was ever opened, so the request itself is what the provider objected to
+	if IsRetriable(&Error{Status: 400, Message: "JSON error injected into SSE stream"}) {
+		t.Error("a 400 must stay permanent; only an error inside an open stream is structural")
+	}
+}
+
+// The transports are where the classification is actually applied, so assert it
+// there rather than only on the constructor - a transport that built a bare
+// Error would compile and silently lose every retry.
+func TestTheChatTransportMarksAMidStreamError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// a stream that starts normally and then carries an error object
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"error\":{\"message\":\"JSON error injected into SSE stream\"}}\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := New(Config{Provider: Custom, Model: "m", APIKey: "k", BaseURL: server.URL})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_, _, _, err = client.Complete(context.Background(), Request{
+		Messages: []ChatMessage{{Role: "user", Content: "go"}},
+	})
+
+	if err == nil {
+		t.Fatal("an error object in the stream must fail the turn")
+	}
+
+	if !IsRetriable(err) {
+		t.Errorf("the turn failed with %v, which the loop will not retry", err)
+	}
+}

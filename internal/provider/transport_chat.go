@@ -251,7 +251,7 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 		}
 
 		if parsed.Error != nil {
-			return &Error{Status: 0, Message: parsed.Error.Message}
+			return streamFailure(parsed.Error.Message)
 		}
 
 		if parsed.Usage != nil {

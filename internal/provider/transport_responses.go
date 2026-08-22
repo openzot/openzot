@@ -409,7 +409,7 @@ func consumeResponsesSSE(ctx context.Context, body io.Reader, events chan<- Even
 				message = event.Error.Message
 			}
 
-			return &Error{Status: 0, Message: message}
+			return streamFailure(message)
 		}
 	}
 
