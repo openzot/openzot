@@ -1,7 +1,6 @@
-# Releasing zot and zotui
+# Releasing zot
 
-This document describes how to build, version, and release the `zot` and
-`zotui` binaries.
+This document describes how to build, version, and release the `zot` binary.
 
 ## Overview
 
@@ -15,10 +14,9 @@ binaries as a GitHub Release:
    reads `VERSION` from the tested commit and, if the matching `v*` tag does not
    already exist, creates and pushes it, then dispatches the Release workflow.
 4. [`release.yaml`](.github/workflows/release.yaml) verifies CI succeeded for
-   the exact tagged commit, builds both binaries for each target platform,
-   packages them together into a `.tar.gz` (with `README.md`,
-   `zot.example.yaml`, and `zotui.example.yaml`), publishes both commands in a
-   multi-platform container image, generates
+   the exact tagged commit, builds the binary for each target platform,
+   packages it into a `.tar.gz` (with `README.md` and `zot.example.yaml`),
+   publishes a multi-platform container image, generates
    SHA-256 checksums, and creates a GitHub Release with notes taken from the
    latest `CHANGELOG.md` section and the image coordinates on top.
 

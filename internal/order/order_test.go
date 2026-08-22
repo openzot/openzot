@@ -98,7 +98,7 @@ func TestFromTextAcceptsAFullOrder(t *testing.T) {
 }
 
 // Encode must round-trip through Parse: it is how an order travels to another
-// process (the zotui sandbox), and an encoding Parse rejects would strand it.
+// process (a sandbox, a CI job), and an encoding Parse rejects would strand it.
 func TestEncodeRoundTrips(t *testing.T) {
 	original := Order{
 		Objective:   "line one\nline two: with a colon",

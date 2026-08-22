@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] - 2026-08-22
+
+### Removed
+
+- **zotui is gone.** The browser command center - `cmd/zotui`, its worker dispatch, compute backends, SQLite store and embedded web app - has been removed, along with `zotui.example.yaml`, `make dev-ui`, `make worker-assets` and `docs/zotui-configuration.md`. It was a worthwhile experiment, but it pulled attention (and a second binary, a database driver and a vendored front end) away from the thing zot actually is: the harness that takes a work order and runs it to completion. Release archives and the container image now ship `zot` alone; the image no longer exposes port 8080 or sets `ZOTUI_*`. Anything zotui did on a schedule is better served by the [GitHub Actions](https://github.com/openzot/actions), which run the same binary in CI.
+
 ## [0.17.2] - 2026-08-22
 
 ### Fixed

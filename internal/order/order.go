@@ -148,7 +148,7 @@ func Parse(data []byte) (Order, error) {
 }
 
 // FromText builds an order from free text. Text that already is a valid order
-// document is used as one - this is what lets a dispatcher (zotui) carry either
+// document is used as one - this is what lets a dispatcher carry either
 // a plain mission or a full order in the same field - and anything else becomes
 // the objective of a minimal order.
 func FromText(text string) Order {

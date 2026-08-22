@@ -1,8 +1,6 @@
 /zot
-/zotui
 /.local/
 /.zot/
-/internal/zotui/worker/artifacts/*.gz
 
 configs/zot.yaml
 .env

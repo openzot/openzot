@@ -108,12 +108,9 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
-          make worker-assets
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-          for cmd in zot zotui; do
-            go build -trimpath -o "${cmd}${EXT}" "./cmd/${cmd}"
-          done
+          go build -trimpath -o "zot${EXT}" ./cmd/zot
 
   container:
     name: Build and smoke-test container (${{ matrix.arch }})
@@ -168,19 +165,15 @@ jobs:
             exit 1
           fi
 
-          # The image ships both commands, plus a usable POSIX shell and writable
-          # workspace as the unprivileged image user. Zotui environments are
-          # separate images into which the server deploys its worker binary.
+          # The image ships the binary, a usable POSIX shell and a writable
+          # workspace as the unprivileged image user - and nothing more.
           docker run --rm --platform linux/${{ matrix.arch }} --entrypoint sh openzot/zot:ci-${{ matrix.arch }} -c '
             set -eu
             test "$(id -u)" = "10001"
             test -x /usr/local/bin/zot
-            test -x /usr/local/bin/zotui
-            zotui config path | grep -q "/home/zot/.config/zotui/config.yaml"
             ! command -v git >/dev/null
             ! command -v rg >/dev/null
             test -f /usr/local/share/zot/zot.example.yaml
-            test -f /usr/local/share/zot/zotui.example.yaml
             cd /workspace && echo probe > probe.txt && cat probe.txt
           '
 

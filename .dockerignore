@@ -4,8 +4,6 @@
 .local
 dist
 zot
-zotui
-internal/zotui/worker/artifacts/*.gz
 # A go.work someone created locally must not reach the build: its go line would
 # cap the toolchain below what go.mod requires, and the build would fail with a
 # version error rather than anything that names the cause.
