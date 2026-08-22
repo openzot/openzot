@@ -213,6 +213,39 @@ zot --resume last
 log and records which session it continued, so a chain of continued runs stays
 reconstructable.
 
+### Exporting sessions
+
+The log is zot's own shape. `zot sessions export` renders sessions as
+**trajectories** - the conversation in the chat convention everything else
+reads (`system`, `user`, `assistant` with `tool_calls`, `tool`), with the run's
+task, model, outcome and timings beside it - which is what you want for
+analysis, evaluation or building a training dataset.
+
+```bash
+# the last session, as one JSON line on stdout
+zot sessions export
+
+# named sessions into a directory: <id>.jsonl each, screenshots under images/
+zot sessions export 20260805-155859 20260805-171012 --out ./trajectories
+
+# every finished chain in the session directory
+zot sessions export --all --out ./trajectories
+
+# keep the conversations that compaction or a resume superseded, too
+zot sessions export --snapshots --out ./trajectories
+```
+
+A session that continued earlier ones is exported as **one** trajectory - the
+last log carries the whole conversation - and its `chain` lists the sessions
+behind it. `messages` is the conversation as it stood at the end; after
+compaction that is a summary plus the recent turns, so `--snapshots` adds the
+earlier states (oldest first) for anyone who wants every turn that happened.
+Each message keeps zot's own `type` beside its `role`, and an assistant turn
+carries the model's `reasoning` when the provider surfaced it. Images the model
+was shown are copied next to the export and referenced by relative path; on
+stdout the turn keeps only its text. The system prompt is not in the log and so
+not in the export - `task` is the brief the run was given.
+
 The log is appended and flushed line by line, so it is readable while the run is
 still going and a killed run still leaves everything up to the kill. Use
 `--no-session` to record nothing, or `--session-dir` (or `ZOT_SESSION_DIR`) to

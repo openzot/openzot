@@ -409,6 +409,17 @@ type Session struct {
 	// Truncated reports that the log ended mid-record, which is what a crashed
 	// or killed run leaves behind. The records before it are still usable.
 	Truncated bool
+
+	// Discarded holds the conversations a reset threw away, oldest first: each
+	// is what the history looked like before the engine compacted it. Not part
+	// of the run's state - a resume ignores them - but they are the turns that
+	// actually happened, which is what an export for analysis or training wants.
+	Discarded [][]Message
+
+	// Started and Ended are the timestamps of the first and last records, zero
+	// for a session parsed from nothing.
+	Started time.Time
+	Ended   time.Time
 }
 
 // Complete reports whether the run recorded an outcome.
@@ -493,6 +504,14 @@ func Read(r io.Reader) (*Session, error) {
 			continue
 		}
 
+		if !record.At.IsZero() {
+			if session.Started.IsZero() {
+				session.Started = record.At
+			}
+
+			session.Ended = record.At
+		}
+
 		switch record.Kind {
 		case KindMeta:
 			if record.Meta != nil {
@@ -510,6 +529,10 @@ func Read(r io.Reader) (*Session, error) {
 			}
 
 		case KindReset:
+			if len(session.Messages) > 0 {
+				session.Discarded = append(session.Discarded, session.Messages)
+			}
+
 			session.Messages = nil
 
 		case KindResult:

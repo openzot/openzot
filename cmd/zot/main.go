@@ -18,13 +18,15 @@
 //	# ledger already records as done; naming orders runs exactly those
 //	zot .zot/orders/add-a-health-endpoint-to-the-go-server-and-a-te.yaml
 //
-//	# every run is logged; pick one up where it stopped
+//	# every run is logged; pick one up where it stopped, or export one
 //	zot sessions
 //	zot --resume last
+//	zot sessions export last --out ./trajectories
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,7 +72,12 @@ func run() error {
 
 	// `zot sessions` lists what previous runs left behind. Its own subcommand
 	// rather than a flag because it takes no order and produces no run.
+	// `zot sessions export` renders sessions for use outside zot.
 	if len(os.Args) > 1 && os.Args[1] == "sessions" {
+		if len(os.Args) > 2 && os.Args[2] == "export" {
+			return exportSessions(os.Args[3:], os.Stdout, os.Stderr)
+		}
+
 		return listSessions(os.Args[2:])
 	}
 
@@ -826,6 +833,169 @@ func listSessions(args []string) error {
 	}
 
 	return nil
+}
+
+// exportSessions renders sessions as trajectories: the conversation in the
+// chat shape the rest of the ecosystem reads, with the run's outcome beside it.
+//
+// To stdout it is JSON Lines, one trajectory per line, images left where they
+// are. With --out it is a directory of `<id>.jsonl` files plus an `images/`
+// folder the trajectories point into - the shape a dataset is built from, and
+// one `cp -r` away from wherever it is going.
+func exportSessions(args []string, stdout, stderr io.Writer) error {
+	set := pflag.NewFlagSet("sessions export", pflag.ContinueOnError)
+	set.SetOutput(stderr)
+
+	dir := set.String("session-dir", config.DefaultSessionDir(), "directory the sessions are read from")
+	out := set.String("out", "", "directory to write <id>.jsonl and images/ into (default: JSON Lines on stdout, without images)")
+	snapshots := set.Bool("snapshots", false, "include the earlier states of the conversation that compaction or a resume superseded")
+	all := set.Bool("all", false, "export every session that is not continued by another, instead of the ones named")
+
+	set.Usage = func() {
+		fmt.Fprintln(stderr, "usage: zot sessions export [flags] [session ...]")
+		fmt.Fprintln(stderr)
+		fmt.Fprintln(stderr, "A session is an id, a path, or \"last\" (the default). A session that continues")
+		fmt.Fprintln(stderr, "earlier ones is exported as one trajectory with the whole chain behind it.")
+		fmt.Fprintln(stderr)
+		set.PrintDefaults()
+	}
+
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+
+	entries, err := session.List(*dir)
+	if err != nil {
+		return err
+	}
+
+	byID := make(map[string]session.Entry, len(entries))
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+
+	var paths []string
+
+	switch {
+	case *all:
+		continued := map[string]bool{}
+		for _, entry := range entries {
+			if entry.ResumedFrom != "" {
+				continued[entry.ResumedFrom] = true
+			}
+		}
+
+		// oldest first, so a directory of exports reads in the order it happened
+		for i := len(entries) - 1; i >= 0; i-- {
+			if !continued[entries[i].ID] {
+				paths = append(paths, entries[i].Path)
+			}
+		}
+
+		if len(paths) == 0 {
+			return fmt.Errorf("sessions export: no sessions in %s", *dir)
+		}
+
+	default:
+		references := set.Args()
+		if len(references) == 0 {
+			references = []string{"last"}
+		}
+
+		for _, reference := range references {
+			path, err := session.Resolve(*dir, reference)
+			if err != nil {
+				return err
+			}
+
+			paths = append(paths, path)
+		}
+	}
+
+	if *out != "" {
+		if err := os.MkdirAll(*out, 0o755); err != nil {
+			return fmt.Errorf("sessions export: %w", err)
+		}
+	}
+
+	for _, path := range paths {
+		last, err := session.Load(path)
+		if err != nil {
+			return fmt.Errorf("sessions export: read %s: %w", path, err)
+		}
+
+		chain, err := loadChain(byID, last)
+		if err != nil {
+			return fmt.Errorf("sessions export: %w", err)
+		}
+
+		options := session.ExportOptions{Snapshots: *snapshots}
+
+		if *out != "" {
+			options.ImageDir = filepath.Join(*out, "images")
+			options.RelativeTo = *out
+		}
+
+		trajectory, err := session.Export(last, chain, options)
+		if err != nil {
+			return fmt.Errorf("sessions export: %s: %w", last.Meta.ID, err)
+		}
+
+		encoded, err := json.Marshal(trajectory)
+		if err != nil {
+			return fmt.Errorf("sessions export: encode %s: %w", last.Meta.ID, err)
+		}
+
+		if *out == "" {
+			fmt.Fprintln(stdout, string(encoded))
+
+			continue
+		}
+
+		target := filepath.Join(*out, trajectory.ID+".jsonl")
+
+		if err := os.WriteFile(target, append(encoded, '\n'), 0o644); err != nil {
+			return fmt.Errorf("sessions export: %w", err)
+		}
+
+		fmt.Fprintf(stderr, "%s  %d messages, %d images -> %s\n",
+			trajectory.ID, len(trajectory.Messages), len(trajectory.Images), target)
+	}
+
+	return nil
+}
+
+// loadChain loads the sessions a session continued, oldest first.
+//
+// Walks ResumedFrom through the listing. The walk is bounded, and a link whose
+// session is gone ends it at what is actually present: provenance is best
+// effort, the conversation itself is all in the last log.
+func loadChain(byID map[string]session.Entry, last *session.Session) ([]*session.Session, error) {
+	const bound = 1000
+
+	var chain []*session.Session
+
+	seen := map[string]bool{last.Meta.ID: true}
+	previous := last.Meta.ResumedFrom
+
+	for previous != "" && !seen[previous] && len(chain) < bound {
+		entry, ok := byID[previous]
+		if !ok {
+			break
+		}
+
+		seen[previous] = true
+
+		loaded, err := session.Load(entry.Path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", entry.Path, err)
+		}
+
+		chain = append([]*session.Session{loaded}, chain...)
+		previous = loaded.Meta.ResumedFrom
+	}
+
+	return chain, nil
 }
 
 // oneLine flattens a task to a single truncated line, so a multi-line brief does
