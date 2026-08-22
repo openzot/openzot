@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/openzot/openzot"
 	"github.com/openzot/openzot/internal/buildinfo"
@@ -2646,5 +2647,106 @@ func TestAMissingLinkDoesNotCountAsAChain(t *testing.T) {
 
 	if _, ok := unfinishedRunOf(dir, task); !ok {
 		t.Error("an unresolvable predecessor must not be assumed to be a long chain")
+	}
+}
+
+// `zot sessions export` renders a session in the chat shape, as JSON Lines on
+// stdout or as a directory of trajectories with their images; "last" is the
+// default, and a session that continued an earlier one carries the chain.
+func TestSessionsExport(t *testing.T) {
+	dir := t.TempDir()
+
+	first, err := session.Create(dir, "20260822-100000", session.Meta{Task: "build it"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := first.Message(session.Message{Type: "user", Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Close()
+
+	second, err := session.Create(dir, "20260822-110000", session.Meta{Task: "build it", ResumedFrom: "20260822-100000"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := second.Message(session.Message{Type: "user", Text: "go"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := second.Message(session.Message{Type: "bot", Text: "built"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := second.Result(session.Result{Reason: "success"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// stdout: one line, the last session, with the chain behind it
+	withArgs(t, "sessions", "export", "--session-dir", dir)
+
+	output, err := captureStdout(t, run)
+	if err != nil {
+		t.Fatalf("sessions export: %v", err)
+	}
+
+	var trajectory session.Trajectory
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &trajectory); err != nil {
+		t.Fatalf("output is not one JSON line: %v\n%s", err, output)
+	}
+
+	if trajectory.ID != "20260822-110000" || len(trajectory.Chain) != 2 || !trajectory.Complete {
+		t.Errorf("trajectory = %+v", trajectory)
+	}
+
+	if len(trajectory.Messages) != 2 || trajectory.Messages[1].Role != "assistant" {
+		t.Errorf("messages = %+v", trajectory.Messages)
+	}
+
+	// --out: a file per trajectory, named by the session
+	out := filepath.Join(t.TempDir(), "export")
+
+	withArgs(t, "sessions", "export", "--session-dir", dir, "--out", out, "20260822-110000")
+
+	if _, err := captureStderr(t, run); err != nil {
+		t.Fatalf("sessions export --out: %v", err)
+	}
+
+	written, err := os.ReadFile(filepath.Join(out, "20260822-110000.jsonl"))
+	if err != nil {
+		t.Fatalf("exported file: %v", err)
+	}
+
+	if !strings.Contains(string(written), `"chain":["20260822-100000","20260822-110000"]`) {
+		t.Errorf("exported file = %s", written)
+	}
+
+	// --all: every chain tip, and nothing that was continued
+	all := filepath.Join(t.TempDir(), "all")
+
+	withArgs(t, "sessions", "export", "--session-dir", dir, "--out", all, "--all")
+
+	if _, err := captureStderr(t, run); err != nil {
+		t.Fatalf("sessions export --all: %v", err)
+	}
+
+	entries, _ := os.ReadDir(all)
+
+	names := []string{}
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	if len(names) != 1 || names[0] != "20260822-110000.jsonl" {
+		t.Errorf("--all wrote %v, want only the chain's tip", names)
+	}
+
+	// an unknown session is an error, not an empty export
+	withArgs(t, "sessions", "export", "--session-dir", dir, "nope")
+
+	if _, err := captureStdout(t, run); err == nil {
+		t.Error("exporting an unknown session succeeded")
 	}
 }

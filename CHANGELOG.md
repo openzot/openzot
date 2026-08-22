@@ -2,6 +2,14 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-08-22
+
+### Added
+
+- **`zot sessions export` turns session logs into trajectories.** A session log is zot's own shape - fine-grained, resumable, and nothing else reads it. The new subcommand renders sessions in the chat convention the rest of the ecosystem speaks (`system`, `user`, `assistant` with `tool_calls`, `tool`), one JSON object per session with the task, model, outcome, timings and event counts beside the conversation: a file of these is a dataset, not a format somebody has to write a parser for. Reasoning, tool calls and the answer that zot records as separate turns fold into one assistant message; each tool result names the call it answers; every message keeps zot's own `type` next to its `role`, so a compaction checkpoint is still told apart from the brief.
+
+  `zot sessions export` prints the last session as one line on stdout; `--out DIR` writes `<id>.jsonl` files and copies the screenshots the model was shown into `images/`, referenced by relative path; `--all` exports every finished chain; `--snapshots` keeps the conversations that compaction or a resume superseded, oldest first, for anyone who wants every turn that happened rather than the final state. A resumed run exports as one trajectory with its `chain` of sessions behind it. `Session` now also exposes `Discarded` (the conversations a reset threw away) and `Started` / `Ended`.
+
 ## [0.18.0] - 2026-08-22
 
 ### Removed
