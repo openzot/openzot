@@ -22,14 +22,13 @@ docker pull ghcr.io/openzot/openzot:latest
 | Registry | `ghcr.io/openzot/openzot` |
 | Tags | `vX.Y.Z`, `X.Y.Z`, `X.Y`, and `latest` for stable releases. Prereleases (`v0.5.0-beta.1`) publish only their exact tags and never move `latest`. |
 | Platforms | `linux/amd64`, `linux/arm64` |
-| Commands | `zot` and `zotui`; the default entrypoint is `zot` |
+| Command | `zot`, which is also the entrypoint |
 | Base | `alpine:3.22` plus TLS roots and timezone data |
 
-The published image is deliberately the pure runtime: the Zot and Zotui
-executables and a POSIX shell, without Git, ripgrep, compilers, or language
-toolchains. It is useful for a mounted workspace whose task needs no extra
-executable, or as a Zotui command center using remote compute. Zotui deploys its
-embedded Zot worker into whichever toolchain image an environment selects.
+The published image is deliberately the pure runtime: the zot executable and a
+POSIX shell, without Git, ripgrep, compilers, or language toolchains. It is
+useful as-is for a mounted workspace whose task needs no extra executable, and
+as a base to [layer a toolchain on](#extending-the-image) when one does.
 
 ### Layout
 
@@ -38,33 +37,11 @@ embedded Zot worker into whichever toolchain image an environment selects.
 | `/workspace` | Working directory. Mount your checkout here. |
 | `/home/zot/.config/zot/config.yaml` | Config file, pointed at by `ZOT_CONFIG`. Absent by default - zot runs on defaults plus env vars. |
 | `/usr/local/share/zot/zot.example.yaml` | The documented example config, for copying out. |
-| `/usr/local/share/zot/zotui.example.yaml` | The Zotui example config, for copying out. |
 | `/usr/local/bin/zot` | The binary. |
-| `/usr/local/bin/zotui` | The browser command-center binary. |
 
 `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and
 `XDG_RUNTIME_DIR` are all set under `/home/zot`. The image user is `zot`
 (uid/gid 10001).
-
-## Running Zotui
-
-Select `zotui` as the entrypoint, publish port 8080, and persist its config and
-state directories:
-
-```bash
-docker run --rm \
-  --entrypoint zotui \
-  --publish 8080:8080 \
-  --env-file ./zotui.env \
-  --volume "$HOME/.config/zotui":/home/zot/.config/zotui \
-  --volume zotui-state:/home/zot/.local/state/zotui \
-  ghcr.io/openzot/openzot:latest
-```
-
-The image sets `ZOTUI_ADDR=0.0.0.0:8080`. Its lean runtime does not include a
-Docker client, so use a configured remote compute environment when running
-Zotui from this image. Local Docker compute remains intended for a host install
-or a purpose-built deployment that supplies Docker explicitly.
 
 ## Running a task
 
@@ -234,21 +211,6 @@ USER zot
 
 Pin the base tag rather than tracking `latest`, so an agent's behaviour does not
 change under a build you did not intend.
-
-Zotui environments work differently. With no `image`, Zotui starts its small,
-version-pinned standard environment containing a shell, Git, and curl, then
-deploys Zot into it. Set `image` when a project needs a different toolchain; for
-example, a Go environment can use the upstream Go image directly:
-
-```yaml
-environments:
-  go-development:
-    image: golang:1.26.6-bookworm
-```
-
-The command center transfers the matching Linux Zot executable into each new
-sandbox before starting the run. A custom environment image is needed only when
-the task needs tools absent from its upstream language image.
 
 ## Building locally
 

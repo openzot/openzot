@@ -67,20 +67,6 @@ runs as a small read-only run through the same engine, surveying the working
 tree - the build files, the test setup - so the criteria it proposes name the
 project's real commands and files.
 
-## zotui
-
-The release also includes **zotui**, a browser command center for operating zot
-as reusable workers. Choose a repository, environment, provider and model, give
-the worker its mission, then launch runs on demand or on a schedule and follow
-their output and history from the browser. Workers can run in disposable local
-Docker containers or on configured remote compute.
-
-https://github.com/user-attachments/assets/304b4f32-c634-4936-a1ec-66bdd792bd66
-
-zotui keeps the same autonomy boundary: it dispatches and observes complete
-runs; it does not turn zot into a chat-driven coding agent. See
-[Configuring zotui](docs/zotui-configuration.md) for setup and deployment.
-
 ## Why zot exists
 
 Most coding tools optimize the conversation between a developer and an agent.
@@ -102,7 +88,7 @@ required:
 ```bash
 VERSION=vX.Y.Z; OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
 curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
-mv "zot-${VERSION}-${OS}-${ARCH}"/{zot,zotui} ~/.local/bin/   # or any directory on your PATH
+mv "zot-${VERSION}-${OS}-${ARCH}"/zot ~/.local/bin/   # or any directory on your PATH
 ```
 
 zot defaults to the **`zai`** provider running **`glm-5.2`**. Export a key and
@@ -244,7 +230,6 @@ upgrading.
 
 - [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints, the Responses API
 - [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENTS.md` & skills
-- [docs/zotui-configuration.md](docs/zotui-configuration.md) - zotui repos, compute, models, environments, Vercel Sandbox, and local Docker setup
 - [docs/development.md](docs/development.md) - building from source, release vs developer builds, the codebase map
 - [docs/portable-config.md](docs/portable-config.md) - baking the configuration into the binary
 - [docs/docker.md](docs/docker.md) - running the container image

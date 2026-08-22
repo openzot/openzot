@@ -11,16 +11,14 @@ LDFLAGS  = -s -w -X github.com/openzot/openzot/internal/version.Version=$(VERSIO
 GOTOOLCHAIN = auto
 export GOTOOLCHAIN
 
-CMDS = zot zotui
-WORKER_ASSET_DIR = internal/zotui/worker/artifacts
-WORKER_BUILD_DIR = $(CURDIR)/.local/build
+CMDS = zot
 
 # Cross-compilation defaults to the host, so `make cross` with no arguments
 # builds something predictable rather than whatever was last exported.
 GOOS   ?= $(shell go env GOHOSTOS)
 GOARCH ?= $(shell go env GOHOSTARCH)
 
-.PHONY: help build dev worker-assets image dev-ui vendor-ui clean test race cover cover-check vet lint fmt cross
+.PHONY: help build dev image clean test race cover cover-check vet lint fmt cross
 
 # Listing the targets rather than assuming one: zot has two build variants that
 # differ in what the binary may read from disk, and picking the wrong one
@@ -28,12 +26,9 @@ GOARCH ?= $(shell go env GOHOSTARCH)
 help:
 	@echo "zot - an automated software factory in a single binary"
 	@echo
-	@echo "  make build      Build zot and zotui for release ($(GOOS)/$(GOARCH))"
-	@echo "  make dev        Build zot and zotui for development - see below"
-	@echo "  make worker-assets  Embed Linux Zot workers for sandbox deployment"
-	@echo "  make image      Build the lean Zot runtime image"
-	@echo "  make dev-ui     Run the browser command center for local development"
-	@echo "  make vendor-ui  Refresh pinned third-party UI assets committed to source"
+	@echo "  make build      Build zot for release ($(GOOS)/$(GOARCH))"
+	@echo "  make dev        Build zot for development - see below"
+	@echo "  make image      Build the lean zot runtime image"
 	@echo "  make test       Run the test suite"
 	@echo "  make race       Run the test suite under the race detector"
 	@echo "  make cover      Report per-package test coverage"
@@ -53,7 +48,7 @@ help:
 	@echo "Overrides: VERSION=$(VERSION)"
 	@echo "           GOOS=$(GOOS) GOARCH=$(GOARCH)"
 
-build: worker-assets
+build:
 	@set -e; for cmd in $(CMDS); do \
 		echo "Building $$cmd ($(VERSION), release)..."; \
 		CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \
@@ -63,7 +58,7 @@ build: worker-assets
 # working directory, which a released binary must never do - pointing zot at a
 # checkout would otherwise be enough to load whatever credentials are lying
 # around in it.
-dev: worker-assets
+dev:
 	@set -e; for cmd in $(CMDS); do \
 		echo "Building $$cmd ($(VERSION), dev - reads .env)..."; \
 		CGO_ENABLED=0 go build -tags dev -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \
@@ -71,33 +66,6 @@ dev: worker-assets
 
 image:
 	docker build --build-arg VERSION=$(VERSION) --tag openzot/zot:local .
-
-worker-assets:
-	@mkdir -p "$(WORKER_ASSET_DIR)" "$(WORKER_BUILD_DIR)"
-	@set -eu; for arch in amd64 arm64; do \
-		echo "Building embedded zot worker ($(VERSION), linux/$$arch)..."; \
-		worker_binary="$(WORKER_BUILD_DIR)/zot-linux-$$arch"; \
-		worker_asset="$(WORKER_ASSET_DIR)/zot-linux-$$arch.gz"; \
-		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o "$$worker_binary" ./cmd/zot; \
-		gzip -n -9 -c "$$worker_binary" > "$$worker_asset.tmp"; \
-		mv "$$worker_asset.tmp" "$$worker_asset"; \
-	done
-
-# Uses the credential-free fixture by default. ZOT_CONFIG is the make target's
-# explicit config input and takes precedence over the Dev Container's ambient
-# ZOTUI_CONFIG; the latter remains Zotui's direct-process environment variable.
-dev-ui:
-	@$(MAKE) --no-print-directory worker-assets
-	@ZOTUI_CONFIG="$${ZOT_CONFIG:-$${ZOTUI_CONFIG:-$(CURDIR)/.devcontainer/zotui.dev.yaml}}" \
-		ZOTUI_ADDR="$${ZOTUI_ADDR:-127.0.0.1:8080}" \
-		ZOTUI_REPO_PATH="$${ZOTUI_REPO_PATH:-$(CURDIR)}" \
-		ZOTUI_STORE_DSN="$${ZOTUI_STORE_DSN:-$(CURDIR)/.local/state/zotui.db}" \
-		go run ./cmd/zotui
-
-# Downloads checksum-pinned browser dependencies into the embedded asset tree.
-# The WOFF2 files are stored through the repository's existing Git LFS rules.
-vendor-ui:
-	@./scripts/vendor-ui.sh
 
 fmt:
 	go fmt ./...
@@ -127,10 +95,9 @@ lint: vet
 
 clean:
 	rm -f $(CMDS)
-	rm -f $(WORKER_ASSET_DIR)/zot-linux-*.gz
 
 # Cross-compile a specific platform: make cross GOOS=darwin GOARCH=arm64
-cross: worker-assets
+cross:
 	@set -e; for cmd in $(CMDS); do \
 		echo "Building $$cmd ($(VERSION)) for $(GOOS)/$(GOARCH)..."; \
 		CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags "$(LDFLAGS)" -o $$cmd ./cmd/$$cmd; \

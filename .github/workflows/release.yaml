@@ -92,7 +92,6 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          make worker-assets VERSION="${VERSION}"
           LDFLAGS="-s -w -X github.com/openzot/openzot/internal/version.Version=${VERSION}"
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
@@ -100,21 +99,18 @@ jobs:
           OUTDIR="dist/zot-${VERSION}-${GOOS}-${GOARCH}"
           mkdir -p "${OUTDIR}"
 
-          for cmd in zot zotui; do
-            echo "Building ${cmd}..."
-            go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/${cmd}${EXT}" "./cmd/${cmd}"
-            test -s "${OUTDIR}/${cmd}${EXT}"
-          done
+          echo "Building zot..."
+          go build -trimpath -ldflags "${LDFLAGS}" -o "${OUTDIR}/zot${EXT}" ./cmd/zot
+          test -s "${OUTDIR}/zot${EXT}"
 
           cp configs/zot.example.yaml "${OUTDIR}/zot.example.yaml"
-          cp configs/zotui.example.yaml "${OUTDIR}/zotui.example.yaml"
           cp README.md "${OUTDIR}/README.md"
 
           ARCHIVE="dist/zot-${VERSION}-${GOOS}-${GOARCH}.tar.gz"
           ROOT="zot-${VERSION}-${GOOS}-${GOARCH}"
           tar -czf "${ARCHIVE}" -C dist "${ROOT}"
           CONTENTS="$(tar -tzf "${ARCHIVE}")"
-          for file in "zot${EXT}" "zotui${EXT}" zot.example.yaml zotui.example.yaml README.md; do
+          for file in "zot${EXT}" zot.example.yaml README.md; do
             grep -Fxq "${ROOT}/${file}" <<<"${CONTENTS}"
           done
 
