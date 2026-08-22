@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -204,7 +205,18 @@ func httpPost(ctx context.Context, httpClient *http.Client, config Config, url s
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		defer response.Body.Close()
 
-		return nil, readError(response)
+		err := readError(response)
+
+		// the refused request's size travels with the error: against a
+		// suspected context ceiling it is the difference between a correlation
+		// and a diagnosis
+		var providerErr *Error
+		if errors.As(err, &providerErr) {
+			providerErr.RequestBytes = len(encoded)
+			providerErr.RequestBody = clip(string(encoded), maxDumpBody)
+		}
+
+		return nil, err
 	}
 
 	return response, nil

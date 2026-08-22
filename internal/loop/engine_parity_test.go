@@ -149,3 +149,31 @@ func TestRunAccumulatesProviderReportedUsage(t *testing.T) {
 			result.Budget.InputTokens, result.Budget.OutputTokens)
 	}
 }
+
+// The empty budget counts CONSECUTIVE empty turns, as its own documentation says:
+// a productive turn in between must reset it, so single stalls scattered over a
+// long run do not add up to a false StopEmpty. (Regressed once: the counter was
+// cumulative, so a run could die to its third stall hundreds of iterations after
+// the first.)
+func TestEmptyCounterResetsAfterAProductiveTurn(t *testing.T) {
+	result := run(t, Options{
+		Client: stub(t,
+			[]string{stop()},                       // empty: 1/3
+			[]string{tool("call_1", "echo", "{}")}, // productive - resets
+			[]string{stop()},                       // empty: 1/3 again
+			[]string{tool("call_2", "echo", "{}")}, // productive - resets
+			[]string{text("done"), stop()},         // a real answer ends the run
+		),
+		Tools:      echoTool(new(int)),
+		Messages:   []Message{{Type: TypeUser, Text: "go"}},
+		MaxEmpties: 3,
+	})
+
+	if result.Reason != StopStop {
+		t.Errorf("reason = %q, want %q - scattered empties must not stop the run", result.Reason, StopStop)
+	}
+
+	if result.Budget.Empties != 0 {
+		t.Errorf("empties = %d, want 0 - the last turns were productive", result.Budget.Empties)
+	}
+}

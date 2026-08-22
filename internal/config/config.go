@@ -71,6 +71,13 @@ type ModelConfig struct {
 	// where one gateway fronts several providers, each wanting its own key.
 	// Supports "$ENV_VAR".
 	APIKey string `yaml:"api_key"`
+	// Context overrides the model's total context window, in tokens. The
+	// escape hatch for a serving endpoint whose real ceiling is smaller than
+	// the model's card - an uncatalogued model is assumed large, so a small
+	// upstream rejects the request before compaction ever fires, and an
+	// upstream that reports overflow opaquely gives the recovery path nothing
+	// to detect. Zero uses the catalogue.
+	Context int `yaml:"context"`
 }
 
 // builtinProviders are the providers zot ships with. Each falls back to its
@@ -151,7 +158,9 @@ type UI struct {
 	// (at more memory). The full run is always in the session log regardless.
 	Scrollback int `yaml:"scrollback"`
 	// Stats selects which fields the header bar shows, and in what order (see
-	// tui.KnownStats: model, provider, dir, iter, tools, edits, elapsed). Empty
+	// tui.KnownStats: provider, model, dir, iter, tools, edits, elapsed,
+	// tokens, tps, pace, task, order). Order matters - the bar drops what does
+	// not fit, so earlier fields survive a narrower terminal. Empty
 	// uses the default set.
 	Stats []string `yaml:"stats"`
 }
@@ -179,6 +188,11 @@ type Agent struct {
 	// unbounded - like max_calls and max_time, zot sends no cap, so the model
 	// produces its full output. A positive value caps a single response.
 	MaxTokens int `yaml:"max_tokens"`
+	// MaxToolOutput caps the bytes a single tool result may return before it is
+	// truncated. Zero uses the built-in default. Lower it for a model served by
+	// an endpoint with a small context window, where one large result can
+	// overflow the whole request and be rejected wholesale.
+	MaxToolOutput int `yaml:"max_tool_output"`
 	// MaxContinuations caps recovery attempts within a run - a truncated
 	// response, an empty turn, or a retriable provider error. Zero uses the
 	// built-in default.
@@ -212,7 +226,9 @@ type Agent struct {
 	// window). Zero uses the default. Must be within (0, 1].
 	CompactTriggerRatio float64 `yaml:"compact_trigger_ratio"`
 	// Instructions optionally overrides the built-in system prompt. Leave
-	// empty to use zot.DefaultInstructions.
+	// empty to use zot.DefaultInstructions. An override replaces the prompt
+	// but not zot's non-interactive contract, which is re-attached to whatever
+	// a run resolves to: the run has no input channel to opt back into.
 	Instructions string `yaml:"instructions"`
 }
 

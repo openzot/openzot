@@ -33,6 +33,7 @@ type tickMsg struct{}
 type model struct {
 	appName  string
 	task     string
+	title    string // shown instead of task when set - see tui.Meta.Title
 	model    string
 	provider string
 	workdir  string
@@ -54,6 +55,19 @@ type model struct {
 	truncated        bool     // oldest lines have been dropped to bound memory
 	maxEntries       int      // scrollback cap (DefaultMaxScrollback unless overridden)
 	stats            []string // header fields to show, in order (DefaultStats when empty)
+
+	// Task progress, read off the agent's own plan and progress calls: how many
+	// steps it laid out, and how many it has since reported finished. The model
+	// is the only thing that knows what "done" means for its plan, so this is
+	// its claim rather than a measurement - which is why it is shown as its own
+	// stat and never mixed into a limit-style budget.
+	planSteps int
+	stepsDone int
+
+	// Where this run sits in a batch (order 2 of 5), for a stat that says how
+	// much of the queue is left rather than how much of one order is.
+	batchIndex int
+	batchSize  int
 
 	status     status
 	iteration  int
@@ -166,11 +180,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.maybeQuit()
 
 	case agentErrMsg:
-		if m.status == statusRunning {
-			m.status = statusFailed
+		// The terminal error arrives after the exit event, which has already
+		// flipped the status - it must still be kept and shown, because it is
+		// usually the run's only diagnostic: "the provider failed" on screen
+		// with the actual 404 dropped on the floor was how that got lost. A
+		// run that ended in success is the exception - a late error must not
+		// resurrect a finished run as a failure.
+		if m.err == nil && msg.err != nil && m.status != statusDone {
 			m.err = msg.err
 			m.flushPending()
-			m.appendEntry(errStyle.Render("✗ agent error: " + msg.err.Error()))
+			m.appendEntry(errStyle.Render("✗ " + msg.err.Error()))
+		}
+		if m.status == statusRunning {
+			m.status = statusFailed
 		}
 		return m, m.maybeQuit()
 
@@ -204,7 +226,9 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 	case agent.IterationEvent:
 		m.iteration = e.Iteration
 		m.flushPending()
-		m.appendEntry(m.fillRule(fmt.Sprintf("── iteration %d ", e.Iteration)))
+		// A fixed short rule: one that fills the width would wrap at a narrow
+		// terminal and smear the divider across two rows.
+		m.appendEntry(dividerStyle.Render(fmt.Sprintf("─── iteration %d ───", e.Iteration)))
 
 	case agent.TokenAgentEvent:
 		m.pending += e.Token
@@ -223,6 +247,8 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 		if e.Name == "write" || e.Name == "edit" {
 			m.fileEdits++
 		}
+
+		m.trackProgress(e.Name, e.Args)
 		m.appendEntry(renderToolStart(e.Name, e.Args))
 		if m.showDiff {
 			if d := diffForTool(e.Name, e.Args, m.vp.Width); d != "" {
@@ -237,6 +263,20 @@ func (m *model) handleEvent(ev agent.AgentEvent) {
 
 	case agent.ToolCallErrorEvent:
 		m.appendEntry(errStyle.Render("    ✗ " + e.Name + ": " + e.Error))
+
+	case agent.NoticeEvent:
+		// a corrective nudge - an empty turn, a truncation continuation, a
+		// settle reminder; without this line the recovery renders as bare
+		// iteration dividers, indistinguishable from a hang
+		m.flushPending()
+		m.appendEntry(statusRunningStyle.Render("⚠ ") + metaStyle.Render(e.Text))
+
+	case agent.RetryEvent:
+		// a retried provider failure spends a continuation and then waits out a
+		// backoff; without this line the wait renders as empty iterations
+		// stacking up - a run that is surviving looks like one that is hanging
+		m.flushPending()
+		m.appendEntry(statusRunningStyle.Render("↻ retrying") + "  " + metaStyle.Render(e.Error))
 
 	case agent.CompactionEvent:
 		// compaction rewrites the conversation and spends a model call; show it so a
@@ -367,17 +407,6 @@ func (m *model) wrap(s string) string {
 	return lipgloss.NewStyle().Width(m.vp.Width).Render(s)
 }
 
-func (m *model) fillRule(label string) string {
-	w := m.vp.Width
-	if w <= 0 {
-		return dividerStyle.Render(label)
-	}
-	if pad := w - lipgloss.Width(label); pad > 0 {
-		label += strings.Repeat("─", pad)
-	}
-	return dividerStyle.Render(label)
-}
-
 // --- view -------------------------------------------------------------------
 
 func (m model) View() string {
@@ -399,7 +428,14 @@ func (m model) titleBar() string {
 	if room < 8 {
 		return left
 	}
-	return left + " " + taskStyle.Render(truncate(m.task, room))
+	// A title is what the header wants: the task is the whole order rendered
+	// for the model, so a one-line header of it is a paragraph cut mid-word.
+	label := m.title
+	if label == "" {
+		label = m.task
+	}
+
+	return left + " " + taskStyle.Render(truncate(label, room))
 }
 
 func (m model) badge() string {
@@ -415,13 +451,80 @@ func (m model) badge() string {
 	}
 }
 
+// trackProgress reads task progress out of the agent's reflective tools. A new
+// plan replaces the old one whole - a replanned run is a different task, and
+// carrying the previous step count over would show progress against a plan that
+// no longer exists - and it resets what is done, because the completed steps
+// were steps of the plan being abandoned.
+//
+// The completed list is a set of names, so its length is the count; a progress
+// call that lists more done than were planned means the model outgrew its own
+// plan, and the count follows it rather than pretending the plan was right.
+func (m *model) trackProgress(name string, args map[string]any) {
+	switch name {
+	case "plan":
+		if steps := strList(args, "steps"); len(steps) > 0 {
+			m.planSteps = len(steps)
+			m.stepsDone = 0
+		}
+
+	case "progress":
+		m.stepsDone = len(strList(args, "completed"))
+
+		if m.stepsDone > m.planSteps {
+			m.planSteps = m.stepsDone
+		}
+	}
+}
+
+// tokensPerSecond is the run's output throughput: generated tokens over wall
+// time. Output rather than total, because that is the number a provider's
+// throughput actually varies in and the one a watcher recognises as fast or
+// slow. Zero until there is enough of a run to divide by.
+func (m model) tokensPerSecond() float64 {
+	if m.elapsed <= 0 || m.outputTokens <= 0 {
+		return 0
+	}
+
+	return float64(m.outputTokens) / m.elapsed.Seconds()
+}
+
+// perIteration is the average wall time of one agentic round. Where tps says
+// how fast the model writes, this says how long a whole think-act-observe cycle
+// takes - the number that actually predicts when a long run will finish, since
+// tool calls and not tokens are usually what a slow round is made of.
+func (m model) perIteration() time.Duration {
+	if m.iteration <= 0 || m.elapsed <= 0 {
+		return 0
+	}
+
+	return m.elapsed / time.Duration(m.iteration)
+}
+
 // KnownStats is every field the header meta bar can show. A caller's stat list
 // (Meta.Stats / ui.stats) is validated against it, and new stats are added here
 // as they arrive.
-var KnownStats = []string{"provider", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
+var KnownStats = []string{
+	"provider", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens",
+	"tps", "pace", "task", "order",
+}
 
 // DefaultStats is the field set and order used when no stats are configured.
-var DefaultStats = []string{"provider", "model", "dir", "iter", "tools", "edits", "elapsed", "tokens"}
+//
+// Not everything renderable belongs here. The bar is one line and drops what
+// does not fit, so each default costs the ones after it: a stat earns its place
+// by telling the watcher something they would act on. "tools" is a cumulative
+// count of calls - it climbs on every run and says nothing about whether this
+// one is going well - so it is available but off. The rate stats are the
+// opposite of cumulative and answer "is this run healthy", so they are on.
+//
+// Order is load-bearing for the same reason: the bar keeps the segments that
+// fit and drops the rest, so what is listed first is what survives a narrow
+// terminal. "dir" is last despite being useful because it never changes: a
+// static path is not worth the live stats it would push off the end.
+var DefaultStats = []string{
+	"provider", "model", "task", "order", "iter", "edits", "elapsed", "tps", "pace", "tokens", "dir",
+}
 
 // IsKnownStat reports whether name is a renderable meta-bar field.
 func IsKnownStat(name string) bool {
@@ -459,12 +562,16 @@ func (m model) metaBar() string {
 	segments := map[string]string{
 		"provider": seg("provider", m.provider, metaProvider),
 		"model":    seg("model", m.model, metaModel),
-		"dir":      seg("dir", truncate(m.workdir, 36), metaStyle),
+		"dir":      seg("dir", shortPath(m.workdir, 28), metaStyle),
 		"iter":     seg("iter", counted(m.iteration, m.maxIterations), metaCount),
 		"tools":    seg("tools", counted(m.toolCount, m.maxCalls), metaTools),
 		"edits":    seg("edits", fmt.Sprintf("%d", m.fileEdits), metaEdits),
 		"elapsed":  seg("elapsed", elapsed, metaStyle),
 		"tokens":   seg("tokens", fmt.Sprintf("↑%s ↓%s", fmtTokens(m.inputTokens), fmtTokens(m.outputTokens)), metaModel),
+		"tps":      seg("tps", fmtRate(m.tokensPerSecond()), metaModel),
+		"pace":     seg("pace", fmtPace(m.perIteration()), metaCount),
+		"task":     seg("task", fmtProgress(m.stepsDone, m.planSteps), metaCount),
+		"order":    seg("order", fmtProgress(m.batchIndex, m.batchSize), metaCount),
 	}
 
 	fields := m.stats
@@ -472,14 +579,41 @@ func (m model) metaBar() string {
 		fields = DefaultStats
 	}
 
+	// A segment is shown whole or not at all. Clipping the line to the terminal
+	// width left whichever segment straddled the edge half-rendered - "elap",
+	// "tok" - which reads as a broken UI rather than a narrow one, and a
+	// half-written number is worse than no number: it can be misread. So the
+	// bar takes segments in the configured order for as long as they fit and
+	// stops at the first that does not, giving a prefix that grows and shrinks
+	// predictably as the terminal is resized.
+	separator := metaStyle.Render("  ·  ")
+	separatorWidth := lipgloss.Width(separator)
+
 	parts := make([]string, 0, len(fields))
+	used := 0
+
 	for _, name := range fields {
-		if s, ok := segments[name]; ok {
-			parts = append(parts, s)
+		segment, ok := segments[name]
+		if !ok {
+			continue
 		}
+
+		needed := lipgloss.Width(segment)
+		if len(parts) > 0 {
+			needed += separatorWidth
+		}
+
+		// width is zero until the first WindowSizeMsg arrives; there is no
+		// terminal to fit yet, so nothing is dropped for not fitting it.
+		if m.width > 0 && used+needed > m.width {
+			break
+		}
+
+		parts = append(parts, segment)
+		used += needed
 	}
 
-	line := strings.Join(parts, metaStyle.Render("  ·  "))
+	line := strings.Join(parts, separator)
 
 	return lipgloss.NewStyle().MaxWidth(m.width).Render(line)
 }
@@ -512,4 +646,45 @@ func fmtTokens(n int) string {
 func fmtDuration(d time.Duration) string {
 	d = d.Round(time.Second)
 	return fmt.Sprintf("%02d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// fmtRate renders a tokens-per-second figure. A rate nobody can compute yet -
+// no elapsed time, no tokens - shows as "-" rather than "0.0", because zero is
+// a measurement and this is the absence of one.
+func fmtRate(perSecond float64) string {
+	if perSecond <= 0 {
+		return "-"
+	}
+
+	if perSecond >= 100 {
+		return fmt.Sprintf("%.0f/s", perSecond)
+	}
+
+	return fmt.Sprintf("%.1f/s", perSecond)
+}
+
+// fmtPace renders an average time per iteration. Sub-minute rounds are the
+// normal case and read better in seconds than as 00:07, and here too an
+// unmeasured pace is "-" rather than a confident zero.
+func fmtPace(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "-"
+	case d < time.Minute:
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	default:
+		return fmtDuration(d)
+	}
+}
+
+// fmtProgress renders "done/total", or "-" when there is no total to be a
+// fraction of. A run whose model has not planned yet, and a single order that
+// is not part of a batch, both have nothing to report - and "0/0" reads as a
+// measurement of nothing rather than the absence of one.
+func fmtProgress(done, total int) string {
+	if total <= 0 {
+		return "-"
+	}
+
+	return fmt.Sprintf("%d/%d", done, total)
 }

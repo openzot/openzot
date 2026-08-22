@@ -64,9 +64,8 @@ func TestGatewayQualifiedNameResolvesToTheCreatorEntry(t *testing.T) {
 		t.Errorf("provider = %q, want the creator rather than the gateway", qualified.Provider)
 	}
 
-	if qualified.ContextWindow <= DefaultContextWindow {
-		t.Errorf("context window %d did not beat the default %d - the name fell through to Default",
-			qualified.ContextWindow, DefaultContextWindow)
+	if qualified == Default {
+		t.Errorf("vercel/zai/glm-5.3 resolved to the Default entry - the name fell through")
 	}
 
 	if !qualified.SupportsTools || !qualified.SupportsReasoning {

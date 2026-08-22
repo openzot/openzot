@@ -1,6 +1,9 @@
 package provider
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // The vocabulary every transport shares.
 //
@@ -84,9 +87,18 @@ type ChatMessage struct {
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 
 	// ReasoningItems is the opaque reasoning state this turn produced, to be
-	// replayed with it. Never serialised here: chat-completions has nowhere to
-	// put it, and the transport that does carry it builds its own items.
+	// replayed with it. Never serialised here: the Responses transport that
+	// carries it builds its own items.
 	ReasoningItems []ReasoningItem `json:"-"`
+
+	// ReasoningDetails is the chat-completions counterpart: the gateway's
+	// structured reasoning blocks (OpenRouter's reasoning_details), replayed on
+	// the assistant message verbatim and in order. A reasoning model
+	// interleaves thinking with its tool calls, and a gateway that carries that
+	// thinking requires it back on the next request - dropping it degrades the
+	// model's continuity at best, and at worst the upstream rejects the request
+	// once the chain has grown. Opaque by design: zot never inspects it.
+	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 }
 
 // Tool is a tool definition offered to the model.
@@ -131,6 +143,10 @@ type Event struct {
 	// ReasoningItems is the opaque reasoning state the turn produced, delivered
 	// on the same final event as the tool calls it belongs with.
 	ReasoningItems []ReasoningItem
+
+	// ReasoningDetails is the chat-completions reasoning state (see
+	// ChatMessage.ReasoningDetails), delivered on the final event.
+	ReasoningDetails json.RawMessage
 
 	// FinishReason is set on the final event.
 	FinishReason string

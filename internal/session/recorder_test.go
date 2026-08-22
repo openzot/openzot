@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/openzot/openzot/agent"
@@ -163,5 +164,40 @@ func TestAgentMessagesOfAnEmptySession(t *testing.T) {
 
 	if got := session.AgentMessages(); len(got) != 0 {
 		t.Errorf("AgentMessages = %+v, want empty", got)
+	}
+}
+
+// A run that dies to a provider error must leave the provider's own words in
+// the log - "the provider failed" answers nothing when the terminal is gone.
+func TestRecordResultKeepsTheUnderlyingError(t *testing.T) {
+	writer, err := Create(t.TempDir(), "20260821-090000", Meta{Task: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := NewRecorder(writer)
+
+	if err := recorder.RecordResult(agent.Summary{
+		Reason:  "error",
+		Message: "the provider failed",
+		Error:   "provider: Model 'stealth/ox-alpha' not found (404)",
+		Failure: &agent.Failure{Status: 404, ResponseBody: `{"error":{"message":"not found"}}`, RequestBytes: 118234},
+		Code:    1,
+	}); err != nil {
+		t.Fatalf("RecordResult: %v", err)
+	}
+
+	session, err := Load(writer.Path())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if session.Result.Error != "provider: Model 'stealth/ox-alpha' not found (404)" {
+		t.Errorf("Error = %q, want the provider's own words", session.Result.Error)
+	}
+
+	failure := session.Result.Failure
+	if failure == nil || failure.Status != 404 || failure.RequestBytes != 118234 || !strings.Contains(failure.ResponseBody, "not found") {
+		t.Errorf("Failure = %+v, want the wire evidence kept verbatim", failure)
 	}
 }

@@ -89,6 +89,16 @@ type RetryEvent struct {
 
 func (RetryEvent) agentEventType() string { return "retry" }
 
+// NoticeEvent is emitted when the loop injects a corrective nudge - an empty
+// turn, a truncated answer being continued, a settle reminder. Surfaced
+// because a run being nudged back to life otherwise renders as bare iteration
+// dividers, indistinguishable from a hang.
+type NoticeEvent struct {
+	Text string
+}
+
+func (NoticeEvent) agentEventType() string { return "notice" }
+
 // CompactionEvent is emitted when the compact strategy condensed earlier history
 // into a checkpoint to stay within the context window. Detail says how much was
 // condensed. Worth surfacing: it rewrites the conversation and spends a model
@@ -192,6 +202,8 @@ func translate(event loop.Event) (AgentEvent, bool) {
 		return ToolCallErrorEvent{Name: event.Tool, Error: event.Text}, true
 	case loop.EventRetry:
 		return RetryEvent{Error: event.Text}, true
+	case loop.EventNotice:
+		return NoticeEvent{Text: event.Text}, true
 	case loop.EventCompact:
 		return CompactionEvent{Detail: event.Text}, true
 	case loop.EventUsage:

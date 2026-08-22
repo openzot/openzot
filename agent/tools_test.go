@@ -21,6 +21,21 @@ func call(t *testing.T, tools Tools, name string, args map[string]any) (any, err
 	return definition.Handler(context.Background(), args)
 }
 
+// The handlers are methods on a toolSet now; these shims let the existing
+// tests exercise them directly at the default output ceiling.
+const maxToolOutput = DefaultMaxToolOutput
+
+var defaultSet = toolSet{maxOutput: DefaultMaxToolOutput}
+
+func readHandler(ctx context.Context, a map[string]any) (any, error) { return defaultSet.read(ctx, a) }
+func writeHandler(ctx context.Context, a map[string]any) (any, error) {
+	return defaultSet.write(ctx, a)
+}
+func listHandler(ctx context.Context, a map[string]any) (any, error) { return defaultSet.list(ctx, a) }
+func shellHandler(ctx context.Context, a map[string]any) (any, error) {
+	return defaultSet.shell(ctx, a)
+}
+
 func TestDefaultToolsAreWellFormed(t *testing.T) {
 	tools := DefaultTools()
 
@@ -45,7 +60,7 @@ func TestDefaultToolsAreWellFormed(t *testing.T) {
 	}
 }
 
-func TestReadWholeFileAndRange(t *testing.T) {
+func TestReadRangeIsLineNumbered(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sample.txt")
 
@@ -53,47 +68,68 @@ func TestReadWholeFileAndRange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tools := DefaultTools()
-
-	whole, err := call(t, tools, "read", map[string]any{"path": path})
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-
-	if whole != "one\ntwo\nthree\nfour" {
-		t.Errorf("read whole = %q", whole)
-	}
-
 	// line numbers are 1-indexed and the end is inclusive
-	part, err := call(t, tools, "read", map[string]any{
+	part, err := call(t, DefaultTools(), "read", map[string]any{
 		"path": path, "startLine": float64(2), "endLine": float64(3),
 	})
 	if err != nil {
 		t.Fatalf("read range: %v", err)
 	}
 
-	if part != "two\nthree" {
-		t.Errorf("read range = %q, want \"two\\nthree\"", part)
+	text := part.(string)
+
+	// the requested lines come back with their line numbers, and a header names
+	// the whole file's length so the model knows how much it has not seen
+	for _, want := range []string{"lines 2-3 of 4", "2\ttwo", "3\tthree"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("read range is missing %q:\n%s", want, text)
+		}
+	}
+
+	if strings.Contains(text, "one") || strings.Contains(text, "four") {
+		t.Errorf("read range leaked lines outside 2-3:\n%s", text)
 	}
 }
 
-func TestReadRangeOutsideTheFileIsEmptyNotAnError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "short.txt")
+// The range is required, not optional: an optional range invites whole-file
+// reads, and one large file can overflow a small context window and be
+// rejected wholesale.
+func TestReadRequiresARange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.txt")
+
+	if err := os.WriteFile(path, []byte("one\ntwo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range []map[string]any{
+		{"path": path},
+		{"path": path, "startLine": float64(1)},
+		{"path": path, "endLine": float64(2)},
+	} {
+		if _, err := call(t, DefaultTools(), "read", args); err == nil {
+			t.Errorf("read(%v) must require both startLine and endLine", args)
+		}
+	}
+}
+
+func TestReadRangeOutsideTheFileIsNotAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "short.txt")
 
 	if err := os.WriteFile(path, []byte("only one line"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	got, err := call(t, DefaultTools(), "read", map[string]any{
-		"path": path, "startLine": float64(50),
+		"path": path, "startLine": float64(50), "endLine": float64(60),
 	})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 
-	if got != "" {
-		t.Errorf("read past the end = %q, want empty", got)
+	// an empty range reports the file's real length rather than failing, so the
+	// model can correct its request
+	if !strings.Contains(got.(string), "1 lines") {
+		t.Errorf("read past the end = %q, want the file length reported", got)
 	}
 }
 
@@ -253,7 +289,9 @@ func TestOutputIsTruncatedVisibly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := call(t, DefaultTools(), "read", map[string]any{"path": path})
+	got, err := call(t, DefaultTools(), "read", map[string]any{
+		"path": path, "startLine": float64(1), "endLine": float64(1),
+	})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -269,11 +307,38 @@ func TestOutputIsTruncatedVisibly(t *testing.T) {
 	}
 }
 
+// The ceiling is configurable, so a model on a small-window endpoint can be
+// given a tighter bound than the default.
+func TestReadHonoursAConfiguredOutputCeiling(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.txt")
+
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 40_000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := call(t, DefaultToolsWith(4_000), "read", map[string]any{
+		"path": path, "startLine": float64(1), "endLine": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	text := got.(string)
+
+	if len(text) > 4_500 {
+		t.Errorf("a 4000-byte ceiling returned %d bytes", len(text))
+	}
+
+	if !strings.Contains(text, "truncated") {
+		t.Error("the tighter ceiling must still mark its truncation")
+	}
+}
+
 // The edge cases in the file tools are where an autonomous run does damage: an
 // out-of-range line number that silently rewrites the wrong part of a file is
 // worse than an error, because nobody is watching.
 
-func TestReadHandlesPartialRanges(t *testing.T) {
+func TestReadClampsAndReportsRanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "file.txt")
 
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\nfour"), 0o644); err != nil {
@@ -281,49 +346,32 @@ func TestReadHandlesPartialRanges(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		args map[string]any
-		want string
+		name    string
+		args    map[string]any
+		wantHas []string
+		wantNot []string
 	}{
 		{
-			name: "only a start",
-			args: map[string]any{"path": path, "startLine": float64(3)},
-			want: "three\nfour",
+			name:    "a start below the first line clamps to 1",
+			args:    map[string]any{"path": path, "startLine": float64(-5), "endLine": float64(1)},
+			wantHas: []string{"1\tone"},
+			wantNot: []string{"two"},
 		},
 		{
-			name: "only an end",
-			args: map[string]any{"path": path, "endLine": float64(2)},
-			want: "one\ntwo",
+			name:    "an end past the last line clamps to the file length",
+			args:    map[string]any{"path": path, "startLine": float64(4), "endLine": float64(99)},
+			wantHas: []string{"4\tfour"},
+			wantNot: []string{"three"},
 		},
 		{
-			name: "a start below the first line",
-			args: map[string]any{"path": path, "startLine": float64(-5), "endLine": float64(1)},
-			want: "one",
+			name:    "an integer rather than a JSON number",
+			args:    map[string]any{"path": path, "startLine": 2, "endLine": 2},
+			wantHas: []string{"2\ttwo"},
 		},
 		{
-			name: "an end past the last line",
-			args: map[string]any{"path": path, "startLine": float64(4), "endLine": float64(99)},
-			want: "four",
-		},
-		{
-			name: "an integer rather than a JSON number",
-			args: map[string]any{"path": path, "startLine": 2, "endLine": 2},
-			want: "two",
-		},
-		{
-			name: "a range that is the wrong way round",
-			args: map[string]any{"path": path, "startLine": float64(3), "endLine": float64(1)},
-			want: "",
-		},
-		{
-			name: "a start past the end of the file",
-			args: map[string]any{"path": path, "startLine": float64(99)},
-			want: "",
-		},
-		{
-			name: "line numbers that are not numbers at all",
-			args: map[string]any{"path": path, "startLine": "2", "endLine": "3"},
-			want: "one\ntwo\nthree\nfour",
+			name:    "a range the wrong way round reports an empty range",
+			args:    map[string]any{"path": path, "startLine": float64(3), "endLine": float64(1)},
+			wantHas: []string{"range is empty"},
 		},
 	}
 
@@ -334,8 +382,18 @@ func TestReadHandlesPartialRanges(t *testing.T) {
 				t.Fatalf("readHandler: %v", err)
 			}
 
-			if got != test.want {
-				t.Errorf("got %q, want %q", got, test.want)
+			text := got.(string)
+
+			for _, want := range test.wantHas {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing %q:\n%s", want, text)
+				}
+			}
+
+			for _, unwanted := range test.wantNot {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("unexpected %q:\n%s", unwanted, text)
+				}
 			}
 		})
 	}

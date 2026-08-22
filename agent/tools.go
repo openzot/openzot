@@ -11,16 +11,36 @@ import (
 	"time"
 )
 
-// DefaultTools returns the standard filesystem and shell tool set.
+// DefaultMaxToolOutput is the byte ceiling on a single tool result when the
+// caller does not set its own. See toolSet.truncate for why a bound exists.
+const DefaultMaxToolOutput = 100_000
+
+// DefaultTools returns the standard filesystem and shell tool set, with the
+// default output ceiling.
 //
 // These run with the privileges of the process. That is the point - an agent
 // that cannot touch the machine is not much use to a CLI - but it means the
 // caller decides what to expose, and a caller running untrusted instructions
 // should hand over a narrower set.
 func DefaultTools() Tools {
+	return DefaultToolsWith(DefaultMaxToolOutput)
+}
+
+// DefaultToolsWith returns the standard tool set with a specific ceiling on a
+// single tool result. A model served by an endpoint with a small context
+// window needs a tighter bound than one with a large one - a single result
+// that overflows the window is rejected wholesale, and the run cannot recover
+// from a message it cannot even send. Zero or negative uses the default.
+func DefaultToolsWith(maxOutput int) Tools {
+	if maxOutput <= 0 {
+		maxOutput = DefaultMaxToolOutput
+	}
+
+	s := toolSet{maxOutput: maxOutput}
+
 	return Tools{
 		"read": {
-			Description: "Read the contents of a file. Supports an optional line range to read a specific section.",
+			Description: "Read a range of lines from a file. startLine and endLine are required: read a bounded section, not the whole file, so a large file cannot flood the context. The result is line-numbered and reports the file's total length, so you can read a further range to see more.",
 			Parameters: FunctionParameters{
 				"type": "object",
 				"properties": map[string]any{
@@ -28,9 +48,9 @@ func DefaultTools() Tools {
 					"startLine": map[string]any{"type": "integer", "description": "First line to read, 1-indexed"},
 					"endLine":   map[string]any{"type": "integer", "description": "Last line to read, inclusive, 1-indexed"},
 				},
-				"required": []string{"path"},
+				"required": []string{"path", "startLine", "endLine"},
 			},
-			Handler: readHandler,
+			Handler: s.read,
 		},
 
 		"write": {
@@ -45,7 +65,7 @@ func DefaultTools() Tools {
 				},
 				"required": []string{"path", "content"},
 			},
-			Handler: writeHandler,
+			Handler: s.write,
 		},
 
 		"list": {
@@ -57,7 +77,7 @@ func DefaultTools() Tools {
 				},
 				"required": []string{"path"},
 			},
-			Handler: listHandler,
+			Handler: s.list,
 		},
 
 		"shell": {
@@ -70,7 +90,7 @@ func DefaultTools() Tools {
 				},
 				"required": []string{"command"},
 			},
-			Handler: shellHandler,
+			Handler: s.shell,
 		},
 
 		"plan": {
@@ -139,19 +159,27 @@ func progressHandler(_ context.Context, args map[string]any) (any, error) {
 	return "progress recorded", nil
 }
 
-// maxToolOutput bounds what a tool may return.
-//
-// An unbounded result is a context-window hazard: one `cat` of a large file can
-// consume the whole budget and evict the conversation that explains why it was
-// read. Truncation is visible so the model knows it is seeing a fragment.
-const maxToolOutput = 100_000
+// toolSet carries the configuration the filesystem and shell tools share -
+// currently just the output ceiling. The handlers are its methods so the
+// ceiling is captured per tool set rather than read from a package global,
+// which a per-run or per-model override could not vary.
+type toolSet struct {
+	maxOutput int
+}
 
-func truncate(text string) string {
-	if len(text) <= maxToolOutput {
+// truncate bounds what a tool may return.
+//
+// An unbounded result is a context-window hazard: one read of a large file can
+// consume the whole budget and evict the conversation that explains why it was
+// read - or, on an endpoint with a small window, be rejected wholesale so the
+// run cannot even send it. Truncation is visible so the model knows it is
+// seeing a fragment.
+func (s toolSet) truncate(text string) string {
+	if len(text) <= s.maxOutput {
 		return text
 	}
 
-	return text[:maxToolOutput] + fmt.Sprintf("\n\n[truncated: %d bytes total]", len(text))
+	return text[:s.maxOutput] + fmt.Sprintf("\n\n[truncated: %d bytes total]", len(text))
 }
 
 func stringArg(args map[string]any, key string) (string, error) {
@@ -174,10 +202,21 @@ func intArg(args map[string]any, key string) (int, bool) {
 	}
 }
 
-func readHandler(_ context.Context, args map[string]any) (any, error) {
+func (s toolSet) read(_ context.Context, args map[string]any) (any, error) {
 	path, err := stringArg(args, "path")
 	if err != nil {
 		return nil, err
+	}
+
+	// The range is required, not optional. An optional range invites the model
+	// to read whole files by default, and one large file can overflow a small
+	// context window and be rejected wholesale. Forcing a bounded range makes
+	// the model state what it wants to see and keeps each read small.
+	start, hasStart := intArg(args, "startLine")
+	end, hasEnd := intArg(args, "endLine")
+
+	if !hasStart || !hasEnd {
+		return nil, fmt.Errorf("read requires startLine and endLine: read a bounded range, not the whole file")
 	}
 
 	content, err := os.ReadFile(path)
@@ -185,31 +224,35 @@ func readHandler(_ context.Context, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	start, hasStart := intArg(args, "startLine")
-	end, hasEnd := intArg(args, "endLine")
-
-	if !hasStart && !hasEnd {
-		return truncate(string(content)), nil
-	}
-
 	lines := strings.Split(string(content), "\n")
+	total := len(lines)
 
-	if !hasStart || start < 1 {
+	if start < 1 {
 		start = 1
 	}
 
-	if !hasEnd || end > len(lines) {
-		end = len(lines)
+	if end > total {
+		end = total
 	}
 
-	if start > len(lines) || end < start {
-		return "", nil
+	if start > total || end < start {
+		return fmt.Sprintf("[%s has %d lines; requested range is empty]", path, total), nil
 	}
 
-	return truncate(strings.Join(lines[start-1:end], "\n")), nil
+	// Line-numbered so the model can target a precise next range, with a header
+	// stating the whole file's length so it knows how much it has not seen.
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "[%s lines %d-%d of %d]\n", path, start, end, total)
+
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(&b, "%d\t%s\n", i, lines[i-1])
+	}
+
+	return s.truncate(b.String()), nil
 }
 
-func writeHandler(_ context.Context, args map[string]any) (any, error) {
+func (s toolSet) write(_ context.Context, args map[string]any) (any, error) {
 	path, err := stringArg(args, "path")
 	if err != nil {
 		return nil, err
@@ -273,7 +316,7 @@ func writeHandler(_ context.Context, args map[string]any) (any, error) {
 	return fmt.Sprintf("updated %s", path), nil
 }
 
-func listHandler(_ context.Context, args map[string]any) (any, error) {
+func (s toolSet) list(_ context.Context, args map[string]any) (any, error) {
 	path, err := stringArg(args, "path")
 	if err != nil {
 		return nil, err
@@ -294,10 +337,10 @@ func listHandler(_ context.Context, args map[string]any) (any, error) {
 		}
 	}
 
-	return truncate(builder.String()), nil
+	return s.truncate(builder.String()), nil
 }
 
-func shellHandler(ctx context.Context, args map[string]any) (any, error) {
+func (s toolSet) shell(ctx context.Context, args map[string]any) (any, error) {
 	command, err := stringArg(args, "command")
 	if err != nil {
 		return nil, err
@@ -339,12 +382,12 @@ func shellHandler(ctx context.Context, args map[string]any) (any, error) {
 	// error. A failing command is information - a compiler error, a failing test -
 	// and the model is usually the thing best placed to act on it.
 	if err != nil && ctx.Err() == nil {
-		return truncate(fmt.Sprintf("%s\n[exit: %v]", output, err)), nil
+		return s.truncate(fmt.Sprintf("%s\n[exit: %v]", output, err)), nil
 	}
 
 	if ctx.Err() != nil {
-		return truncate(fmt.Sprintf("%s\n[timed out after %s]", output, timeout)), nil
+		return s.truncate(fmt.Sprintf("%s\n[timed out after %s]", output, timeout)), nil
 	}
 
-	return truncate(string(output)), nil
+	return s.truncate(string(output)), nil
 }

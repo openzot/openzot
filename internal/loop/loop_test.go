@@ -630,3 +630,89 @@ func TestAnAbandonedStreamIsCancelled(t *testing.T) {
 		t.Fatal("the abandoned stream was never cancelled: its transport goroutine and response body leak")
 	}
 }
+
+// An uncatalogued model is assumed to have a large window, so an endpoint
+// whose real ceiling is smaller rejects the request before compaction ever
+// fires - and an endpoint that reports overflow opaquely gives the reactive
+// recovery nothing to detect. The operator's declared window must therefore
+// beat the catalogue, so budgeting (and with it compaction) fits the endpoint
+// that actually serves the run.
+func TestContextWindowOverrideBeatsTheCatalogue(t *testing.T) {
+	client := stub(t, []string{stop()})
+
+	assumed, err := New(Options{Client: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	capped, err := New(Options{Client: client, ContextWindow: 32_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if capped.inputBudget >= assumed.inputBudget {
+		t.Errorf("input budget = %d, want it below the catalogue's %d", capped.inputBudget, assumed.inputBudget)
+	}
+
+	// the output reserve still applies: the whole window is never given to input
+	if capped.inputBudget >= 32_000 {
+		t.Errorf("input budget = %d, want an output reserve inside the declared window", capped.inputBudget)
+	}
+}
+
+// The thread builder keeps the largest suffix that fits, so the first message
+// trimmed is the run's opening user message - leaving a conversation with no
+// user turn at all, which strict providers reject wholesale with an opaque
+// 400 from that iteration on (bisected live: the identical request with one
+// user message injected was accepted). The request must always carry a user
+// turn.
+func TestATrimmedThreadStillCarriesAUserTurn(t *testing.T) {
+	engine, err := New(Options{
+		Client: stub(t, []string{stop()}),
+		// a window small enough that the builder must trim the oldest messages
+		ContextWindow: MinInputTokens * 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// an old user kickoff followed by enough tool-round bulk to evict it
+	messages := []Message{{Type: TypeUser, Text: "the kickoff"}}
+
+	for i := 0; i < 40; i++ {
+		id := fmt.Sprintf("c%d", i)
+		messages = append(messages,
+			Message{Type: TypeActivity, Activity: &Activity{Kind: ActivityRequest, ID: id, Name: "read", Arguments: `{"path":"x"}`}},
+			Message{Type: TypeActivity, Activity: &Activity{Kind: ActivityResponse, ID: id, Name: "read", Result: strings.Repeat("line of file content ", 200)}},
+		)
+	}
+
+	request, err := engine.buildRequest(messages, nil)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	if request.Messages[0].Role != provider.RoleSystem {
+		t.Fatalf("first message = %q, want the system prompt", request.Messages[0].Role)
+	}
+
+	var hasUser bool
+
+	var kept int
+
+	for _, message := range request.Messages[1:] {
+		if message.Role == provider.RoleUser {
+			hasUser = true
+		}
+
+		kept++
+	}
+
+	if kept >= 1+2*40 {
+		t.Fatal("nothing was trimmed; the test needs a smaller window to mean anything")
+	}
+
+	if !hasUser {
+		t.Error("a trimmed thread lost its only user turn; strict providers reject the whole request")
+	}
+}

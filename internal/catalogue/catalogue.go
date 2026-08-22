@@ -39,16 +39,27 @@ type Model struct {
 
 // DefaultContextWindow is assumed for models the catalogue has not heard of.
 //
-// Deliberately modest: under-estimating a window costs an early compaction,
-// while over-estimating gets the request rejected outright. The first is a small
-// waste, the second is a failed run.
-const DefaultContextWindow = 128_000
+// Generous, because the failure modes are asymmetric in practice: assuming too
+// small compacts a long run over and over, summarising history the model could
+// have kept, while assuming too large is recovered reactively - a provider's
+// context-length rejection is detected and lowers the budget to what the error
+// stated (see the loop's DetectContextLimit path), and the operator can pin
+// the real ceiling per model with `context:` in the config. Frontier models
+// the catalogue has not heard of are the ones most likely to carry windows
+// this large.
+const DefaultContextWindow = 1_048_576
+
+// DefaultMaxOutputTokens is the output reserve assumed for unknown models.
+// Not a quarter of the window: a quarter of a million-token window would
+// reserve more room for the answer than most models can produce, squeezing
+// input for nothing.
+const DefaultMaxOutputTokens = 65_536
 
 // Default is returned for unknown models.
 var Default = Model{
 	Provider:        "unknown",
 	ContextWindow:   DefaultContextWindow,
-	MaxOutputTokens: DefaultContextWindow / 4,
+	MaxOutputTokens: DefaultMaxOutputTokens,
 	SupportsTools:   true,
 }
 

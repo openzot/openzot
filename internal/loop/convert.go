@@ -26,6 +26,7 @@ const (
 	EventRetry          EventKind = "retry"
 	EventRunaway        EventKind = "runaway"
 	EventCompact        EventKind = "compact"
+	EventNotice         EventKind = "notice"
 	EventUsage          EventKind = "usage"
 )
 
@@ -48,6 +49,11 @@ type Event struct {
 	// token usage on an EventUsage.
 	InputTokens  int
 	OutputTokens int
+
+	// Failure is the provider error behind an EventRetry, so a consumer can
+	// persist the failing exchange the moment it happens rather than waiting
+	// for the run to end - which a kill would never reach.
+	Failure error
 }
 
 func toThreadMessages(messages []Message) []thread.Message {
@@ -148,6 +154,13 @@ func toChatMessages(messages []Message) []provider.ChatMessage {
 					// asks for this state tells the provider to store nothing,
 					// so a call sent without it is rejected outright
 					ReasoningItems: activity.ReasoningItems,
+
+					// the chat-completions counterpart: a gateway's reasoning
+					// blocks go back verbatim on the assistant message, or a
+					// reasoning model loses its own thinking between tool
+					// rounds - and some upstreams reject the request outright
+					// once the chain has grown
+					ReasoningDetails: activity.ReasoningDetails,
 				})
 
 			case ActivityResponse:

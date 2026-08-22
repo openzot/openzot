@@ -17,6 +17,11 @@ type Outcome struct {
 	Message string
 }
 
+// ErrCancelled reports that the operator closed the viewer while the run was
+// still going. A sentinel, so a caller running a batch can tell a deliberate
+// stop from a failure and report it calmly.
+var ErrCancelled = fmt.Errorf("run cancelled - the viewer was closed while the run was still going")
+
 // AgentExitError reports an agent-declared failed run to callers so the CLI can
 // return a non-zero process status.
 type AgentExitError struct {
@@ -39,7 +44,10 @@ func (m model) runError() error {
 		return &AgentExitError{Code: m.exitCode, Message: m.exitMsg}
 	}
 	if m.status == statusRunning {
-		return fmt.Errorf("agent run ended before completion")
+		// The viewer closed while the run was still going, and in production
+		// only the operator does that - q or Ctrl-C. Say so: "ended before
+		// completion" read as a mysterious failure when it was a keypress.
+		return ErrCancelled
 	}
 	return nil
 }

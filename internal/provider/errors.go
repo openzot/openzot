@@ -21,6 +21,28 @@ type Error struct {
 	// Message is the provider's description of what went wrong.
 	Message string
 
+	// Body is the raw response body (bounded), kept verbatim for the session's
+	// failure record: an opaque upstream "ERROR" and a proper context-length
+	// message classify the same, but only the raw exchange lets an operator
+	// troubleshoot the difference after the fact.
+	Body string
+
+	// RequestBytes is the size of the request that was refused. Against a
+	// suspected context ceiling it is the number that turns a correlation into
+	// a diagnosis.
+	RequestBytes int
+
+	// RequestBody is the JSON that was refused, kept (bounded) so a developer
+	// build can dump the exact exchange. An opaque upstream 400 is only
+	// diagnosable from the request that provoked it. Held in memory on the one
+	// error that ends a run; persisted only by a dev build.
+	RequestBody string
+
+	// upstream marks a gateway-wrapped upstream failure: the gateway reported
+	// that the provider behind it failed, not that the request was wrong. The
+	// distinction decides retriability - see IsRetriable.
+	upstream bool
+
 	// retryAfter is the delay the provider's Retry-After header advised, and
 	// retryAdvised whether it advised anything at all. Two fields rather than a
 	// sentinel because zero is a real answer - a Retry-After already in the past
@@ -109,6 +131,20 @@ func IsRetriable(err error) bool {
 		return false
 	}
 
+	// A gateway-wrapped upstream failure retries whatever status the gateway
+	// chose for the envelope. OpenRouter reports "Provider returned error" as
+	// a 400, but it means the provider behind the gateway failed - a 502 in a
+	// 400 costume - and flaky upstreams (stealth endpoints especially) refuse
+	// intermittently: a run died mid-flight to a hiccup one retry outlives.
+	// A wrapped context overflow is not lost to the retry loop: the loop
+	// checks DetectContextLimit before retriability, and the upstream's raw
+	// body is folded into this error's message where those patterns match.
+	var providerErr *Error
+
+	if errors.As(err, &providerErr) && providerErr.upstream {
+		return true
+	}
+
 	if status, ok := statusOf(err); ok {
 		return status >= 500 && status <= 599
 	}
@@ -151,6 +187,20 @@ func RetryAfter(err error) (time.Duration, bool) {
 	}
 
 	return providerErr.retryAfter, providerErr.retryAdvised
+}
+
+// maxDumpBody bounds a captured request or response body. Generous, because a
+// developer dump wants the whole exchange, but capped so a pathological
+// request cannot pin arbitrary memory on the error that ends a run.
+const maxDumpBody = 1 << 20 // 1 MiB
+
+// clip bounds a wrapped upstream body for an error message.
+func clip(s string, limit int) string {
+	if len(s) > limit {
+		return s[:limit] + "…"
+	}
+
+	return s
 }
 
 // parseRetryAfter reads the two forms the Retry-After header takes: a count of
@@ -215,15 +265,36 @@ func readError(response *http.Response) error {
 	var parsed struct {
 		Error struct {
 			Message string `json:"message"`
+
+			// Gateways wrap the upstream provider's failure: OpenRouter's
+			// "Provider returned error" carries the actual diagnosis - the
+			// upstream body and which provider produced it - in metadata.
+			// Dropping it turns a named cause into a shrug.
+			Metadata struct {
+				Raw          string `json:"raw"`
+				ProviderName string `json:"provider_name"`
+			} `json:"metadata"`
 		} `json:"error"`
 
 		Message string `json:"message"`
 	}
 
+	upstream := false
+
 	if err := json.Unmarshal(body, &parsed); err == nil {
 		switch {
 		case parsed.Error.Message != "":
 			message = parsed.Error.Message
+
+			if raw := strings.TrimSpace(parsed.Error.Metadata.Raw); raw != "" {
+				message += ": " + clip(raw, 500)
+			}
+
+			if name := strings.TrimSpace(parsed.Error.Metadata.ProviderName); name != "" {
+				message += " (upstream: " + name + ")"
+
+				upstream = true
+			}
 		case parsed.Message != "":
 			message = parsed.Message
 		}
@@ -238,6 +309,8 @@ func readError(response *http.Response) error {
 	return &Error{
 		Status:       response.StatusCode,
 		Message:      message,
+		Body:         clip(strings.TrimSpace(string(body)), maxDumpBody),
+		upstream:     upstream,
 		retryAfter:   delay,
 		retryAdvised: advised,
 	}
@@ -340,6 +413,16 @@ func IsContextLimit(err error) bool {
 }
 
 // IsAuth reports a credential problem, which never resolves by retrying.
+// IsProviderError reports whether err is a failure the provider returned, as
+// opposed to a local one (a cancellation, a context deadline). It is how an
+// abort tells the exchange worth preserving from the bare cancellation that
+// ended it.
+func IsProviderError(err error) bool {
+	var providerErr *Error
+
+	return errors.As(err, &providerErr)
+}
+
 func IsAuth(err error) bool {
 	var providerErr *Error
 

@@ -62,7 +62,17 @@ func (p streamPalette) paint(code, text string) string {
 // never uses an alternate screen, reads input, or advertises keyboard controls.
 func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.ExecuteWithToolsOptions, color bool) (Outcome, error) {
 	palette := streamPalette{enabled: color}
-	fmt.Printf("%s: %s\n", palette.paint("1;94", meta.AppName), meta.Task)
+
+	// The title names the run; the task is what it was actually asked to do.
+	// The viewer has one line and must choose, but a transcript is read after
+	// the fact - and a log that records only the label loses the brief that
+	// explains every line under it.
+	if meta.Title != "" {
+		fmt.Printf("%s: %s\n", palette.paint("1;94", meta.AppName), meta.Title)
+		fmt.Printf("%s\n", palette.paint("2", meta.Task))
+	} else {
+		fmt.Printf("%s: %s\n", palette.paint("1;94", meta.AppName), meta.Task)
+	}
 	fmt.Printf("%s %s · %s %s · %s %s\n",
 		palette.paint("2", "provider"), meta.Provider,
 		palette.paint("2", "model"), palette.paint("94", meta.Model),
@@ -104,6 +114,12 @@ func runStream(ctx context.Context, client *agent.Client, meta Meta, opts agent.
 			}
 		case agent.ToolCallErrorEvent:
 			fmt.Printf("    %s: %s: %s\n", palette.paint("31", "error"), e.Name, e.Error)
+		case agent.RetryEvent:
+			flush()
+			fmt.Printf("  %s %s\n", palette.paint("33", "↻ retrying"), palette.paint("2", e.Error))
+		case agent.NoticeEvent:
+			flush()
+			fmt.Printf("  %s %s\n", palette.paint("33", "⚠"), palette.paint("2", e.Text))
 		case agent.CompactionEvent:
 			flush()
 			fmt.Printf("  %s %s\n", palette.paint("33", "…"), e.Detail)

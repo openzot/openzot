@@ -155,7 +155,7 @@ func TestRunAgentRelaysEveryEventAndThenDone(t *testing.T) {
 
 	runAgent(context.Background(), program, client, agent.ExecuteWithToolsOptions{
 		Text: []string{"do the thing"},
-	})
+	}, make(chan struct{}))
 
 	final := stop()
 
@@ -222,7 +222,7 @@ func TestRunAgentRelaysAFailure(t *testing.T) {
 		// a persistent outage is retried with a growing backoff; this test is
 		// about the failure reaching the screen, not about waiting it out
 		RetryBackoff: -1,
-	})
+	}, make(chan struct{}))
 
 	final := stop()
 
@@ -253,7 +253,7 @@ func TestRunAgentEndsOnCancellation(t *testing.T) {
 
 	program, seen, stop := headless(t)
 
-	runAgent(ctx, program, client, agent.ExecuteWithToolsOptions{Text: []string{"do the thing"}})
+	runAgent(ctx, program, client, agent.ExecuteWithToolsOptions{Text: []string{"do the thing"}}, make(chan struct{}))
 
 	stop()
 
@@ -325,5 +325,96 @@ func TestQuittingTheViewerStopsTheAgent(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(15 * time.Second):
 		t.Fatal("the agent was still running after the viewer quit")
+	}
+}
+
+// abortRecorder captures the run's recorded outcome.
+type abortRecorder struct {
+	mu     sync.Mutex
+	result *agent.Summary
+}
+
+func (r *abortRecorder) RecordMessage(agent.Message) error             { return nil }
+func (r *abortRecorder) RecordEvent(string, string, string, int) error { return nil }
+func (r *abortRecorder) RecordFailure(*agent.Failure) error            { return nil }
+func (r *abortRecorder) RecordReset() error                            { return nil }
+func (r *abortRecorder) RecordResult(summary agent.Summary) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.result = &summary
+	return nil
+}
+
+func (r *abortRecorder) recorded() *agent.Summary {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.result
+}
+
+// Quitting the viewer must leave the run's aborted outcome in the session.
+// runViewer used to return the moment the program did, racing the engine's
+// result record against the caller's deferred session close - a quit run was
+// logged as "running/interrupted" forever, with no outcome at all.
+func TestQuittingTheViewerStillRecordsTheOutcome(t *testing.T) {
+	streaming := make(chan struct{})
+
+	var once sync.Once
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+
+		once.Do(func() { close(streaming) })
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(20 * time.Second):
+		}
+	}))
+
+	t.Cleanup(server.Close)
+
+	client, err := agent.NewClient(agent.ClientOptions{
+		Provider: "custom",
+		Model:    "test-model",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	recorder := &abortRecorder{}
+
+	m := newModel("zot", "do the thing", "test-model", "custom", t.TempDir(), false)
+
+	// the program runs headlessly so the event pump is genuinely consuming;
+	// quitting once the stream is under way is the user pressing q mid-run
+	start := func(p *tea.Program) (tea.Model, error) {
+		go func() {
+			<-streaming
+
+			p.Quit()
+		}()
+
+		return p.Run()
+	}
+
+	_, _ = runViewer(context.Background(), m, client, agent.ExecuteWithToolsOptions{
+		Text:     []string{"do the thing"},
+		Recorder: recorder,
+	}, start, tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithoutSignalHandler())
+
+	result := recorder.recorded()
+
+	if result == nil {
+		t.Fatal("the quit run recorded no outcome at all")
+	}
+
+	if result.Reason != agent.ReasonAborted {
+		t.Errorf("Reason = %q, want the abort on record", result.Reason)
 	}
 }

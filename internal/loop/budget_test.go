@@ -615,6 +615,13 @@ func TestRetriableFailuresAreSpacedOut(t *testing.T) {
 	if want := 100 * time.Millisecond; elapsed < want {
 		t.Errorf("three retries took %s, want at least %s of backoff between them", elapsed, want)
 	}
+
+	// A failed model call is not an agentic round. Continuations are the bound
+	// on recovery attempts; charging the iteration budget too would make an
+	// outage cost the run twice.
+	if result.Budget.Iterations != 0 {
+		t.Errorf("Iterations = %d, want 0 - no round ever completed", result.Budget.Iterations)
+	}
 }
 
 // Cancelling a run must cut a backoff short rather than making the caller wait
@@ -662,6 +669,13 @@ func TestBackoffEndsWhenTheRunIsCancelled(t *testing.T) {
 
 	if result.Reason != StopAborted {
 		t.Errorf("reason = %q, want the cancellation to end the run", result.Reason)
+	}
+
+	// The abort landed during a backoff wait, but the provider failure that
+	// preceded it is carried along as the evidence - it is the exchange the
+	// operator quit to go and read. A bare "context canceled" would discard it.
+	if result.Err == nil || !provider.IsProviderError(result.Err) {
+		t.Errorf("aborted result carries %v, want the last provider failure preserved", result.Err)
 	}
 }
 
@@ -1035,5 +1049,48 @@ func TestOtherContinuationsDoNotEscalateTheBackoff(t *testing.T) {
 
 	if ceiling := 4 * base; elapsed > ceiling {
 		t.Errorf("the retry took %s, want under %s - truncation recoveries must not escalate the failure backoff", elapsed, ceiling)
+	}
+}
+
+// A stuck or stalling provider that returns an empty turn renders as bare
+// iteration dividers unless the nudge is surfaced: a run being nudged back to
+// life looked exactly like a hang (a live provider held a stream for three
+// silent minutes and returned nothing - and the viewer showed nothing).
+func TestAnEmptyTurnEmitsAVisibleNotice(t *testing.T) {
+	engine, err := New(Options{
+		Client: stub(t,
+			[]string{stop()},
+			[]string{text("recovered"), stop()},
+		),
+		MaxIterations: 5,
+		MaxEmpties:    3,
+		RetryBackoff:  -1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var notices []string
+
+	result := engine.Run(context.Background(), func(event Event) {
+		if event.Kind == EventNotice {
+			notices = append(notices, event.Text)
+		}
+	})
+
+	if result.Reason != StopStop {
+		t.Fatalf("reason = %q (%s)", result.Reason, result.Message)
+	}
+
+	var noticed bool
+
+	for _, notice := range notices {
+		if strings.Contains(notice, "empty turn") {
+			noticed = true
+		}
+	}
+
+	if !noticed {
+		t.Errorf("the empty-turn nudge must be visible; silence reads as a hang (notices: %v)", notices)
 	}
 }

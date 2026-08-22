@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/openzot/openzot/internal/provider"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -115,6 +117,13 @@ type Activity struct {
 	Arguments string `json:"arguments,omitempty"`
 	Result    any    `json:"result,omitempty"`
 	Failure   string `json:"failure,omitempty"`
+
+	// The turn's reasoning state, in whichever form the transport carries it.
+	// Without these a resumed run replays its calls stripped of the thinking
+	// that produced them - which a reasoning model's provider may reject
+	// outright, and at best degrades the model's continuity.
+	ReasoningItems   []provider.ReasoningItem `json:"reasoning_items,omitempty"`
+	ReasoningDetails json.RawMessage          `json:"reasoning_details,omitempty"`
 }
 
 // Event is something that happened during the run.
@@ -129,13 +138,32 @@ type Event struct {
 type Result struct {
 	Reason  string `json:"reason"`
 	Message string `json:"message,omitempty"`
-	Code    int    `json:"code"`
+
+	// Error is the underlying failure on an error ending - the provider's own
+	// words, not the loop's summary of them. "the provider failed" answers
+	// nothing at three in the morning; the 404 naming the wrong model does.
+	Error string `json:"error,omitempty"`
+
+	// Failure is the wire evidence behind Error, when the failure was a
+	// provider response. The raw exchange is what troubleshooting needs: an
+	// opaque upstream "ERROR" and a proper context-length message read the
+	// same in Error, but the refused request's size tells them apart.
+	Failure *Failure `json:"failure,omitempty"`
+
+	Code int `json:"code"`
 
 	Iterations    int `json:"iterations"`
 	Calls         int `json:"calls"`
 	Continuations int `json:"continuations"`
 	Cycles        int `json:"cycles"`
 	Settles       int `json:"settles"`
+}
+
+// Failure is the wire evidence of a provider refusal.
+type Failure struct {
+	Status       int    `json:"status"`
+	ResponseBody string `json:"response_body,omitempty"`
+	RequestBytes int    `json:"request_bytes,omitempty"`
 }
 
 // Writer appends records to a session log.
