@@ -39,7 +39,6 @@ zot defaults to the `zai` provider running `glm-5.2`. Export a key, write an
 order, hand it over:
 
 ```bash
-export ZAI_API_KEY="…"
 zot new "add input validation to the signup handler and a test"
 zot
 ```
@@ -57,9 +56,8 @@ endpoint - see [providers](docs/providers.md).
 - **Built to run unattended.** Compaction, loop detection, resumable logs. [→ how it works](docs/how-it-works.md)
 - **Orchestration is content.** No sub-agent framework; skills decide. [→ sub-agents](docs/how-it-works.md#sub-agents-and-coordination)
 
-Watch it work: **[the arcade](https://openzot.github.io/arcade/)** ships a new
-browser game every 30 minutes from one standing order, with no human in the
-loop.
+Watch it work: [the factories](#factories) run in public, each shipping from
+one standing order with no human in the loop.
 
 ## ⚠️ Safety
 
@@ -80,11 +78,21 @@ sandbox. Point it at a disposable checkout, or run the
 - [docs/philosophy.md](docs/philosophy.md) - why zot exists, the arcade, status
 - [CHANGELOG.md](CHANGELOG.md) · [RELEASES.md](RELEASES.md)
 
+## Factories
+
+Live zot factories: the same standing order every 30 minutes, the catalogue as
+the only memory, nobody in the loop. The site is the working tree, and every
+session ships to a public dataset.
+
+| Factory | Makes | Sessions |
+| --- | --- | --- |
+| [Arcade](https://openzot.github.io/arcade/) ([repo](https://github.com/openzot/arcade)) | One brand-new browser game per shift, playtested and published | [openzot/arcade](https://huggingface.co/datasets/openzot/arcade) |
+| [Machinery](https://openzot.github.io/machinery/) ([repo](https://github.com/openzot/machinery)) | One working control panel per shift - a live simulation, faults, and its operating manual | [openzot/machinery](https://huggingface.co/datasets/openzot/machinery) |
+
 ## Ecosystem
 
 | Project                                       | Role                                                                      |
 | --------------------------------------------- | ------------------------------------------------------------------------- |
-| [Arcade](https://openzot.github.io/arcade/)   | A live zot factory shipping one browser game every 30 minutes, unattended |
 | [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                              |
 | [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic monitoring and incident prevention |
 | [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use            |
