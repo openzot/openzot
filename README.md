@@ -1,98 +1,42 @@
 <p align="center">
-  <img width="96" height="96" alt="zot-icon-dark" src="https://github.com/user-attachments/assets/44908dda-fa7c-4698-815a-82343cf54a44" />
+  <img width="96" height="96" alt="zot" src="https://github.com/user-attachments/assets/44908dda-fa7c-4698-815a-82343cf54a44" />
 </p>
 
 <h1 align="center">zot</h1>
 
-**Hand it a software task and get back finished, tested code.** zot is an
-automated software factory in a single binary - an autonomous coding harness that
-plans, edits, runs, and verifies until the work is done.
-
-**About 11 MiB. One binary, with no hosted engine and no telemetry.**
-
 <p align="center">
-  <img width="1504" height="1080" alt="zot demo" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
+  <strong>Stop promting. Start shipping.</strong>
 </p>
 
-## The point
+<p align="center">
+  <img width="920" alt="zot running a work order" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
+</p>
 
-zot is not another coding agent you sit with and steer prompt by prompt. Its
-reason to exist is **fully autonomous software work**: give it a goal, walk away,
-and come back to a finished result. It will sometimes fall short of that ideal,
-especially while it is 0.x, but the ideal is the design constraint. We are not
-building workflows or features that contradict it.
+zot is an automated software factory in a single ~11 MiB binary. It takes a
+work order - an objective, the acceptance criteria that define done, the
+constraints to hold - and plans, edits, builds, tests and fixes until the work
+is done. No chat loop, no approving each edit, no hosted engine, no telemetry.
+It talks straight to any OpenAI-compatible model provider with your own key.
 
-If what you want is an interactive coding agent, use
-[Codex](https://openai.com/codex/),
-[Claude Code](https://www.anthropic.com/claude-code),
-[Cursor](https://www.cursor.com/), or one of the other excellent tools built for
-that way of working.
-
-## What you get
-
-zot takes **work orders, not prompts**. A work order is a small YAML file: the
-durable objective, the acceptance criteria that define "done", and the
-constraints the work must hold to. Write one, hand it over, and walk away:
+## Install
 
 ```bash
-zot new "add rate limiting to the API, with tests"
-# wrote .zot/orders/add-rate-limiting-to-the-api-with-tests.yaml - edit its
-# acceptance criteria, then:
-zot
+curl -fsSL https://zot.im/install.sh | bash
 ```
 
-zot reads the repo, writes and edits the code, runs the build and the tests, and
-fixes what it broke - on its own, from that one order to a recorded outcome. When
-it stops you have a changed working tree and a full session log of every step it
-took. No chat loop, no approving each edit: one order in, finished work out.
+That fetches the latest release for your platform (Linux or macOS, amd64 or
+arm64), verifies its checksum, and puts `zot` in `~/.local/bin`. Pin a version
+with `ZOT_VERSION=vX.Y.Z`, or change the directory with `ZOT_INSTALL_DIR`.
 
-Orders are files, so they compose. A bare `zot` runs the project's whole book -
-each order as its own run, in sequence, stopping at the first that does not end
-in success - and the ledger skips the ones already done, so you write an order
-and type `zot` again. Naming order files runs exactly those, from any path. A
-project's orders and the receipts of what has been run from them live together
-under `.zot/`, and both halves point wherever you like - see
-[the book](docs/configuration.md#the-book).
+Prefer to do it by hand? Grab a tarball from the
+[releases page](https://github.com/openzot/openzot/releases), pull the
+[container image](docs/docker.md) (`ghcr.io/openzot/openzot`), or
+[build from source](docs/development.md).
 
-They also stream: `zot --watch` keeps zot up and runs every `*.yaml` order that
-lands in the folder as it arrives - a drop-box factory. See
-[watch mode](docs/configuration.md#watch-mode).
+## Use
 
-`zot new` scaffolds at three levels of help, all landing in the same reviewable
-file: bare `zot new` writes the blank form, `zot new "objective"` fills the
-objective in, and `zot new --draft "objective"` additionally has the configured
-model propose the acceptance criteria and constraints - as a draft for you to
-edit, never as a contract it signed itself. A draft is not a blind guess: it
-runs as a small read-only run through the same engine, surveying the working
-tree - the build files, the test setup - so the criteria it proposes name the
-project's real commands and files.
-
-## Why zot exists
-
-Most coding tools optimize the conversation between a developer and an agent.
-zot optimizes the production run: it drives the whole job from one brief, without
-a follow-up prompt at every step and without a hosted engine.
-
-It talks straight to a model provider over the OpenAI-compatible API - OpenAI,
-Anthropic, Groq, Mistral, DeepSeek, OpenRouter, a local Ollama, or anything else
-that speaks the same API - so all you need is a provider key. No account beyond
-the provider's own, and nothing is sent anywhere except the provider you
-configure.
-
-## Quickstart
-
-Grab a prebuilt binary from the
-[releases page](https://github.com/openzot/openzot/releases) - no toolchain
-required:
-
-```bash
-VERSION=vX.Y.Z; OS=linux ARCH=amd64      # e.g. darwin/arm64 on Apple Silicon
-curl -L "https://github.com/openzot/openzot/releases/download/${VERSION}/zot-${VERSION}-${OS}-${ARCH}.tar.gz" | tar xz
-mv "zot-${VERSION}-${OS}-${ARCH}"/zot ~/.local/bin/   # or any directory on your PATH
-```
-
-zot defaults to the **`zai`** provider running **`glm-5.2`**. Export a key and
-give it a job:
+zot defaults to the `zai` provider running `glm-5.2`. Export a key, write an
+order, hand it over:
 
 ```bash
 export ZAI_API_KEY="…"
@@ -100,148 +44,59 @@ zot new "add input validation to the signup handler and a test"
 zot
 ```
 
-Any OpenAI-compatible provider works - `--provider anthropic --model
-claude-5-sonnet`, a local `--provider ollama`, gateways, or a custom endpoint; see
-[docs/providers.md](docs/providers.md). To build from source or run the container
-image, see [docs/development.md](docs/development.md) and
-[docs/docker.md](docs/docker.md).
+`zot new` writes a small YAML order under `.zot/orders/`; edit its acceptance
+criteria, then a bare `zot` runs everything outstanding. `zot --watch` turns
+the folder into a drop box. Any OpenAI-compatible provider works -
+`--provider anthropic`, a local `--provider ollama`, a gateway, a custom
+endpoint - see [providers](docs/providers.md).
 
-## How it works
+## Why zot
 
-The harness is zot's own, in the [`agent`](agent) package:
+- **Orders, not prompts.** One brief in, finished work out - and orders are
+  files, so they compose, queue, and stream. [→ work orders](docs/orders.md)
+- **Nothing in the way.** No hosted engine, no account, no telemetry. Your
+  key, your provider, your machine. [→ philosophy](docs/philosophy.md)
+- **Built to run unattended.** Context compaction, loop detection, settle mode,
+  resumable session logs. [→ how it works](docs/how-it-works.md)
+- **Orchestration is content.** No sub-agent framework; an agent can call
+  `zot` again, and skills say when. [→ sub-agents](docs/how-it-works.md#sub-agents-and-coordination)
 
-- `agent.ExecuteWithTools` runs the model in a loop - it calls tools, sees the
-  results, and goes again - until it records an outcome (`success` / `failure`)
-  or a budget or guard stops it.
-- `agent.DefaultTools()` gives it the toolbox: `read`, `write`, `list` and
-  `shell` for the work, plus `plan` and `progress` to structure and narrate it.
-  `agent.DefaultToolsFor(agent.ToolOptions{Vision: true})` adds `view`, which
-  shows the model an image file rather than describing one - offered only to a
-  model that can actually see, which zot takes from its catalogue and the
-  operator's config.
-
-That package is importable, so the same engine drives more than coding:
-[Rook](https://github.com/pdparchitect/rook), an AI bug-hunting and security-audit
-agent, is built on it with its own toolset and skills.
-
-What sits under that is the part worth knowing about:
-
-- **Thread assembly** fits the conversation to the model's context window,
-  newest-first, keeping tool calls paired with their results.
-- **Context strategy** decides what happens as that window fills. `compact` (the
-  default) summarises the older history into a checkpoint with a model call, so a
-  long run keeps a condensed memory of its early turns instead of losing them;
-  `truncate` simply drops the oldest messages to fit. A checkpoint is preserved
-  verbatim and never re-summarised, and an outright provider rejection falls back
-  to a no-model summary and retries. Configurable - see
-  [configs/zot.example.yaml](configs/zot.example.yaml).
-- **Loop detection** notices when the agent has stopped making progress - four
-  overlapping heuristics, because the obvious one (repeated messages) silently
-  misses reasoning models, which interleave a thought between every tool call.
-- **Settle mode** ends a run when the agent _records_ an outcome, not when its
-  prose happens to sound final. An answer containing "task completed" is not an
-  ending. Note the boundary, though: settle mode checks that the agent _declared_
-  done, not that the work _is_ done. The agent verifies its own work by running
-  the tests (its instructions tell it to); zot does not yet independently gate
-  the outcome on a check of its own.
-- **Session logs** record every run to disk as it happens, so a run nobody
-  watched is still answerable afterwards - and so it can be picked up again with
-  `--resume` (see [docs/configuration.md](docs/configuration.md#sessions)).
-
-`zot` itself is a read-only [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-viewer over that run - it renders the event stream into a scrollable log and has
-no text input, because the run is autonomous.
-
-## Sub-agents and coordination
-
-zot has **no native sub-agent primitive, by design.** There is no `spawn`, no
-built-in supervisor, no fixed orchestration graph baked into the engine - and
-that absence is deliberate, not a gap waiting to be filled. A fixed hierarchy
-would decide, in advance, how work should be divided for every task; most tasks
-do not divide the way the framework guessed.
-
-What the engine gives instead is the raw capability, and it lets the agent decide
-how to use it:
-
-- **An agent can call into itself.** It has a `shell` tool, so it can invoke
-  `zot` again - a fresh run with its own brief, its own working directory, its
-  own budget - and read back the result. Delegating a self-contained piece of
-  work to a clean context is a shell command, not a special API. Direct
-  instructions in your `AGENTS.md`, or a skill, are what tell it when that is
-  worth doing.
-- **Agent-to-agent communication is left open, too.** zot does not prescribe a
-  message bus or a protocol. Two runs coordinate through whatever they already
-  share - the filesystem (a scratch file, a work queue as a directory of tasks),
-  a git branch, an HTTP endpoint, a channel daemon. The mechanism is a choice
-  the task makes, not one the engine imposes.
-
-The intent is that **the agents themselves figure out how to organise and
-communicate**, from the task in front of them, the context in the repository,
-and any guidance a relevant skill supplies. Encode the pattern you want - a
-map/reduce fan-out, a reviewer that re-runs the worker, a pipeline of
-single-purpose runs - as a **skill** (`<name>/SKILL.md`), and it becomes
-available exactly when the model judges it relevant, without changing the
-engine. Orchestration is content, not framework.
-
-## The arcade
-
-**[openzot.github.io/arcade](https://openzot.github.io/arcade/)** - a live,
-unattended zot factory you can watch and play.
-
-Every 30 minutes a GitHub Actions job hands zot the same standing order: read
-the catalogue of games made so far, invent one that is unlike everything on it,
-build it as vanilla HTML, CSS and JavaScript, playtest it in a headless
-browser, and add it to the catalogue. The workflow commits whatever zot leaves
-in the tree and publishes the site. No pull request, no review, no human in the
-loop - the live site *is* the working tree.
-
-It is the shortest honest answer to "what does a fully autonomous run actually
-produce?": one order, run on a schedule, and a shelf of finished games nobody
-asked for individually. The order, the conventions zot reads before each shift,
-and every shift's commit are in
-[openzot/arcade](https://github.com/openzot/arcade).
+Watch it work: **[the arcade](https://openzot.github.io/arcade/)** ships a new
+browser game every 30 minutes from one standing order, with no human in the
+loop.
 
 ## ⚠️ Safety
 
-`zot` is fully autonomous and has **real** file-write and shell-exec access
-from `--dir`. The flag changes the process working directory; it is **not a
-filesystem sandbox**. Absolute paths and shell commands retain all permissions
-of the zot process. Point it at a scratch directory or a disposable git checkout
-you are happy for it to change - not your home directory.
-
-Configured provider credentials are resolved into zot's in-memory configuration
-and then removed from the process environment before the agent starts, so its
-shell commands do not inherit those API keys. Other secrets already present in
-the environment or readable from disk remain accessible to those commands.
-
-The published [container image](docs/docker.md) is the practical way to bound
-this: the agent can only touch the volume you mounted, and `docker run` gives you
-the rest of the levers (read-only root, dropped capabilities, resource limits) in
-one place.
-
-## Status
-
-zot is **0.x**: functional and in active use, with improvements landing release
-to release. Until 1.0 the CLI flags, config, and behavior may still change
-between versions - pin a version and skim the [changelog](CHANGELOG.md) before
-upgrading.
+zot has real file-write and shell access from `--dir`, and `--dir` is not a
+sandbox. Point it at a disposable checkout, or run the
+[container image](docs/docker.md). Read [safety](docs/safety.md) first.
 
 ## Documentation
 
-- [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints, the Responses API
+- [docs/orders.md](docs/orders.md) - work orders, `zot new`, the book, watch mode
+- [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints
 - [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENTS.md` & skills
-- [docs/development.md](docs/development.md) - building from source, release vs developer builds, the codebase map
-- [docs/portable-config.md](docs/portable-config.md) - baking the configuration into the binary
+- [docs/how-it-works.md](docs/how-it-works.md) - the harness, what sits under it, sub-agents
+- [docs/safety.md](docs/safety.md) - what zot can touch and how to bound it
 - [docs/docker.md](docs/docker.md) - running the container image
+- [docs/development.md](docs/development.md) - building from source, the codebase map
+- [docs/portable-config.md](docs/portable-config.md) - baking the configuration into the binary
+- [docs/philosophy.md](docs/philosophy.md) - why zot exists, the arcade, status
 - [CHANGELOG.md](CHANGELOG.md) · [RELEASES.md](RELEASES.md)
 
 ## Ecosystem
 
-| Project                                       | Role                                                                               |
-| --------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [Arcade](https://openzot.github.io/arcade/)   | A live zot factory shipping one browser game every 30 minutes, unattended          |
-| [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                                       |
-| [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic mornitoring, and incident prevention |
-| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use                     |
-| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands                          |
-| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP                     |
+| Project                                       | Role                                                                      |
+| --------------------------------------------- | ------------------------------------------------------------------------- |
+| [Arcade](https://openzot.github.io/arcade/)   | A live zot factory shipping one browser game every 30 minutes, unattended |
+| [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                              |
+| [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic monitoring and incident prevention |
+| [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use            |
+| [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands                 |
+| [crmkit](https://github.com/crmkit/crmkit)    | Give agents a shared CRM and system of record over HTTP or MCP            |
+
+## Status
+
+zot is **0.x** and in active use. Flags, config and behavior may change before
+1.0 - pin a version and skim the [changelog](CHANGELOG.md) before upgrading.
+Small, focused pull requests are welcome; anything large is worth an issue first.

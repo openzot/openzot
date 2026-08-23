@@ -45,7 +45,10 @@ func TestFormatUpdateNotice(t *testing.T) {
 		Outdated:  true,
 	})
 
-	for _, want := range []string{"v1.0.0", "v1.2.0", "https://example.com/releases/v1.2.0"} {
+	// The notice has to name both versions, say how to upgrade - the installer
+	// replaces the binary in place, so it is the upgrade command - and link the
+	// release for anyone who wants to read the notes first.
+	for _, want := range []string{"v1.0.0", "v1.2.0", InstallCommand, "https://example.com/releases/v1.2.0"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice is missing %q: %q", want, notice)
 		}

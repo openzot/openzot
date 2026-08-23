@@ -281,7 +281,7 @@ func run() error {
 
 	// The release check runs alongside the whole batch and is reported only once
 	// the viewer has released the screen.
-	report := checkForUpdate()
+	report := checkForUpdate(cfg.UpdateCheck.Disabled)
 	defer report(os.Stderr)
 
 	// A signal cancels the run rather than killing the process outright, so the
@@ -779,9 +779,17 @@ func draftTools(maxOutput int) agent.Tools {
 // failed". A development build makes no call at all (see version.Check), and the
 // notice goes to stderr so it cannot corrupt the transcript on stdout.
 //
+// It is also the one request a run makes that is not to the configured
+// provider, so `update_check.disabled` (or ZOT_UPDATE_CHECK_DISABLED) turns it
+// off entirely: no call is made and nothing is reported.
+//
 // Reporting waits on the lookup, which the HTTP client bounds to a few seconds -
 // by the time a real run ends the answer has long since arrived.
-func checkForUpdate() func(io.Writer) {
+func checkForUpdate(disabled bool) func(io.Writer) {
+	if disabled {
+		return func(io.Writer) {}
+	}
+
 	notice := make(chan string, 1)
 
 	go func() {

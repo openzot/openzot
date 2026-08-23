@@ -1228,7 +1228,7 @@ func TestAnOutdatedReleaseIsReportedOnStderr(t *testing.T) {
 	})
 
 	notice, err := captureStderr(t, func() error {
-		report := checkForUpdate()
+		report := checkForUpdate(false)
 
 		report(os.Stderr)
 
@@ -1290,7 +1290,7 @@ func TestTheUpdateCheckStaysSilentWhenItHasNothingToSay(t *testing.T) {
 			withReleaseAPI(t, test.current, test.handler)
 
 			notice, err := captureStderr(t, func() error {
-				report := checkForUpdate()
+				report := checkForUpdate(false)
 
 				report(os.Stderr)
 
@@ -1304,6 +1304,30 @@ func TestTheUpdateCheckStaysSilentWhenItHasNothingToSay(t *testing.T) {
 				t.Errorf("wrote %q, want nothing", notice)
 			}
 		})
+	}
+}
+
+// Disabling the check has to mean no call at all, not a call whose answer is
+// hidden: the point of the opt-out is an air-gapped host or a locked-down job
+// where the request itself is the problem.
+func TestADisabledUpdateCheckMakesNoCall(t *testing.T) {
+	withReleaseAPI(t, "v1.0.0", func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("a disabled update check must not call the release API")
+	})
+
+	notice, err := captureStderr(t, func() error {
+		report := checkForUpdate(true)
+
+		report(os.Stderr)
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if notice != "" {
+		t.Errorf("wrote %q, want nothing", notice)
 	}
 }
 

@@ -4,7 +4,7 @@ A provider is a named inference connection: a driver, endpoint, and credential.
 It may reach a model service directly, a local server, or a gateway. Pick one per
 run with `--provider`, or set `default_provider` in config.
 
-For the agent itself - the run loop, tools, safety - see the [README](../README.md).
+For the agent itself - the run loop, tools - see [how-it-works.md](how-it-works.md); for safety, [safety.md](safety.md).
 
 ## The built-in providers
 

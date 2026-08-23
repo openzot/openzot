@@ -34,6 +34,20 @@ type Config struct {
 	// Attribution is how zot names itself to a gateway that ranks the apps
 	// calling it. The zero value sends zot's own name and project URL.
 	Attribution Attribution `yaml:"attribution"`
+	// UpdateCheck controls the release check a run makes against GitHub. The
+	// zero value checks.
+	UpdateCheck UpdateCheck `yaml:"update_check"`
+}
+
+// UpdateCheck configures the one call a run makes that is not to the
+// configured provider: a lookup of the latest release on GitHub, so an
+// out-of-date binary can say so when the run ends. Nothing about the user or
+// the run travels with it, and every failure is dropped silently - but an
+// air-gapped host, a locked-down CI job, or anyone who would rather zot spoke
+// to nothing but the provider can turn it off.
+type UpdateCheck struct {
+	// Disabled makes no release lookup at all.
+	Disabled bool `yaml:"disabled"`
 }
 
 // Attribution is the app identity sent to gateways that publish rankings from
