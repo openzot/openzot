@@ -5,7 +5,7 @@
 <h1 align="center">Zot</h1>
 
 <p align="center">
-  <strong>Stop prompting Start shipping.</strong>
+  <strong>Stop prompting. Start shipping.</strong>
 </p>
 
 <p align="center">
