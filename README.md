@@ -84,10 +84,10 @@ Live zot factories: the same standing order every 30 minutes, the catalogue as
 the only memory, nobody in the loop. The site is the working tree, and every
 session ships to a public dataset.
 
-| Factory | Makes | Sessions |
-| --- | --- | --- |
-| [Arcade](https://openzot.github.io/arcade/) ([repo](https://github.com/openzot/arcade)) | One brand-new browser game per shift, playtested and published | [openzot/arcade](https://huggingface.co/datasets/openzot/arcade) |
-| [Machinery](https://openzot.github.io/machinery/) ([repo](https://github.com/openzot/machinery)) | One working control panel per shift - a live simulation, faults, and its operating manual | [openzot/machinery](https://huggingface.co/datasets/openzot/machinery) |
+| Factory | Makes | Repo | Sessions |
+| --- | --- | --- | --- |
+| [Arcade](https://openzot.github.io/arcade/) | One brand-new browser game per shift, playtested and published | [openzot/arcade](https://github.com/openzot/arcade) | [openzot/arcade](https://huggingface.co/datasets/openzot/arcade) |
+| [Machinery](https://openzot.github.io/machinery/) | One working control panel per shift - a live simulation, faults, and its operating manual | [openzot/machinery](https://github.com/openzot/machinery) | [openzot/machinery](https://huggingface.co/datasets/openzot/machinery) |
 
 ## Ecosystem
 
