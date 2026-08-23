@@ -50,16 +50,12 @@ the folder into a drop box. Any OpenAI-compatible provider works -
 `--provider anthropic`, a local `--provider ollama`, a gateway, a custom
 endpoint - see [providers](docs/providers.md).
 
-## Why zot
+## Why Zot
 
-- **Orders, not prompts.** One brief in, finished work out - and orders are
-  files, so they compose, queue, and stream. [→ work orders](docs/orders.md)
-- **Nothing in the way.** No hosted engine, no account, no telemetry. Your
-  key, your provider, your machine. [→ philosophy](docs/philosophy.md)
-- **Built to run unattended.** Context compaction, loop detection, settle mode,
-  resumable session logs. [→ how it works](docs/how-it-works.md)
-- **Orchestration is content.** No sub-agent framework; an agent can call
-  `zot` again, and skills say when. [→ sub-agents](docs/how-it-works.md#sub-agents-and-coordination)
+- **Orders, not prompts.** Files that queue, batch and stream. [→ work orders](docs/orders.md)
+- **Nothing in the way.** Your key, your provider, your machine. [→ philosophy](docs/philosophy.md)
+- **Built to run unattended.** Compaction, loop detection, resumable logs. [→ how it works](docs/how-it-works.md)
+- **Orchestration is content.** No sub-agent framework; skills decide. [→ sub-agents](docs/how-it-works.md#sub-agents-and-coordination)
 
 Watch it work: **[the arcade](https://openzot.github.io/arcade/)** ships a new
 browser game every 30 minutes from one standing order, with no human in the
