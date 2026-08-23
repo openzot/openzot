@@ -1,15 +1,15 @@
 <p align="center">
-  <img width="96" height="96" alt="zot" src="https://github.com/user-attachments/assets/44908dda-fa7c-4698-815a-82343cf54a44" />
+  <img width="96" height="96" alt="zot" src="https://github.com/user-attachments/assets/e7dee549-33be-44fe-bed4-0afbdc006c99" />
 </p>
 
-<h1 align="center">zot</h1>
+<h1 align="center">Zot</h1>
 
 <p align="center">
-  <strong>Stop promting. Start shipping.</strong>
+  <strong>Stop prompting Start shipping.</strong>
 </p>
 
 <p align="center">
-  <img width="920" alt="zot running a work order" src="https://github.com/user-attachments/assets/d12de01c-f13e-451c-93a3-d025b5b39dc6" />
+  <img width="3260" height="2160" alt="zot running a work order" src="https://github.com/user-attachments/assets/a3b74447-85a8-4a0e-be3d-6c88aeed8649" />
 </p>
 
 zot is an automated software factory in a single ~11 MiB binary. It takes a
