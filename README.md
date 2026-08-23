@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="96" height="96" alt="zot" src="https://github.com/user-attachments/assets/e7dee549-33be-44fe-bed4-0afbdc006c99" />
+  <img width="96" height="96" alt="zot" src="https://github.com/user-attachments/assets/2577f5e5-ce2e-4c96-b7b5-9c48ac05e4ca" />
 </p>
 
 <h1 align="center">Zot</h1>
