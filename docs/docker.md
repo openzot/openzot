@@ -46,25 +46,35 @@ as a base to [layer a toolchain on](#extending-the-image) when one does.
 ## Running a task
 
 zot talks straight to a model provider, so a run needs nothing but that
-provider's key. These examples use the default pair - the `zai` provider running
-`glm-5.2` - so they need no flags at all. For any other provider, pass the
+provider's key and a work order under `.zot/orders/` in the mounted workspace -
+the image's working directory is `/workspace`, so a bare `zot` there runs the
+project's book exactly as it does on the host. These examples use the default
+pair - the `zai` provider running `glm-5.2` - so they need no flags at all. For any other provider, pass the
 variable it reads along with `--provider` **and** `--model`, since the default
 model only means something on its own provider:
 
 ```bash
 docker run --rm -it --env OPENAI_API_KEY --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest --provider openai --model gpt-5.4-mini "…"
+  ghcr.io/openzot/openzot:latest --provider openai --model gpt-5.4-mini
 ```
 
 See [providers.md](providers.md) for the full list.
 
 ```bash
+# write the order - with zot new on the host, or with the image itself
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp \
+  --volume "$PWD":/workspace \
+  ghcr.io/openzot/openzot:latest new "add input validation to the signup handler and a test"
+
+# edit its acceptance criteria, then run the book
 docker run --rm -it \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
-  ghcr.io/openzot/openzot:latest "add input validation to the signup handler and a test"
+  ghcr.io/openzot/openzot:latest
 ```
 
 Two flags need explaining, and both are about **bind mounts**, not about zot:
@@ -83,15 +93,18 @@ Neither is needed when the workspace is a **named volume**, because Docker
 initialises it from the image and the default user owns it:
 
 ```bash
-docker run --rm -it \
-  --env ZAI_API_KEY \
-  --volume zot-workspace:/workspace \
-  ghcr.io/openzot/openzot:latest "scaffold a tiny snake game in python"
+# draft the order into the empty volume, then run it
+docker run --rm --env ZAI_API_KEY --volume zot-workspace:/workspace \
+  ghcr.io/openzot/openzot:latest new --draft "scaffold a tiny snake game in python"
+docker run --rm -it --env ZAI_API_KEY --volume zot-workspace:/workspace \
+  ghcr.io/openzot/openzot:latest
 ```
 
 That is the safest shape available: the run cannot see your filesystem at all.
 Retrieve the result with `docker cp`. Seed the volume separately when the task
-needs existing source; the lean image does not include Git.
+needs existing source; the lean image does not include Git. (`--draft` has the
+model fill in the acceptance criteria, since there is no easy way to edit the
+order inside a named volume.)
 
 ### Credentials
 
@@ -135,7 +148,7 @@ docker run --rm -it \
   --env ZAI_API_KEY \
   --volume "$PWD":/workspace \
   --volume "$HOME/.config/zot":/home/zot/.config/zot:ro \
-  ghcr.io/openzot/openzot:latest "…"
+  ghcr.io/openzot/openzot:latest
 ```
 
 `ZOT_CONFIG` already points at `/home/zot/.config/zot/config.yaml`; a missing
@@ -238,6 +251,7 @@ and smoke-tests the same Dockerfile on every code push. See
 ## See also
 
 - [README](../README.md) - what zot is
+- [safety.md](safety.md) - what the agent can touch
 - [configuration.md](configuration.md) - flags, config, sessions
 - [providers.md](providers.md) - providers and credentials
 - [Pantalk deployment](https://github.com/pantalk/pantalk/blob/main/docs/deployment.md) -

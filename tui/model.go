@@ -552,6 +552,16 @@ func (m model) metaBar() string {
 		return fmt.Sprintf("%d", n)
 	}
 
+	// countedWidth is the cell a counted value is padded to: wide enough for the
+	// limit shown twice over, or for four digits when there is none.
+	countedWidth := func(max int) int {
+		if max > 0 {
+			return lipgloss.Width(counted(max, max))
+		}
+
+		return 4
+	}
+
 	elapsed := fmtDuration(m.elapsed)
 	if m.maxDuration > 0 {
 		elapsed += "/" + fmtDuration(m.maxDuration)
@@ -559,19 +569,25 @@ func (m model) metaBar() string {
 
 	// Every renderable field, keyed by its stat name. The keys must match
 	// KnownStats (a test guards this).
+	//
+	// Live values sit in fixed-width cells (see cell) so a number growing a digit
+	// - 9 to 10 iterations, 999 to 1.0k tokens, a rate gaining or losing its
+	// decimal - does not shove every segment after it sideways. The cell widths
+	// are the widest value each stat normally shows; a value that outgrows its
+	// cell still renders whole, and the bar shifts once rather than clipping.
 	segments := map[string]string{
 		"provider": seg("provider", m.provider, metaProvider),
 		"model":    seg("model", m.model, metaModel),
 		"dir":      seg("dir", shortPath(m.workdir, 28), metaStyle),
-		"iter":     seg("iter", counted(m.iteration, m.maxIterations), metaCount),
-		"tools":    seg("tools", counted(m.toolCount, m.maxCalls), metaTools),
-		"edits":    seg("edits", fmt.Sprintf("%d", m.fileEdits), metaEdits),
+		"iter":     seg("iter", cell(counted(m.iteration, m.maxIterations), countedWidth(m.maxIterations)), metaCount),
+		"tools":    seg("tools", cell(counted(m.toolCount, m.maxCalls), countedWidth(m.maxCalls)), metaTools),
+		"edits":    seg("edits", cell(fmt.Sprintf("%d", m.fileEdits), 3), metaEdits),
 		"elapsed":  seg("elapsed", elapsed, metaStyle),
-		"tokens":   seg("tokens", fmt.Sprintf("↑%s ↓%s", fmtTokens(m.inputTokens), fmtTokens(m.outputTokens)), metaModel),
-		"tps":      seg("tps", fmtRate(m.tokensPerSecond()), metaModel),
-		"pace":     seg("pace", fmtPace(m.perIteration()), metaCount),
-		"task":     seg("task", fmtProgress(m.stepsDone, m.planSteps), metaCount),
-		"order":    seg("order", fmtProgress(m.batchIndex, m.batchSize), metaCount),
+		"tokens":   seg("tokens", fmt.Sprintf("↑%s ↓%s", cell(fmtTokens(m.inputTokens), 6), cell(fmtTokens(m.outputTokens), 6)), metaModel),
+		"tps":      seg("tps", cell(fmtRate(m.tokensPerSecond()), 6), metaModel),
+		"pace":     seg("pace", cell(fmtPace(m.perIteration()), 5), metaCount),
+		"task":     seg("task", cell(fmtProgress(m.stepsDone, m.planSteps), progressWidth(m.planSteps)), metaCount),
+		"order":    seg("order", cell(fmtProgress(m.batchIndex, m.batchSize), progressWidth(m.batchSize)), metaCount),
 	}
 
 	fields := m.stats
@@ -629,6 +645,29 @@ func (m model) footer() string {
 	}
 	tail := footerStyle.Render("  ·  press " + keyHint.Render("q") + " to exit")
 	return hints + tail
+}
+
+// cell pads v on the right to at least width columns, so a value that changes
+// length - a count gaining a digit, a rate dropping its decimal - keeps the
+// segments after it where they were. The value stays flush against its label;
+// the slack trails. A value wider than the cell is returned whole.
+func cell(v string, width int) string {
+	if pad := width - lipgloss.Width(v); pad > 0 {
+		return v + strings.Repeat(" ", pad)
+	}
+
+	return v
+}
+
+// progressWidth is the cell a "done/total" value is padded to: the width of
+// the total shown twice over, so every step of one plan or batch lines up. With
+// no total the value is "-" and the cell is a minimal placeholder.
+func progressWidth(total int) int {
+	if total <= 0 {
+		return 1
+	}
+
+	return lipgloss.Width(fmtProgress(total, total))
 }
 
 // fmtTokens renders a token count compactly: 532, 45.2k, 1.2M.

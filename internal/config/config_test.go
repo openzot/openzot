@@ -1054,3 +1054,47 @@ attribution:
 		t.Error("a bare config must leave attribution unset so the provider defaults apply")
 	}
 }
+
+// The release check is the one request a run makes that is not to the
+// configured provider, so turning it off has to work from the file and from
+// the environment - the air-gapped hosts and locked-down CI jobs that need the
+// opt-out are exactly the ones that may never write a config file. And the
+// default must be on: an opt-out that defaults to off is not an opt-out.
+func TestTheUpdateCheckCanBeDisabledFromFileAndEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+
+	def, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if def.UpdateCheck.Disabled {
+		t.Error("a bare config must leave the update check enabled")
+	}
+
+	path := writeConfig(t, `
+update_check:
+  disabled: true
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !cfg.UpdateCheck.Disabled {
+		t.Error("update_check.disabled was not read from the file")
+	}
+
+	t.Setenv("ZOT_UPDATE_CHECK_DISABLED", "true")
+
+	fromEnv, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !fromEnv.UpdateCheck.Disabled {
+		t.Error("ZOT_UPDATE_CHECK_DISABLED did not reach the config")
+	}
+}

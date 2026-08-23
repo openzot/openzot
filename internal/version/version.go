@@ -146,6 +146,11 @@ func Check() (*CheckResult, error) {
 	}, nil
 }
 
+// InstallCommand is the one-line installer the update notice recommends. It
+// installs the latest release for the current platform, replacing the binary
+// in place, so it doubles as the upgrade command.
+const InstallCommand = "curl -fsSL https://zot.im/install.sh | bash"
+
 // FormatUpdateNotice returns a human-readable update notice string. Returns an
 // empty string if there is no update available.
 func FormatUpdateNotice(r *CheckResult) string {
@@ -154,7 +159,7 @@ func FormatUpdateNotice(r *CheckResult) string {
 	}
 
 	return fmt.Sprintf(
-		"A new version of zot is available: %s → %s\nRelease: %s",
-		r.Current, r.Latest, r.UpdateURL,
+		"A new version of zot is available: %s → %s\nUpgrade: %s\nRelease: %s",
+		r.Current, r.Latest, InstallCommand, r.UpdateURL,
 	)
 }

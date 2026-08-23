@@ -135,7 +135,7 @@ A baked key buys convenience with real downsides. Know them before you ship one:
 
 zot already scrubs resolved provider credentials from the process environment
 before the agent's `shell` tool can run, so the commands it executes do not
-inherit your API keys (see [Safety](../README.md#-safety)). A **baked** key is
+inherit your API keys (see [safety.md](safety.md)). A **baked** key is
 handled the same way - and it was never in the environment to begin with, so a
 portable binary with a compiled-in key gives the agent's shell *nothing* to read
 from the environment for that credential. That is a genuine, if narrow, security

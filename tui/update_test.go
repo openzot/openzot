@@ -1427,6 +1427,97 @@ func TestDefaultStatsAreCuratedNotEverything(t *testing.T) {
 	}
 }
 
+// A live value growing a digit - nine iterations becoming ten, 999 tokens
+// becoming 1.0k, a rate gaining or losing its decimal - must not shove the
+// segments after it sideways: a header that jitters on every tick is unreadable
+// at a glance, which is the only way a header is read. Each volatile stat is
+// followed by a fixed one, and the test asks whether that fixed one moved.
+func TestMetaBarDoesNotShiftAsValuesChange(t *testing.T) {
+	anchor := func(m model) int {
+		return strings.Index(stripANSI(m.metaBar()), "model")
+	}
+
+	tests := []struct {
+		name   string
+		stat   string
+		before func(*model)
+		after  func(*model)
+	}{
+		{
+			name:   "iterations gaining a digit",
+			stat:   "iter",
+			before: func(m *model) { m.iteration = 9 },
+			after:  func(m *model) { m.iteration = 10 },
+		},
+		{
+			name:   "iterations against a limit",
+			stat:   "iter",
+			before: func(m *model) { m.iteration, m.maxIterations = 9, 300 },
+			after:  func(m *model) { m.iteration, m.maxIterations = 100, 300 },
+		},
+		{
+			name:   "tool calls gaining a digit",
+			stat:   "tools",
+			before: func(m *model) { m.toolCount = 99 },
+			after:  func(m *model) { m.toolCount = 100 },
+		},
+		{
+			name:   "edits gaining a digit",
+			stat:   "edits",
+			before: func(m *model) { m.fileEdits = 9 },
+			after:  func(m *model) { m.fileEdits = 10 },
+		},
+		{
+			name:   "tokens crossing into thousands",
+			stat:   "tokens",
+			before: func(m *model) { m.inputTokens, m.outputTokens = 532, 40 },
+			after:  func(m *model) { m.inputTokens, m.outputTokens = 120_000, 4_500 },
+		},
+		{
+			name:   "a rate appearing, then losing its decimal",
+			stat:   "tps",
+			before: func(m *model) { m.elapsed, m.outputTokens = 0, 0 },
+			after:  func(m *model) { m.elapsed, m.outputTokens = 20*time.Second, 8000 },
+		},
+		{
+			name:   "a pace appearing",
+			stat:   "pace",
+			before: func(m *model) { m.elapsed, m.iteration = 0, 0 },
+			after:  func(m *model) { m.elapsed, m.iteration = 20*time.Second, 4 },
+		},
+		{
+			name:   "task progress within one plan",
+			stat:   "task",
+			before: func(m *model) { m.stepsDone, m.planSteps = 0, 12 },
+			after:  func(m *model) { m.stepsDone, m.planSteps = 10, 12 },
+		},
+		{
+			name:   "order progress within one batch",
+			stat:   "order",
+			before: func(m *model) { m.batchIndex, m.batchSize = 1, 10 },
+			after:  func(m *model) { m.batchIndex, m.batchSize = 10, 10 },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := sized(t, 400, 30)
+			m.stats = []string{test.stat, "model"}
+			m.model = "glm-5.2"
+
+			test.before(&m)
+
+			was := anchor(m)
+
+			test.after(&m)
+
+			if now := anchor(m); now != was {
+				t.Errorf("%s moved the next segment from column %d to %d:\n%q", test.stat, was, now, stripANSI(m.metaBar()))
+			}
+		})
+	}
+}
+
 // A rate is a measurement; its absence is not zero. Until there is enough of a
 // run to divide by, the bar says so rather than reporting a confident 0.0.
 func TestRateStatsReportAbsenceRatherThanZero(t *testing.T) {

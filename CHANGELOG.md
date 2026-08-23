@@ -2,6 +2,20 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.19.1] - 2026-08-23
+
+### Added
+
+- **The update check can be turned off.** A release build asks GitHub for the latest release during every run - the one request zot makes that is not to the configured provider, and until now there was no way to stop it. `update_check.disabled: true` in the config, or `ZOT_UPDATE_CHECK_DISABLED=true`, makes no call at all: not a call whose answer is hidden, no call, for the air-gapped hosts and locked-down CI jobs where the request itself is the problem. Documented in [docs/configuration.md](docs/configuration.md#the-update-check) and [docs/safety.md](docs/safety.md).
+
+### Fixed
+
+- **The header no longer jitters as the numbers grow.** Every live stat in the meta bar was rendered at its natural width, so nine iterations becoming ten, 999 tokens becoming 1.0k, or a rate gaining or losing its decimal shoved every segment after it a column sideways - on every tick, in the one line that is meant to be read at a glance. Each value now sits in a fixed-width cell sized to the widest figure the stat normally shows (a count against its limit is as wide as the limit twice over; tokens, rate and pace have cells of their own), flush against its label with the slack trailing, so the segments after it stay put. A value that outgrows its cell still renders whole; the bar shifts once rather than clipping a digit.
+
+### Changed
+
+- **The update notice says how to upgrade.** It used to name the new version and link the release page; now it also gives the one-line installer, `curl -fsSL https://zot.im/install.sh | bash`, which fetches the latest release for the platform, verifies its checksum and replaces the binary in place.
+
 ## [0.19.0] - 2026-08-22
 
 ### Added

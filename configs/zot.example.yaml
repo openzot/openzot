@@ -25,6 +25,7 @@
 #   attribution.name      -> ZOT_ATTRIBUTION_NAME
 #   attribution.url       -> ZOT_ATTRIBUTION_URL
 #   attribution.disabled  -> ZOT_ATTRIBUTION_DISABLED
+#   update_check.disabled -> ZOT_UPDATE_CHECK_DISABLED
 #
 # Credentials: put the key DIRECTLY in this file, or reference an environment
 # variable with $VAR - either works. Each built-in provider also reads its
@@ -184,6 +185,17 @@ ui:
 # attribution:
 #   name: zot
 #   url: https://github.com/openzot/openzot
+#   disabled: false
+
+# The release check. A release build asks GitHub for the latest zot release
+# while a run is going and, if this binary is behind, says so on stderr once the
+# run ends - with the one-line installer, which upgrades in place. It is the only
+# request a run makes that is not to your provider: nothing about you or the run
+# travels with it, failures are dropped silently, and a development build never
+# makes it. Set `disabled: true` to make no call at all - an air-gapped host, a
+# locked-down CI job, or simply a preference that zot speaks to nothing but the
+# provider.
+# update_check:
 #   disabled: false
 
 default_provider: zai
