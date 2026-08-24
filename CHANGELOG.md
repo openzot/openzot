@@ -4,6 +4,10 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ## [0.20.1] - unreleased
 
+### Fixed
+
+- **A masked upstream failure no longer reads as the model producing nothing.** A gateway can dress an upstream provider's failure as a normal completion: the chat-completions frame carries `finish_reason: "stop"` with empty content while the real cause sits in `native_finish_reason` (`"network_error"` is the one seen in the wild, from a stealth endpoint dropping every request that carried tool definitions). The transport parsed `finish_reason` and ignored the native one, so the empty turn reached the loop as a clean stop — it nudged the dead provider three times and then ended the run with "the model repeatedly produced nothing", blaming the model for the gateway's fault and burning a scheduled run on a silent misdiagnosis. The chat transport now reads `native_finish_reason`, and an otherwise-empty turn whose native reason names a failure is surfaced through `streamFailure` — the retriable provider error it always was — so the run retries instead of giving up, and an operator reading the log sees the upstream failure rather than a false accusation. The check fires only on a turn that produced no token, reasoning, or tool call, so a real answer that happens to carry an unusual native reason is never discarded.
+
 ### Changed
 
 - **The installer is part of the tool, not the website.** `install.sh` - the script `https://zot.im/install.sh` serves - lived only in the website repository, a second copy to keep in step with what the releases actually ship. It now lives in the tool repository as the single source of truth and is published as a release asset on every tag, so `https://github.com/openzot/openzot/releases/latest/download/install.sh` always serves the current installer. The website no longer hosts its own copy: `zot.im/install.sh` proxies to the repo's script, so the one-line install command is unchanged while the script behind it can no longer drift.

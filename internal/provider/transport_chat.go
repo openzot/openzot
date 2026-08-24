@@ -116,6 +116,11 @@ type chunk struct {
 		} `json:"delta"`
 
 		FinishReason string `json:"finish_reason"`
+
+		// NativeFinishReason is the upstream provider's own stop reason, which a
+		// gateway may carry alongside a normalised finish_reason. It is the only
+		// place a masked upstream failure shows through - see isNativeFailure.
+		NativeFinishReason string `json:"native_finish_reason"`
 	} `json:"choices"`
 
 	Usage *Usage `json:"usage"`
@@ -215,6 +220,13 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 
 	finishReason := ""
 
+	nativeFinishReason := ""
+
+	// whether the turn carried anything at all - any token, reasoning, or tool
+	// call. An empty turn that the gateway labelled with an upstream failure is a
+	// masked provider error, not a real stop - see the check after the loop.
+	produced := false
+
 	// whether the provider said the turn was over, rather than the body simply
 	// stopping - see the check after the loop
 	terminal := false
@@ -267,7 +279,13 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 				terminal = true
 			}
 
+			if choice.NativeFinishReason != "" {
+				nativeFinishReason = choice.NativeFinishReason
+			}
+
 			if choice.Delta.Content != "" {
+				produced = true
+
 				if !send(ctx, events, Event{Token: choice.Delta.Content}) {
 					return ctx.Err()
 				}
@@ -277,13 +295,21 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 
 			// providers disagree on the reasoning field name
 			if reasoning := choice.Delta.ReasoningContent; reasoning != "" {
+				produced = true
+
 				if !send(ctx, events, Event{ReasoningToken: reasoning}) {
 					return ctx.Err()
 				}
 			} else if reasoning := choice.Delta.Reasoning; reasoning != "" {
+				produced = true
+
 				if !send(ctx, events, Event{ReasoningToken: reasoning}) {
 					return ctx.Err()
 				}
+			}
+
+			if len(choice.Delta.ToolCalls) > 0 {
+				produced = true
 			}
 
 			for _, delta := range choice.Delta.ToolCalls {
@@ -320,6 +346,16 @@ func consumeSSE(ctx context.Context, body io.Reader, events chan<- Event) error 
 
 	if !terminal {
 		return errTruncatedStream
+	}
+
+	// A gateway can mask an upstream failure as a normal stop: finish_reason
+	// "stop" while native_finish_reason carries the real cause ("network_error")
+	// and the turn is empty. Left alone it reaches the loop as a silent empty
+	// turn, which nudges the dead provider and then reports that the model
+	// produced nothing. Surface it as the retryable provider failure it is.
+	if !produced && isNativeFailure(nativeFinishReason) {
+		return streamFailure(fmt.Sprintf(
+			"provider returned an empty turn with native finish reason %q", nativeFinishReason))
 	}
 
 	final := Event{FinishReason: finishReason, Usage: usage, ReasoningDetails: details.raw()}
