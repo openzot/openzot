@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.19.2] - 2026-08-24
+
+### Added
+
+- **Session recording is a public package.** `internal/session` held the durable run log — the meta, messages, events and result of a run, plus the conversations a compaction discarded — but `internal/` is invisible to other modules. A separate Go module like rook (`github.com/pdparchitect/rook`) cannot import `github.com/openzot/openzot/internal/session`, so embedding applications had no way to record or resume runs. The new `github.com/openzot/openzot/session` package re-exports the types an embedding application needs (`Writer`, `Session`, `Meta`, `Entry`) and the functions to drive them (`Start`, `Load`, `List`, `Resolve`, `NewRecorder`), the same pattern the `agent` and `tui` packages already follow. No behaviour changed in zot itself; the engine's session logging is untouched.
+
 ## [0.19.1] - 2026-08-23
 
 ### Added
