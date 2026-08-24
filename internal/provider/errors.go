@@ -491,3 +491,24 @@ func IsAuth(err error) bool {
 func streamFailure(message string) *Error {
 	return &Error{Status: 0, Message: message, midstream: true}
 }
+
+// nativeFailurePattern matches an upstream stop reason that names a failure.
+//
+// A gateway can carry the provider's own stop reason in native_finish_reason
+// while presenting a normal finish_reason of "stop" to the caller. When a
+// stealth upstream drops a tool-bearing request the pair is
+// finish_reason:"stop" / native_finish_reason:"network_error" over an empty
+// turn - a failure wearing a success's clothes. Read literally it reaches the
+// loop as a silent empty turn: it nudges a dead provider and then reports that
+// the model produced nothing, blaming the model for the gateway's fault. This
+// is matched only against an otherwise-empty turn, so a real answer that
+// happens to carry an unusual native reason is never touched.
+var nativeFailurePattern = regexp.MustCompile(`(?i)error|fail|abort|cancel|timeout|network`)
+
+// isNativeFailure reports whether a gateway's native_finish_reason names an
+// upstream failure rather than a normal completion.
+func isNativeFailure(reason string) bool {
+	reason = strings.TrimSpace(reason)
+
+	return reason != "" && nativeFailurePattern.MatchString(reason)
+}

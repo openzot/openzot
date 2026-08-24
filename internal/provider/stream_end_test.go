@@ -152,3 +152,61 @@ func TestChatAcceptsAFinishReasonAsTerminal(t *testing.T) {
 		t.Errorf("text = %q, finish = %q, want a clean stop", text, finish)
 	}
 }
+
+// A gateway can dress an upstream failure as a normal stop: finish_reason "stop"
+// while native_finish_reason carries the real cause and the turn is empty. Read
+// literally it becomes a silent empty turn that the loop blames on the model
+// ("produced nothing"); it has to surface as the retriable provider failure it
+// is. This is the shape a stealth upstream returns when it drops a tool-bearing
+// request.
+func TestChatRejectsAnEmptyTurnMaskedAsAStop(t *testing.T) {
+	client := halfAnAnswer(t, false,
+		`{"choices":[{"delta":{},"finish_reason":"stop","native_finish_reason":"network_error"}]}`,
+	)
+
+	_, finish, err := collect(client)
+
+	if err == nil {
+		t.Fatalf("an empty turn masking an upstream failure must not read as a stop (finish = %q)", finish)
+	}
+
+	if !IsRetriable(err) {
+		t.Errorf("a masked upstream failure should be retriable: %v", err)
+	}
+}
+
+// The masking check must not fire on a real answer. A turn that produced content
+// is kept even when the gateway reports an odd native finish reason - discarding
+// it would turn a good answer into a spurious retry.
+func TestChatKeepsAnAnsweredTurnDespiteANativeFailureReason(t *testing.T) {
+	client := halfAnAnswer(t, false,
+		`{"choices":[{"delta":{"content":"the answer"}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop","native_finish_reason":"network_error"}]}`,
+	)
+
+	text, finish, err := collect(client)
+	if err != nil {
+		t.Fatalf("an answered turn must not be discarded: %v", err)
+	}
+
+	if text != "the answer" || finish != FinishStop {
+		t.Errorf("text = %q, finish = %q, want the answer kept", text, finish)
+	}
+}
+
+// A genuinely empty stop - no native failure reason - is left alone: it is the
+// loop's empty-turn handling that owns it, not a provider error.
+func TestChatAllowsAPlainEmptyStop(t *testing.T) {
+	client := halfAnAnswer(t, false,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+	)
+
+	_, finish, err := collect(client)
+	if err != nil {
+		t.Fatalf("a plain empty stop is not a provider error: %v", err)
+	}
+
+	if finish != FinishStop {
+		t.Errorf("finish = %q, want a clean stop", finish)
+	}
+}
