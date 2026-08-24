@@ -224,6 +224,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body: ${{ steps.notes.outputs.content }}
+          # install.sh ships as a release asset so the latest-download URL always
+          # serves the current installer, and https://zot.im/install.sh proxies
+          # to it. It is the checked-out repo copy - the single source of truth.
           files: |
             dist/*.tar.gz
             dist/checksums.txt
+            install.sh

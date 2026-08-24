@@ -2,6 +2,12 @@
 
 All notable changes to zot, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [0.20.1] - unreleased
+
+### Changed
+
+- **The installer is part of the tool, not the website.** `install.sh` - the script `https://zot.im/install.sh` serves - lived only in the website repository, a second copy to keep in step with what the releases actually ship. It now lives in the tool repository as the single source of truth and is published as a release asset on every tag, so `https://github.com/openzot/openzot/releases/latest/download/install.sh` always serves the current installer. The website no longer hosts its own copy: `zot.im/install.sh` proxies to the repo's script, so the one-line install command is unchanged while the script behind it can no longer drift.
+
 ## [0.20.0] - 2026-08-24
 
 ### Added
