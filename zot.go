@@ -14,6 +14,7 @@ package zot
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,15 +203,19 @@ func LoadProjectContext(cfg *Config, dirs ...string) error {
 		cfg.Agent.Instructions = base + "\n\n" + projectContext + "\n\n" + strings.Join(instructions, "\n\n---\n\n")
 	}
 
-	res, err := agent.LoadSkills(skillDirs)
-	if err != nil {
+	// Probe the directories once so a broken one - unreadable, say - fails at
+	// load rather than being silently skipped mid-run. The scan's result is
+	// deliberately discarded: the run rescans the directories at every
+	// iteration, so a skill added while the agent works (including by the
+	// agent itself) is picked up without a restart.
+	if _, err := agent.LoadSkills(skillDirs); err != nil {
 		return fmt.Errorf("load skills: %w", err)
 	}
 
 	// @note skills are described in the system prompt rather than shipped to a
 	// server as a feature. The engine renders them locally now, so a skill is
 	// inert text plus a path the model may choose to read.
-	cfg.Skills = append(cfg.Skills, res.Skills...)
+	cfg.SkillDirectories = append(cfg.SkillDirectories, skillDirs...)
 
 	return nil
 }
@@ -289,6 +294,13 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 
 	workdir, _ := os.Getwd()
 
+	// Captures the run's final totals so the end-of-run digest can report them;
+	// the viewer's returned Outcome carries only the reason and message.
+	summaryRec := &agent.SummaryRecorder{}
+	opts.Recorder = summaryRec
+
+	var sessionID string
+
 	if options.SessionDir != "" {
 		meta := session.Meta{
 			Task:     task,
@@ -316,7 +328,8 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 				options.OnSession(writer.Path())
 			}
 
-			opts.Recorder = session.NewRecorder(writer)
+			sessionID = writer.ID()
+			opts.Recorder = agent.MultiRecorder(session.NewRecorder(writer), summaryRec)
 		}
 	}
 
@@ -326,9 +339,38 @@ func RunWith(ctx context.Context, cfg Config, task string, options RunOptions) e
 	meta.BatchSize = options.BatchSize
 	meta.QuitOnDone = options.QuitOnDone
 
-	_, err = tui.Run(ctx, client, meta, opts)
+	outcome, err := tui.Run(ctx, client, meta, opts)
+
+	printDigest(os.Stderr, "zot", sessionID, outcome, summaryRec.Summary)
 
 	return err
+}
+
+// printDigest writes the end-of-run digest: the outcome, what the run spent,
+// and - when the run was recorded - the session id and the exact command that
+// resumes it. Kept to stderr so it never mixes into a piped deliverable, and
+// skipped entirely when there is nothing to say (a run that never produced a
+// summary, e.g. a setup failure before the first turn).
+func printDigest(w io.Writer, app, sessionID string, outcome tui.Outcome, summary *agent.Summary) {
+	if summary == nil {
+		return
+	}
+
+	digest := tui.Digest{
+		Status:       tui.DigestStatus(summary.Reason, summary.Code),
+		Session:      sessionID,
+		Iterations:   summary.Iterations,
+		Calls:        summary.Calls,
+		InputTokens:  summary.InputTokens,
+		OutputTokens: summary.OutputTokens,
+		Message:      outcome.Message,
+	}
+
+	if sessionID != "" {
+		digest.Resume = app + " --resume " + sessionID
+	}
+
+	fmt.Fprintf(w, "\n%s", tui.RenderDigest(digest))
 }
 
 // viewerMeta describes the run to the viewer.
@@ -443,13 +485,18 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	// it as unbounded rather than failing a run that already passed validation.
 	maxDuration, _ := cfg.Agent.MaxDuration()
 
+	// The loader rescans the context directories every time the engine renders
+	// the system prompt, so a SKILL.md that appears mid-run is described to the
+	// model on its next turn. Programmatic skills ride along as the static layer.
+	skills := agent.NewSkillLoader(&agent.SkillsResult{Skills: cfg.Skills}, cfg.SkillDirectories...)
+
 	opts := agent.ExecuteWithToolsOptions{
 		Instructions: instructions,
 		Tools: agent.DefaultToolsFor(agent.ToolOptions{
 			MaxOutput: cfg.Agent.MaxToolOutput,
 			Vision:    capabilities.SupportsVision,
 		}),
-		Skills:           cfg.Skills,
+		Skills:           skills.Skills,
 		MaxIterations:    maxIterations,
 		MaxSettles:       cfg.Agent.MaxSettles,
 		MaxCalls:         cfg.Agent.MaxCalls,

@@ -57,8 +57,13 @@ type Options struct {
 	// Tools the model may call, keyed by name.
 	Tools map[string]ToolDefinition
 
-	// Skills are rendered into the system prompt.
-	Skills []Skill
+	// Skills are rendered into the system prompt. A function rather than a
+	// slice so the set can change while a run is live: the prompt is
+	// re-rendered every iteration from whatever the function returns, so a
+	// skill that appears mid-run - dropped into a watched directory, cloned
+	// by the agent itself - surfaces on the model's next turn. Nil means no
+	// skills.
+	Skills func() []Skill
 
 	// OnConversation, when set, is called at each iteration boundary with the
 	// conversation as it then stands. It exists so a caller can persist the
@@ -1499,11 +1504,20 @@ func (e *Engine) instructions() string {
 
 	builder.WriteString(e.options.Instructions)
 
-	if len(e.options.Skills) > 0 {
+	// Asked for fresh on every render rather than read from a field, which is
+	// the whole point of Skills being a function: this method runs at each
+	// iteration's buildRequest, so the prompt tracks the live set.
+	var skills []Skill
+
+	if e.options.Skills != nil {
+		skills = e.options.Skills()
+	}
+
+	if len(skills) > 0 {
 		builder.WriteString("\n\n<available_skills>\n")
 		builder.WriteString("Use the following skills when appropriate. Each one's instructions live elsewhere; the access field says how to read them. Read a skill only when you decide it is relevant, then follow what it says.\n")
 
-		for _, skill := range e.options.Skills {
+		for _, skill := range skills {
 			access := skill.Hint
 
 			if access == "" {

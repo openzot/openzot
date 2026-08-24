@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,6 +69,13 @@ type Evidence struct {
 	Iterations int `yaml:"iterations,omitempty"`
 	Calls      int `yaml:"calls,omitempty"`
 
+	// InputTokens and OutputTokens are the run's billed totals, so a receipt
+	// carries what the order cost as well as what it did. Copied from the
+	// session log's Result; zero (and omitted) for a run whose log predates the
+	// fields or recorded no outcome.
+	InputTokens  int `yaml:"input_tokens,omitempty"`
+	OutputTokens int `yaml:"output_tokens,omitempty"`
+
 	// Missing says why there is no proof, when there is none. A receipt with
 	// nothing to show has to say so: silence reads identically to a run that
 	// did nothing, and a ledger that quietly implies work it cannot evidence is
@@ -99,11 +107,13 @@ func EvidenceFrom(runID string, s *session.Session, err error) Evidence {
 	}
 
 	return Evidence{
-		Session:    runID,
-		Reason:     s.Result.Reason,
-		Summary:    strings.TrimSpace(s.Result.Message),
-		Iterations: s.Result.Iterations,
-		Calls:      s.Result.Calls,
+		Session:      runID,
+		Reason:       s.Result.Reason,
+		Summary:      strings.TrimSpace(s.Result.Message),
+		Iterations:   s.Result.Iterations,
+		Calls:        s.Result.Calls,
+		InputTokens:  s.Result.InputTokens,
+		OutputTokens: s.Result.OutputTokens,
 	}
 }
 
@@ -232,4 +242,15 @@ func (l Ledger) Satisfied(o Order) (Record, bool) {
 	}
 
 	return newest, found
+}
+
+// SortRecords returns records ordered newest-first by At, for listing. The
+// ledger on disk is already append-only; this only orders what was read back.
+func SortRecords(records []Record) []Record {
+	out := make([]Record, 0, len(records))
+	for _, r := range records {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	return out
 }

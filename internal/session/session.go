@@ -163,6 +163,13 @@ type Result struct {
 	Continuations int `json:"continuations"`
 	Cycles        int `json:"cycles"`
 	Settles       int `json:"settles"`
+
+	// InputTokens and OutputTokens are the provider-billed totals for the run,
+	// persisted so an audit or a resumed run can see cost rather than only the
+	// terminal that produced it. Omitted from an older log, which read back as
+	// zero - not wrong, just unrecorded.
+	InputTokens  int `json:"inputTokens,omitempty"`
+	OutputTokens int `json:"outputTokens,omitempty"`
 }
 
 // Failure is the wire evidence of a provider refusal.

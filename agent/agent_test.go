@@ -555,30 +555,14 @@ func TestEveryEventImplementsTheInterface(t *testing.T) {
 	}
 }
 
-// The skill tool is registered automatically when a skill is embedded, because
-// an embedded skill is unreachable without it - but a caller's own `skill` tool
-// must still win.
-func TestWithSkillTool(t *testing.T) {
-	embedded := []SkillDefinition{{Name: "deploy", Source: SkillSourceEmbedded}}
-	onDisk := []SkillDefinition{{Name: "review", Source: SkillSourceDirectory}}
+// StaticSkills adapts a fixed set to the dynamic Skills option.
+func TestStaticSkills(t *testing.T) {
+	skills := []SkillDefinition{{Name: "deploy"}}
 
-	if tools := withSkillTool(Tools{}, embedded); tools["skill"].Handler == nil {
-		t.Error("an embedded skill must bring the skill tool with it")
-	}
+	fn := StaticSkills(skills)
 
-	if tools := withSkillTool(Tools{}, onDisk); len(tools) != 0 {
-		t.Error("directory skills need no tool - they are read with `read`")
-	}
-
-	own := Tools{"skill": {Description: "the caller's own"}}
-
-	if tools := withSkillTool(own, embedded); tools["skill"].Description != "the caller's own" {
-		t.Error("a caller's own skill tool must not be replaced")
-	}
-
-	// the original map is not mutated
-	if len(own) != 1 {
-		t.Error("withSkillTool must not modify the caller's map")
+	if got := fn(); len(got) != 1 || got[0].Name != "deploy" {
+		t.Errorf("StaticSkills must return the fixed set: %+v", got)
 	}
 }
 

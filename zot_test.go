@@ -49,13 +49,20 @@ func TestLoadProjectContext(t *testing.T) {
 		t.Error("expected config-dir AGENTS.md to appear before work-dir AGENTS.md")
 	}
 
-	// Both skills are discovered and described to the model.
-	if len(cfg.Skills) != 2 {
-		t.Fatalf("expected 2 skills, got %d (%v)", len(cfg.Skills), cfg.Skills)
+	// Both skills' directories are recorded; the run rescans them live rather
+	// than snapshotting the skills at load. Load them the same way the run
+	// does and confirm both are found.
+	loaded, err := agent.LoadSkills(cfg.SkillDirectories)
+	if err != nil {
+		t.Fatalf("LoadSkills: %v", err)
+	}
+
+	if len(loaded.Skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d (%v)", len(loaded.Skills), loaded.Skills)
 	}
 
 	names := map[string]bool{}
-	for _, skill := range cfg.Skills {
+	for _, skill := range loaded.Skills {
 		names[skill.Name] = true
 
 		if skill.Path == "" {
@@ -73,7 +80,15 @@ func TestLoadProjectContextNoFiles(t *testing.T) {
 		t.Error("expected instructions untouched when no AGENTS.md is present")
 	}
 
-	if len(cfg.Skills) != 0 {
+	// Candidate skill directories are recorded even when empty - the run
+	// watches them live, so a skill added later is still found - but no skill
+	// resolves from them yet.
+	loaded, err := agent.LoadSkills(cfg.SkillDirectories)
+	if err != nil {
+		t.Fatalf("LoadSkills: %v", err)
+	}
+
+	if len(loaded.Skills) != 0 {
 		t.Error("expected no skills when none are present")
 	}
 }

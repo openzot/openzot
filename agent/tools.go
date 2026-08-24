@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,14 @@ type ToolOptions struct {
 	// is not something zot can discover at runtime, so the caller says - from
 	// the catalogue, or from what the operator configured for the model.
 	Vision bool
+
+	// EmbeddedSkills are skill bodies compiled into the binary, keyed by name,
+	// that the `read` tool serves when handed an embedded-skill:// URL. A caller that
+	// ships embedded skills passes their contents (SkillsResult.EmbeddedContents)
+	// so those skills are read exactly like on-disk ones - same tool, same
+	// bounded-range mechanism, the URL the only thing that differs. Nil for a
+	// tool set with no embedded skills.
+	EmbeddedSkills map[string]string
 }
 
 // DefaultToolsFor returns the standard tool set for a set of options.
@@ -61,7 +70,7 @@ func DefaultToolsFor(options ToolOptions) Tools {
 		maxOutput = DefaultMaxToolOutput
 	}
 
-	s := toolSet{maxOutput: maxOutput, vision: options.Vision}
+	s := toolSet{maxOutput: maxOutput, vision: options.Vision, embeddedSkills: options.EmbeddedSkills}
 
 	tools := Tools{
 		"read": {
@@ -211,6 +220,10 @@ type toolSet struct {
 	// vision is whether this run's model can be shown images. read consults it
 	// to explain itself when it is handed one.
 	vision bool
+
+	// embeddedSkills are skill bodies compiled into the binary, keyed by name,
+	// that read serves when the path is an embedded-skill:// URL. Nil when none ship.
+	embeddedSkills map[string]string
 }
 
 // truncate bounds what a tool may return.
@@ -248,6 +261,29 @@ func intArg(args map[string]any, key string) (int, bool) {
 	}
 }
 
+// readContent resolves a read path to bytes: an embedded skill for an embedded-skill://
+// URL, an ordinary file otherwise. The two share every downstream step, so read
+// treats what comes back the same way regardless of where it came from.
+func (s toolSet) readContent(path string) ([]byte, error) {
+	if name, ok := SkillNameFromURL(path); ok {
+		body, found := s.embeddedSkills[name]
+		if !found {
+			names := make([]string, 0, len(s.embeddedSkills))
+			for n := range s.embeddedSkills {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+
+			return nil, fmt.Errorf("no built-in skill named %q; available: %s",
+				name, strings.Join(names, ", "))
+		}
+
+		return []byte(body), nil
+	}
+
+	return os.ReadFile(path)
+}
+
 func (s toolSet) read(_ context.Context, args map[string]any) (any, error) {
 	path, err := stringArg(args, "path")
 	if err != nil {
@@ -265,7 +301,12 @@ func (s toolSet) read(_ context.Context, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("read requires startLine and endLine: read a bounded range, not the whole file")
 	}
 
-	content, err := os.ReadFile(path)
+	// An embedded-skill:// URL addresses a skill compiled into the binary, which
+	// has no filesystem path. Resolve it against the embedded set; everything after -
+	// the range, the line numbering, the truncation - is identical to a file,
+	// which is the point: the model reads an embedded skill exactly as it reads
+	// one on disk.
+	content, err := s.readContent(path)
 	if err != nil {
 		return nil, err
 	}

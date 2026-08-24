@@ -481,8 +481,10 @@ func TestInstructionsRendersSkillsAndSettleInstruction(t *testing.T) {
 	engine, err := New(Options{
 		Client:       stub(t, []string{stop()}),
 		Instructions: "you are an agent",
-		Skills:       []Skill{{Name: "deploy", Description: "ship it", Path: "/skills/deploy/SKILL.md"}},
-		MaxSettles:   5,
+		Skills: func() []Skill {
+			return []Skill{{Name: "deploy", Description: "ship it", Path: "/skills/deploy/SKILL.md"}}
+		},
+		MaxSettles: 5,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -501,6 +503,42 @@ func TestInstructionsRendersSkillsAndSettleInstruction(t *testing.T) {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("instructions is missing %q:\n%s", want, instructions)
 		}
+	}
+}
+
+func TestInstructionsReflectsLiveSkillChanges(t *testing.T) {
+	skills := []Skill{{Name: "recon", Description: "map the target", Path: "/skills/recon/SKILL.md"}}
+
+	engine, err := New(Options{
+		Client:       stub(t, []string{stop()}),
+		Instructions: "you are an agent",
+		Skills:       func() []Skill { return skills },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if !strings.Contains(engine.instructions(), "<name>recon</name>") {
+		t.Fatal("first render must include the initial skill")
+	}
+
+	// A skill added after the engine was built - the mid-run case - must show
+	// up on the next render, since instructions() asks the function afresh.
+	skills = append(skills, Skill{Name: "exploit", Description: "prove it", Path: "/skills/exploit/SKILL.md"})
+
+	if !strings.Contains(engine.instructions(), "<name>exploit</name>") {
+		t.Error("a skill added after construction must appear on the next render")
+	}
+}
+
+func TestInstructionsOmitsSkillsBlockWhenNil(t *testing.T) {
+	engine, err := New(Options{Client: stub(t, []string{stop()}), Instructions: "plain"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if strings.Contains(engine.instructions(), "<available_skills>") {
+		t.Error("no skills block should render when Skills is nil")
 	}
 }
 
