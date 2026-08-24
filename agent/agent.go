@@ -162,6 +162,86 @@ type Recorder interface {
 	RecordReset() error
 }
 
+// SummaryRecorder is a Recorder that keeps only the run's final Summary, so a
+// caller can print an end-of-run digest from it once the run returns. Every
+// other method is a no-op. Compose it alongside the real recorders - the run's
+// totals reach the recorder as a Summary, and the viewer's returned Outcome
+// does not carry them, so this is how a caller learns what the run spent.
+type SummaryRecorder struct {
+	// Summary is the last Summary the run reported, nil until it ends.
+	Summary *Summary
+}
+
+func (r *SummaryRecorder) RecordMessage(Message) error                     { return nil }
+func (r *SummaryRecorder) RecordEvent(_, _, _ string, _ int) error         { return nil }
+func (r *SummaryRecorder) RecordFailure(*Failure) error                    { return nil }
+func (r *SummaryRecorder) RecordReset() error                              { return nil }
+
+func (r *SummaryRecorder) RecordResult(summary Summary) error {
+	captured := summary
+	r.Summary = &captured
+
+	return nil
+}
+
+// MultiRecorder fans every recording call to each recorder in turn, skipping
+// nils and ignoring their errors - recording is best-effort, and one sink
+// failing must not silence another. It is how a run drives several recorders
+// (a session log and a summary capture, say) from the engine's single Recorder.
+func MultiRecorder(recorders ...Recorder) Recorder {
+	kept := make([]Recorder, 0, len(recorders))
+
+	for _, r := range recorders {
+		if r != nil {
+			kept = append(kept, r)
+		}
+	}
+
+	return multiRecorder(kept)
+}
+
+type multiRecorder []Recorder
+
+func (m multiRecorder) RecordMessage(msg Message) error {
+	for _, r := range m {
+		_ = r.RecordMessage(msg)
+	}
+
+	return nil
+}
+
+func (m multiRecorder) RecordEvent(kind, tool, text string, iteration int) error {
+	for _, r := range m {
+		_ = r.RecordEvent(kind, tool, text, iteration)
+	}
+
+	return nil
+}
+
+func (m multiRecorder) RecordResult(summary Summary) error {
+	for _, r := range m {
+		_ = r.RecordResult(summary)
+	}
+
+	return nil
+}
+
+func (m multiRecorder) RecordFailure(f *Failure) error {
+	for _, r := range m {
+		_ = r.RecordFailure(f)
+	}
+
+	return nil
+}
+
+func (m multiRecorder) RecordReset() error {
+	for _, r := range m {
+		_ = r.RecordReset()
+	}
+
+	return nil
+}
+
 // Summary is how a run ended and what it spent.
 type Summary struct {
 	// Reason is why the run stopped - the same value AgentExitEvent carries.
@@ -185,6 +265,12 @@ type Summary struct {
 
 	Iterations int
 	Calls      int
+
+	// InputTokens and OutputTokens are the provider-reported prompt and
+	// completion totals across the whole run - the billed usage, so a digest can
+	// report real cost rather than an estimate.
+	InputTokens  int
+	OutputTokens int
 
 	// Continuations is how many recovery attempts the run spent in total, not
 	// how many it had left: the bound is on consecutive attempts, which zeroes
@@ -297,8 +383,18 @@ type ExecuteWithToolsOptions struct {
 	Tools Tools
 
 	// Skills are described in the system prompt so the model knows they exist
-	// and where to read their instructions.
-	Skills []SkillDefinition
+	// and where to read their instructions. A function rather than a slice so
+	// the set can change while a run is live: the prompt is re-rendered every
+	// iteration from whatever the function returns. Use StaticSkills for a
+	// fixed set, or (*SkillLoader).Skills for one that follows directories on
+	// disk. Nil means no skills.
+	//
+	// The `skill` tool that serves embedded skills is built from the set as it
+	// stands when the run starts - an embedded skill is compiled into the
+	// binary, so the embedded subset cannot grow mid-run anyway. Skills that
+	// appear later are directory skills, read with the `read` tool, which
+	// needs no registration.
+	Skills func() []SkillDefinition
 
 	// Recorder, when set, is handed every message and event as the run goes.
 	//
@@ -432,12 +528,17 @@ func ExecuteWithTools(
 
 		log := &conversationLog{recorder: recorder, recorded: seed}
 
+		skills := options.Skills
+		if skills == nil {
+			skills = func() []SkillDefinition { return nil }
+		}
+
 		engine, err := loop.New(loop.Options{
 			Client:              client.inner,
 			Instructions:        options.Instructions,
 			Messages:            toLoopMessages(options),
-			Tools:               toLoopTools(withSkillTool(options.Tools, options.Skills)),
-			Skills:              toLoopSkills(options.Skills),
+			Tools:               toLoopTools(options.Tools),
+			Skills:              func() []loop.Skill { return toLoopSkills(skills()) },
 			MaxIterations:       options.MaxIterations,
 			MaxCalls:            options.MaxCalls,
 			MaxContinuations:    options.MaxContinuations,
@@ -515,6 +616,8 @@ func ExecuteWithTools(
 				Code:          exitCode(result.Reason),
 				Iterations:    result.Budget.Iterations,
 				Calls:         result.Budget.Calls,
+				InputTokens:   result.Budget.InputTokens,
+				OutputTokens:  result.Budget.OutputTokens,
 				Continuations: result.Budget.Recoveries,
 				Cycles:        result.Budget.Cycles,
 				Settles:       result.Budget.Settles,
@@ -731,6 +834,12 @@ func toLoopTools(tools Tools) map[string]loop.ToolDefinition {
 	return converted
 }
 
+// StaticSkills adapts a fixed skill set to the dynamic Skills option, for a
+// caller whose set genuinely cannot change - or one that does not care to.
+func StaticSkills(skills []SkillDefinition) func() []SkillDefinition {
+	return func() []SkillDefinition { return skills }
+}
+
 func toLoopSkills(skills []SkillDefinition) []loop.Skill {
 	converted := make([]loop.Skill, 0, len(skills))
 
@@ -744,32 +853,4 @@ func toLoopSkills(skills []SkillDefinition) []loop.Skill {
 	}
 
 	return converted
-}
-
-// withSkillTool adds the `skill` tool when any skill is embedded.
-//
-// Registered automatically rather than left to the caller: an embedded skill is
-// unreachable without it, and a caller who merely passed Skills would have no
-// reason to know that.
-func withSkillTool(tools Tools, skills []SkillDefinition) Tools {
-	result := &SkillsResult{Skills: skills}
-
-	definition := result.Tool()
-
-	if definition == nil {
-		return tools
-	}
-
-	combined := make(Tools, len(tools)+1)
-
-	for name, tool := range tools {
-		combined[name] = tool
-	}
-
-	// a caller's own `skill` tool wins - overriding a built-in must stay possible
-	if _, taken := combined["skill"]; !taken {
-		combined["skill"] = *definition
-	}
-
-	return combined
 }

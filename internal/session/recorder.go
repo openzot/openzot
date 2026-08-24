@@ -134,6 +134,8 @@ func (r *Recorder) RecordResult(summary agent.Summary) error {
 		Continuations: summary.Continuations,
 		Cycles:        summary.Cycles,
 		Settles:       summary.Settles,
+		InputTokens:   summary.InputTokens,
+		OutputTokens:  summary.OutputTokens,
 	})
 }
 

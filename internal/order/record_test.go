@@ -309,19 +309,23 @@ func TestAReceiptWithNoProofSaysSo(t *testing.T) {
 func TestEvidenceIsCopiedFromTheSessionResult(t *testing.T) {
 	proof := EvidenceFrom("20260822-121212", &session.Session{
 		Result: &session.Result{
-			Reason:     "settled",
-			Message:    "  did the thing  ",
-			Iterations: 7,
-			Calls:      19,
+			Reason:       "settled",
+			Message:      "  did the thing  ",
+			Iterations:   7,
+			Calls:        19,
+			InputTokens:  88000,
+			OutputTokens: 5400,
 		},
 	}, nil)
 
 	want := Evidence{
-		Session:    "20260822-121212",
-		Reason:     "settled",
-		Summary:    "did the thing",
-		Iterations: 7,
-		Calls:      19,
+		Session:      "20260822-121212",
+		Reason:       "settled",
+		Summary:      "did the thing",
+		Iterations:   7,
+		Calls:        19,
+		InputTokens:  88000,
+		OutputTokens: 5400,
 	}
 
 	if proof != want {
@@ -369,4 +373,31 @@ func TestEvidenceDoesNotMakeAnUnsettledRunCount(t *testing.T) {
 	if !strings.Contains(string(data), "ran out of rounds") {
 		t.Errorf("an unsettled run's receipt lost its evidence:\n%s", data)
 	}
+}
+
+// SortRecords orders newest-first, for listing. The ledger on disk is
+// append-only and unordered; listing the receipts for an order needs them in
+// the order the runs concluded, not the order the filesystem returns them.
+func TestSortRecordsNewestFirst(t *testing.T) {
+	now := time.Now()
+
+	records := []Record{
+		{Run: "old", At: now.Add(-2 * time.Hour)},
+		{Run: "new", At: now},
+		{Run: "mid", At: now.Add(-1 * time.Hour)},
+	}
+
+	sorted := SortRecords(records)
+
+	if sorted[0].Run != "new" || sorted[1].Run != "mid" || sorted[2].Run != "old" {
+		t.Errorf("SortRecords = %v, want new, mid, old", recordsOf(sorted))
+	}
+}
+
+func recordsOf(records []Record) []string {
+	names := make([]string, len(records))
+	for i, r := range records {
+		names[i] = r.Run
+	}
+	return names
 }

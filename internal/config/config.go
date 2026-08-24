@@ -21,10 +21,16 @@ import (
 type Config struct {
 	Agent Agent `yaml:"agent"`
 	UI    UI    `yaml:"ui"`
-	// Skills discovered from the context directories. Not configured directly:
-	// LoadProjectContext fills this from the SKILL.md files it finds, and the
-	// engine describes them in the system prompt.
+	// Skills supplied programmatically, on top of whatever SkillDirectories
+	// yields. The engine describes them in the system prompt; a directory
+	// skill with the same name wins.
 	Skills []agent.SkillDefinition `yaml:"-"`
+	// SkillDirectories are the context folders scanned for SKILL.md entries.
+	// Not configured directly: LoadProjectContext records them, and the run
+	// rescans them at every iteration - which is what lets a skill added
+	// mid-run, by the operator or by the agent itself, surface on the model's
+	// next turn.
+	SkillDirectories []string `yaml:"-"`
 	// DefaultProvider is the provider used when --provider is not given.
 	DefaultProvider string `yaml:"default_provider"`
 	// Providers are the named model-provider connections a run can target. zot

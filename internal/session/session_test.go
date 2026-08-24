@@ -38,7 +38,7 @@ func TestWriteThenReadBack(t *testing.T) {
 		t.Fatalf("Message: %v", err)
 	}
 
-	if err := writer.Result(Result{Reason: "stop", Iterations: 2, Calls: 1}); err != nil {
+	if err := writer.Result(Result{Reason: "stop", Iterations: 2, Calls: 1, InputTokens: 4200, OutputTokens: 310}); err != nil {
 		t.Fatalf("Result: %v", err)
 	}
 
@@ -73,6 +73,10 @@ func TestWriteThenReadBack(t *testing.T) {
 
 	if session.Result.Iterations != 2 || session.Result.Calls != 1 {
 		t.Errorf("result = %+v", session.Result)
+	}
+
+	if session.Result.InputTokens != 4200 || session.Result.OutputTokens != 310 {
+		t.Errorf("result lost the token totals: %+v", session.Result)
 	}
 
 	if session.Truncated {
