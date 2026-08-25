@@ -67,7 +67,7 @@ sandbox. Point it at a disposable checkout, or run the
 
 ## Documentation
 
-- [docs/orders.md](docs/orders.md) - work orders, `zot new`, the book, watch mode
+- [docs/orders.md](docs/orders.md) - work orders, `zot new`, the book, standing orders, watch mode
 - [docs/providers.md](docs/providers.md) - providers, credentials, gateways, custom endpoints
 - [docs/configuration.md](docs/configuration.md) - config file, flags, controls, sessions, `AGENTS.md` & skills
 - [docs/how-it-works.md](docs/how-it-works.md) - the harness, what sits under it, sub-agents
@@ -88,6 +88,7 @@ session ships to a public dataset.
 | --- | --- | --- | --- |
 | [Arcade](https://openzot.github.io/arcade/) | One brand-new browser game per shift, playtested and published | [openzot/arcade](https://github.com/openzot/arcade) | [openzot/arcade](https://huggingface.co/datasets/openzot/arcade) |
 | [Machinery](https://openzot.github.io/machinery/) | One working control panel per shift - a live simulation, faults, and its operating manual | [openzot/machinery](https://github.com/openzot/machinery) | [openzot/machinery](https://huggingface.co/datasets/openzot/machinery) |
+| [Whetstone](https://openzot.github.io/whetstone/) | One game honed toward perfection - each shift improves one facet and ships the next playable version | [openzot/whetstone](https://github.com/openzot/whetstone) | [openzot/whetstone](https://huggingface.co/datasets/openzot/whetstone) |
 
 ## Ecosystem
 
