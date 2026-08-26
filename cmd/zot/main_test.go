@@ -650,6 +650,7 @@ func TestListSessionsHelpAndErrorsGoToDifferentStreams(t *testing.T) {
 // and what it billed - and say nothing (a dash) where the log records nothing,
 // so "what did last night cost?" never needs raw jq again.
 func TestListSessionsShowsHowLongAndWhatItCost(t *testing.T) {
+
 	dir := t.TempDir()
 
 	writeSessionLog(t, dir, "20260805-090000",
@@ -676,6 +677,45 @@ func TestListSessionsShowsHowLongAndWhatItCost(t *testing.T) {
 	// an unfinished run has no length or cost to state: dashes, not zeros
 	if !strings.Contains(output, "running/interrupted") || strings.Count(output, "-") < 2 {
 		t.Errorf("unfinished run must show dashes for length and cost:\n%s", output)
+	}
+}
+
+// `zot sessions` is where a night of unattended runs is read first, so a row
+// that says only "error" sends the operator into every log with jq. The
+// ending's own words travel with the row - but a settled run's summary already
+// reached the digest and the receipt, so its row stays just the brief, and a
+// run that never concluded still shows dashes rather than inventing an ending.
+func TestListSessionsSaysWhyARunEnded(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSessionLog(t, dir, "20260805-090000",
+		`{"kind":"meta","at":"2026-08-05T09:00:00Z","meta":{"id":"20260805-090000","task":"the overnight run"}}
+		 {"kind":"result","at":"2026-08-05T09:04:40Z","result":{"reason":"settled","message":"did the thing","code":0,"inputTokens":12345,"outputTokens":678}}`)
+
+	writeSessionLog(t, dir, "20260805-100000",
+		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"the second task"}}
+		 {"kind":"result","at":"2026-08-05T10:00:03Z","result":{"reason":"error","message":"the provider failed","error":"provider: upstream exploded (500)","code":1}}`)
+
+	writeSessionLog(t, dir, "20260805-110000",
+		`{"kind":"meta","at":"2026-08-05T11:00:00Z","meta":{"id":"20260805-110000","task":"killed mid-flight"}}`)
+
+	output, err := captureStdout(t, func() error { return listSessions([]string{"--session-dir", dir}) })
+	if err != nil {
+		t.Fatalf("listSessions: %v", err)
+	}
+
+	if !strings.Contains(output, "— provider: upstream exploded (500)") {
+		t.Errorf("the failed run's row must quote the cause it recorded:\n%s", output)
+	}
+
+	if strings.Contains(output, "did the thing") {
+		t.Errorf("a settled row must stay the brief alone - its summary is the digest's and the receipt's to carry:\n%s", output)
+	}
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "killed mid-flight") && strings.Contains(line, "—") {
+			t.Errorf("an unfinished run has no ending to quote:\n%s", line)
+		}
 	}
 }
 
@@ -787,8 +827,8 @@ func TestUsageDescribesTheRealCommands(t *testing.T) {
 // folding --plain into the positionals - this locks the behaviour that
 // motivated the switch.
 func TestFlagsAfterThePositionalOrdersAreParsed(t *testing.T) {
-
 	set := pflag.NewFlagSet("zot", pflag.ContinueOnError)
+
 	plain := set.Bool("plain", false, "")
 
 	if err := set.Parse([]string{"do", "the", "thing", "--plain"}); err != nil {

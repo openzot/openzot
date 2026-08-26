@@ -590,6 +590,14 @@ type Entry struct {
 	// fields existed reads back unrecorded, not zero.
 	InputTokens  int
 	OutputTokens int
+
+	// Outcome is how the run itself explained its ending, in its own words: the
+	// underlying failure when it recorded one - "provider: upstream exploded
+	// (500)" - otherwise its closing message. Empty unless the log carries a
+	// result that says something, so an unfinished run has nothing to quote.
+	// This is what lets a listing answer why a night went wrong without every
+	// log being opened by hand.
+	Outcome string
 }
 
 // List enumerates the sessions in dir, newest first.
@@ -721,6 +729,7 @@ func scanEntry(path string) (Entry, bool) {
 					entry.Reason = record.Result.Reason
 					entry.InputTokens = record.Result.InputTokens
 					entry.OutputTokens = record.Result.OutputTokens
+					entry.Outcome = endingWords(record.Result)
 				}
 			}
 		}
@@ -767,6 +776,18 @@ func kindOf(line []byte) Kind {
 	default:
 		return ""
 	}
+}
+
+// endingWords is how a run's own result explains its ending: the underlying
+// failure when it recorded one - "the provider failed" names nothing, the
+// provider's own words name the cause - otherwise its closing message. A
+// result that says neither has nothing to quote.
+func endingWords(result *Result) string {
+	if text := strings.TrimSpace(result.Error); text != "" {
+		return text
+	}
+
+	return strings.TrimSpace(result.Message)
 }
 
 // Resolve turns a session reference into a path.

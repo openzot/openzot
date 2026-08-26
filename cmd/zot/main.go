@@ -1023,13 +1023,33 @@ func listSessions(args []string) error {
 		}
 
 		fmt.Printf("%-17s  %-19s  %8s  %13s  %s\n",
-			entry.ID, status, ranFor(entry.Duration), spentFor(entry.InputTokens, entry.OutputTokens), oneLine(entry.Task, 60))
+			entry.ID, status, ranFor(entry.Duration), spentFor(entry.InputTokens, entry.OutputTokens), taskColumn(entry))
 	}
 
 	return nil
 }
 
+// taskColumn renders what the run was about - plus, for any ending that needs
+// explaining, how the run itself explained it. A settled row stays just the
+// brief: success needs no commentary, and its summary already reached the
+// operator in the end-of-run digest and the ledger receipt. Everything else -
+// a provider error, a guard stop, the model declaring failure - quotes its own
+// closing words at the end of the row, because a night of unattended runs is
+// read here first and "error" alone sends the operator into every log by hand.
+func taskColumn(entry session.Entry) string {
+	task := oneLine(entry.Task, 60)
+
+	// success speaks for itself; everything else quotes its own ending
+	if !entry.Complete || entry.Outcome == "" ||
+		entry.Reason == "settled" || entry.Reason == "stop" {
+		return task
+	}
+
+	return task + " — " + oneLine(entry.Outcome, 100)
+}
+
 // ranFor renders how long a run went on as a compact human duration: 38s,
+
 // 4m12s, 1h03m. Zero means the log says nothing about it - no outcome was
 // recorded - and reads as a dash rather than an instant; a fraction of a
 // second is stated as under a second rather than rounded to a lie.

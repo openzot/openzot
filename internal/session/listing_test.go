@@ -38,6 +38,7 @@ func entryFromLoad(path string) Entry {
 		entry.Reason = loaded.Result.Reason
 		entry.InputTokens = loaded.Result.InputTokens
 		entry.OutputTokens = loaded.Result.OutputTokens
+		entry.Outcome = endingWords(loaded.Result)
 
 		// the outcome's own timestamp is the ending; the length is measured
 		// from the log's opening record, which is where every run begins
@@ -76,7 +77,7 @@ func TestListMatchesAFullRead(t *testing.T) {
 	writeLog(t, dir, "20260805-100000",
 		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"failed run","resumedFrom":"20260805-090000"}}
 		 {"kind":"message","at":"2026-08-05T10:00:01Z","message":{"type":"user","text":"go"}}
-		 {"kind":"result","at":"2026-08-05T10:30:00Z","result":{"reason":"failed","message":"gave up","code":1,"inputTokens":12345,"outputTokens":678}}`)
+		 {"kind":"result","at":"2026-08-05T10:30:00Z","result":{"reason":"error","message":"the provider failed","error":"provider: upstream exploded (500)","code":1,"inputTokens":12345,"outputTokens":678}}`)
 
 	// no result at all: the run never concluded
 	writeLog(t, dir, "20260805-110000",
@@ -127,6 +128,10 @@ func TestListMatchesAFullRead(t *testing.T) {
 		if got.InputTokens != want.InputTokens || got.OutputTokens != want.OutputTokens {
 			t.Errorf("%s: tokens = (%d, %d), want (%d, %d)",
 				got.ID, got.InputTokens, got.OutputTokens, want.InputTokens, want.OutputTokens)
+		}
+
+		if got.Outcome != want.Outcome {
+			t.Errorf("%s: outcome words = %q, want %q", got.ID, got.Outcome, want.Outcome)
 		}
 	}
 }
@@ -307,5 +312,56 @@ func TestListLiftsWhatTheResultRecords(t *testing.T) {
 		killed.InputTokens != 0 || killed.OutputTokens != 0 {
 		t.Errorf("unfinished run listed as (%v, %v, %v, %d, %d), want all zero/false",
 			killed.Complete, killed.Ended, killed.Duration, killed.InputTokens, killed.OutputTokens)
+	}
+}
+
+// A listing must carry how each concluded run explained its own ending - the
+// provider's words behind an error, the model's verdict on a declared failure,
+// a guard's reason for cutting a run short - because "error" alone sends the
+// operator into every log with jq. The underlying error outranks the loop's
+// summary of it: "the provider failed" names nothing; "upstream exploded (500)"
+// names the cause. A run that recorded no outcome has nothing to quote.
+func TestListLiftsHowTheRunExplainedItsEnding(t *testing.T) {
+	dir := t.TempDir()
+
+	writeLog(t, dir, "20260805-090000",
+		`{"kind":"meta","at":"2026-08-05T09:00:00Z","meta":{"id":"20260805-090000","task":"provider died"}}
+		 {"kind":"result","at":"2026-08-05T09:00:03Z","result":{"reason":"error","message":"the provider failed","error":"provider: upstream exploded (500)","code":1}}`)
+
+	writeLog(t, dir, "20260805-100000",
+		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"model declared failure"}}
+		 {"kind":"result","at":"2026-08-05T10:30:00Z","result":{"reason":"failed","message":"the signup handler rejects every valid email","code":1}}`)
+
+	writeLog(t, dir, "20260805-110000",
+		`{"kind":"meta","at":"2026-08-05T11:00:00Z","meta":{"id":"20260805-110000","task":"guard stop"}}
+		 {"kind":"result","at":"2026-08-05T11:10:00Z","result":{"reason":"iterations","message":"stopped after 1000 iterations"}}`)
+
+	writeLog(t, dir, "20260805-120000",
+		`{"kind":"meta","at":"2026-08-05T12:00:00Z","meta":{"id":"20260805-120000","task":"killed run"}}`)
+
+	writeLog(t, dir, "20260805-130000",
+		`{"kind":"meta","at":"2026-08-05T13:00:00Z","meta":{"id":"20260805-130000","task":"wordless ending"}}
+		 {"kind":"result","at":"2026-08-05T13:01:00Z","result":{"reason":"aborted","code":1}}`)
+
+	entries, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	byID := map[string]Entry{}
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+
+	for id, want := range map[string]string{
+		"20260805-090000": "provider: upstream exploded (500)",
+		"20260805-100000": "the signup handler rejects every valid email",
+		"20260805-110000": "stopped after 1000 iterations",
+		"20260805-120000": "",
+		"20260805-130000": "",
+	} {
+		if got := byID[id].Outcome; got != want {
+			t.Errorf("%s: outcome = %q, want %q", id, got, want)
+		}
 	}
 }
