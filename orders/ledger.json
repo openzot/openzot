@@ -132,5 +132,21 @@
       "cmd/zot/main_test.go",
       "CHANGELOG.md"
     ]
+  },
+  {
+    "shift": 10,
+    "date": "2026-08-26",
+    "facet": "correctness",
+
+    "grievance": "The ledger hashed the order file when the run ENDED, not when it was dispatched - so any change made to the file while the run was going was recorded as the content that executed. The agent has shell and write access to exactly the tree its order sits in, so this is not hypothetical: an order that tells the agent to keep its own notes current gets edited by the model mid-run, an operator's tweak can land while a long run is in flight, and a watch sweep can replace content between dispatch and receipt. In every case the receipt's order_sha256 named the post-edit document - a contract no turn ever ran under - and `Ledger.Satisfied` matched it: the next bare zot announced 'already satisfied by run <id>' and retired the edited work forever. The book's two central promises ('a record only counts toward the order content it actually ran' and 'editing the order re-queues it') silently inverted for precisely the edits nobody types. Reproduced live before the fix: a stub-driven run of .zot/orders/self-edit.yaml whose first turn appends a constraint to its own file settled with receipt order_sha256 4e206592... (the post-edit hash) while the dispatched content was bb39e807..., and the following invocation skipped the order as satisfied.",
+    "change": "The content hash is now captured once, at parse time: order.Order carries Hash (yaml:\"-\", like Path), set by Parse - which Load and watch-mode sweeps both go through - to the SHA-256 of the exact bytes the order was read from. Ledger.Record writes o.Hash into the receipt and refuses an order with none (loudly, like the missing-path case), and Ledger.Satisfied matches records against o.Hash instead of re-hashing the file on every check - which also removes a hidden read and a TOCTOU from the doneness path. The net behaviour: what a receipt vouches for is fixed when the order enters the system; a mid-run edit cannot ratify itself, content that did run stays satisfied however the file changes afterwards, and the edited contract re-queues on the next invocation's fresh load. The now-dead hashFile helper is deleted; executeAt, watch dispatch and every other caller are unchanged because they already pass loaded orders.",
+    "proof": "Live, release binary rebuilt, same scenario as the pre-fix reproduction: the self-editing order ran against the stub provider, the agent's shell call appended 'constraints: - edited by the agent mid-run' to its own order file mid-run (file hash after: 4e206592...), and the receipt recorded order_sha256 bb39e807... - the content actually dispatched; the second invocation then RAN THE ORDER AGAIN (new session 20260826-133602) instead of saying 'already satisfied', working under the edited contract. Untouched orders are unaffected: write-a-hello-function-and-a-test.yaml settles with receipt hash 0757262248... and the immediate re-invocation still reports 'already satisfied by run 20260826-133613'; ./zot --help exits 0 with zero bytes on stderr and `zot sessions` keeps the shift-3/5 columns. Tests, both bite-checked by temporarily reverting Record/Satisfied to hash-the-file-now while keeping the tests (both fail on exactly the new assertions - the cmd test printed 'receipt must record the content that ran f6f325a8..., not ...3cce9efa...'): TestAReceiptVouchesForTheContentThatRan (internal/order/record_test.go) pins receipt==dispatched-hash, satisfaction-of-what-ran despite the later edit, and requeue of the freshly-loaded edited content; TestAnOrderEditedMidRunIsNotRetiredByItsOwnEdit (cmd/zot/main_test.go) drives run() end to end through a stub whose first turn edits the order via the real shell tool and asserts both the receipt hash and that the second invocation runs rather than skips. TestALedgerRecordSatisfiesTheExactOrderContent updated to state its intent against a reload (satisfaction follows content identity, not live file state). Full suite green; gate afterwards: make vet over release and dev builds, make test, make race clean, make cover-check at 91.8% (threshold 90%).",
+    "files": [
+      "internal/order/order.go",
+      "internal/order/record.go",
+      "internal/order/record_test.go",
+      "cmd/zot/main_test.go",
+      "CHANGELOG.md"
+    ]
   }
 ]

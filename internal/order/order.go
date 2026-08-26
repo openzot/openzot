@@ -14,6 +14,8 @@
 package order
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,12 +69,22 @@ type Order struct {
 	Acceptance []string `yaml:"acceptance,omitempty"`
 
 	// Constraints are rules the work must hold to throughout - boundaries, not
+	// Constraints are rules the work must hold to throughout - boundaries, not
 	// goals.
 	Constraints []string `yaml:"constraints,omitempty"`
 
 	// Path is where the order was loaded from, for reporting. Empty for an
 	// order that never was a file (a synthesized one).
 	Path string `yaml:"-"`
+
+	// Hash is the SHA-256 of the document this order was parsed from - the
+	// content it was dispatched as. It is what a receipt records and what
+	// doneness is judged against, and it is taken here rather than after the
+	// run on purpose: an agent that edits its own order file mid-run (it has
+	// write access to exactly that tree) must not have its edit recorded as
+	// the content that ran, retiring work the edited contract never did.
+	// Empty for an order that never was a document (one synthesized in memory).
+	Hash string `yaml:"-"`
 }
 
 // List returns the order files directly inside dir, in filename order - the
@@ -143,6 +155,9 @@ func Parse(data []byte) (Order, error) {
 	if order.Objective == "" {
 		return Order{}, fmt.Errorf("no objective")
 	}
+
+	sum := sha256.Sum256(data)
+	order.Hash = hex.EncodeToString(sum[:])
 
 	return order, nil
 }

@@ -1,8 +1,6 @@
 package order
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -143,21 +141,14 @@ func (l Ledger) dir(orderPath string) string {
 	return filepath.Join(l.Root, slug)
 }
 
-// hashFile hashes the order's current content.
-func hashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-
-	sum := sha256.Sum256(data)
-
-	return hex.EncodeToString(sum[:]), nil
-}
-
 // Record appends a run's outcome, and the evidence for it, to the ledger. One
 // append-only file per run, so concurrent runs cannot conflict and history
 // accumulates.
+//
+// The receipt records o.Hash - the content the order was dispatched as - so it
+// vouches for what actually ran. Reading the file here instead would let any
+// change made while the run was going (the agent editing its own order, say)
+// pass the edit off as work that was done.
 func (l Ledger) Record(o Order, runID, reason string, at time.Time, proof Evidence) error {
 	if l.Root == "" {
 		return fmt.Errorf("record: no records directory configured")
@@ -167,9 +158,8 @@ func (l Ledger) Record(o Order, runID, reason string, at time.Time, proof Eviden
 		return fmt.Errorf("record: the order has no path")
 	}
 
-	hash, err := hashFile(o.Path)
-	if err != nil {
-		return fmt.Errorf("record: %w", err)
+	if o.Hash == "" {
+		return fmt.Errorf("record: %s has no content hash - load it with Load or Parse", o.Path)
 	}
 
 	dir := l.dir(o.Path)
@@ -182,7 +172,7 @@ func (l Ledger) Record(o Order, runID, reason string, at time.Time, proof Eviden
 		Run:         runID,
 		Reason:      reason,
 		At:          at.UTC(),
-		OrderSHA256: hash,
+		OrderSHA256: o.Hash,
 		Evidence:    proof,
 	})
 	if err != nil {
@@ -194,13 +184,13 @@ func (l Ledger) Record(o Order, runID, reason string, at time.Time, proof Eviden
 
 // Satisfied reports whether the ledger holds a successful run of this exact
 // order content, returning the newest such record.
+//
+// The order's own hash - fixed when it was parsed - is what the records are
+// matched against, so a file that changed after its order was read neither
+// satisfies nor unsatisfies anything: re-queueing happens when the next
+// invocation loads the edited content and finds no record of it.
 func (l Ledger) Satisfied(o Order) (Record, bool) {
-	if l.Root == "" || o.Path == "" {
-		return Record{}, false
-	}
-
-	hash, err := hashFile(o.Path)
-	if err != nil {
+	if l.Root == "" || o.Path == "" || o.Hash == "" {
 		return Record{}, false
 	}
 
@@ -231,7 +221,7 @@ func (l Ledger) Satisfied(o Order) (Record, bool) {
 			continue
 		}
 
-		if record.Reason != "settled" || record.OrderSHA256 != hash {
+		if record.Reason != "settled" || record.OrderSHA256 != o.Hash {
 			continue
 		}
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/openzot/openzot"
@@ -2888,7 +2890,156 @@ providers:
 	}
 }
 
+// The agent has write access to the tree its order sits in, so it can edit its
+// own order while the run is going. The receipt must still vouch for the
+// content that was dispatched - and the edited contract, which no turn has run
+// under, must re-queue on the next invocation instead of being retired as
+// satisfied by a hash taken after the edit.
+func TestAnOrderEditedMidRunIsNotRetiredByItsOwnEdit(t *testing.T) {
+	sessions := t.TempDir()
+
+	t.Setenv("ZOT_SESSION_DIR", sessions)
+
+	book := t.TempDir()
+
+	if err := os.MkdirAll(order.OrdersDir(book), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orderPath := filepath.Join(order.OrdersDir(book), "living-order.yaml")
+
+	original := "objective: keep the notes current\n"
+
+	if err := os.WriteFile(orderPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	turn := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		turn++
+
+		if turn == 1 {
+			// first turn: edit the order file this run was dispatched from,
+			// exactly what an agent told to keep its own notes current would do
+			args, _ := json.Marshal(map[string]string{
+				"command": "printf 'constraints:\\n  - added by the agent mid-run\\n' >> " + orderPath,
+			})
+			payload, _ := json.Marshal(map[string]any{
+				"choices": []any{map[string]any{
+					"delta": map[string]any{
+						"tool_calls": []any{map[string]any{
+							"index": 0, "id": "s1", "type": "function",
+							"function": map[string]any{"name": "shell", "arguments": string(args)},
+						}},
+					},
+					"finish_reason": "tool_calls",
+				}},
+			})
+
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			fmt.Fprint(w, "data: [DONE]\n\n")
+
+			return
+		}
+
+		fmt.Fprintf(w, "data: %s\n\n",
+			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"complete\"}"}}]},"finish_reason":"tool_calls"}]}`)
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(configPath, []byte(fmt.Sprintf(`
+agent:
+  model: test-model
+ui:
+  plain: true
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, server.URL)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+
+	withArgs(t, "--config", configPath, "--dir", project, orderPath)
+
+	if _, err := captureStdout(t, run); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	if _, err := os.Stat(orderPath); err != nil || original == readMust(t, orderPath) {
+		t.Fatalf("the stub's edit did not land; the scenario is not being exercised")
+	}
+
+	sum := sha256.Sum256([]byte(original))
+	wantHash := hex.EncodeToString(sum[:])
+
+	receipts, err := filepath.Glob(filepath.Join(order.RecordsDir(project), "living-order", "*.yaml"))
+	if err != nil || len(receipts) != 1 {
+		t.Fatalf("expected one receipt, got %v (%v)", receipts, err)
+	}
+
+	data, err := os.ReadFile(receipts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(data), "order_sha256: "+wantHash) {
+		t.Errorf("the receipt must record the content that ran (%s), not whatever the file holds after the edit:\n%s", wantHash, data)
+	}
+
+	// second invocation: the file now carries an edit that has never run under,
+	// so the order must go again rather than read as satisfied
+	withArgs(t, "--config", configPath, "--dir", project, orderPath)
+
+	diagnostics, err := captureStderr(t, func() error {
+		_, runErr := captureStdout(t, run)
+
+		return runErr
+	})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+
+	if strings.Contains(diagnostics, "already satisfied") {
+		t.Errorf("an edit that never ran must not be retired by the pre-edit receipt:\n%s", diagnostics)
+	}
+
+	second, err := session.List(sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(second) != 2 {
+		t.Fatalf("the edited order should have run again: %d sessions", len(second))
+	}
+}
+
+// readMust reads a small file for a test assertion.
+func readMust(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(data)
+}
+
 // An order whose last run did not conclude continues automatically - the order
+
 // is the contract, and abandoning half its work because nobody typed --resume
 // wastes everything the earlier run learned. --fresh starts over; a declared
 // failure is a conclusion and never auto-resumes.

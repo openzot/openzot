@@ -64,12 +64,19 @@ func TestALedgerRecordSatisfiesTheExactOrderContent(t *testing.T) {
 		t.Errorf("record file not where the book expects it: %v", err)
 	}
 
-	// editing the order changes its hash: no longer satisfied, runs again
+	// editing the order changes its hash: no longer satisfied, runs again.
+	// The check is against the content as loaded, so the edit shows up on the
+	// next read of the file - which is what a bare `zot` does every time.
 	if err := os.WriteFile(path, []byte("objective: fix the bug properly\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, done := ledger.Satisfied(o); done {
+	edited, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, done := ledger.Satisfied(edited); done {
 		t.Error("an edited order must stop being satisfied - the record is for content that no longer exists")
 	}
 }
@@ -117,7 +124,7 @@ func TestTheLedgerIsWhereTheCallerSaysNotBesideTheOrder(t *testing.T) {
 }
 
 // Two orders of the same name from different trees are different work. They
-// share a slug, so they share a records folder - and the content hash is what
+
 // keeps one from satisfying the other.
 func TestSameNamedOrdersDoNotSatisfyEachOther(t *testing.T) {
 	root := t.TempDir()
@@ -133,6 +140,62 @@ func TestSameNamedOrdersDoNotSatisfyEachOther(t *testing.T) {
 
 	if _, done := ledger.Satisfied(theirs); done {
 		t.Error("a different order's record must not satisfy this one, however it is named")
+	}
+}
+
+// A receipt vouches for the content that ran, not for whatever the order file
+// holds afterwards. The agent has write access to the tree its order sits in,
+// so an edit made while the run is going - by the agent or by anyone else -
+// must not be recorded as the content that was executed: that would retire the
+// edited contract as satisfied without a single turn having run under it.
+func TestAReceiptVouchesForTheContentThatRan(t *testing.T) {
+	book := t.TempDir()
+
+	path := filepath.Join(book, BookDir, ordersName, "living-order.yaml")
+
+	o := writeOrderFile(t, path, "objective: keep the notes current\n")
+
+	ledger := Ledger{Root: RecordsDir(book)}
+
+	if err := ledger.Record(o, "20260822-070707", "settled", time.Now(), Evidence{}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	// mid-run (or any time before the receipt is written), the file changes
+	if err := os.WriteFile(path, []byte("objective: keep the notes current\nconstraints:\n  - edited while the run was going\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// what the receipt says ran is what was dispatched
+	data, err := os.ReadFile(filepath.Join(RecordsDir(book), "living-order", "20260822-070707.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var record Record
+
+	if err := yaml.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+
+	if record.OrderSHA256 != o.Hash {
+		t.Errorf("receipt records %s; the content that ran was %s - an edit made during the run must not be recorded as what ran",
+			record.OrderSHA256, o.Hash)
+	}
+
+	// and the content that ran is still satisfied, however the file now reads
+	if _, done := ledger.Satisfied(o); !done {
+		t.Error("the recorded content must stay satisfied - doneness follows what ran")
+	}
+
+	// while the edited contract re-queues on the next read of the file
+	edited, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, done := ledger.Satisfied(edited); done {
+		t.Error("content that never ran must not be retired by a receipt taken after the edit")
 	}
 }
 
