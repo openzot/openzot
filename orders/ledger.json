@@ -12,5 +12,19 @@
       "cmd/zot/watch_test.go",
       "CHANGELOG.md"
     ]
+  },
+  {
+    "shift": 2,
+    "date": "2026-08-26",
+    "facet": "performance",
+    "grievance": "Listing a session history read every log back whole. session.List - behind `zot sessions`, behind --resume last, and behind the automatic continuation check that every single order dispatch performs - loaded each .jsonl in full, decoding every message text and every captured tool output into memory only to discard all of it but the task line and the outcome. A project run unattended accumulates one log per run forever, so the cost of starting any order climbed with everything ever run: measured against a directory of 600 logs (~190 MB), each order dispatch paid ~1.2 s before its first provider call (0.18 s -> 1.34-1.69 s), `zot sessions` took 1.24 s, and both scale linearly - months of a standing order turn into minutes paid on every dispatch, and watch mode pays it per picked-up order.",
+    "change": "List now scans instead of loading. A new scanEntry streams each log line by line and reads only what a listing shows: the meta record's task and provenance, whether a result closed the run, and that result's reason. The kind is read off the head of each line without decoding it (kindOf) - this package's writer emits kind first - so message/event/reset lines, where all the bytes live, never reach encoding/json at all; Unmarshal's own skipping still walks every skipped byte, so avoiding the call entirely was worth ~16x on its own. Any line whose kind cannot be read off its head is decoded whole through listingRecord, so a hand-edited or third-party log lists exactly as before, and unreadable files and half-written final lines are skipped precisely as Load's callers did. Load, resume, export and receipts are untouched - they still read conversations in full.",
+    "proof": "Rebuilt and ran the binary against a synthetic factory directory (600 logs, ~190 MB) plus one deliberately reformatted log. Before: `zot sessions` 1.24 s / ~20 MB RSS; an order dispatch through --rerun took 0.18 s with a small session dir and 1.34-1.69 s pointed at the big one. After: `zot sessions` 0.07 s, dispatch 0.18-0.27 s - the history tax is gone - and `--resume last` still runs to settled against the big directory. The new listing's output is identical: the 600 'factory shift' rows diff clean against the pre-change listing, and the reformatted log (keys reordered, spaces after colons, kind not first) lists correctly through the fallback as failed/aborted. In-repo benchmark: BenchmarkListOverHistory 21.6 ms/op vs BenchmarkLoadOverHistory 752 ms/op (~35x). Tests added (internal/session/listing_test.go): TestListMatchesAFullRead pins List against full-read entries across concluded/failed/unfinished/resumed/reset/truncated/reformatted shapes; TestKindOfReadsTheKindOffTheHead covers writer-shaped heads and every unknown-shape fallback; TestListDoesNotDecodePayloadsWhileListing fails if a listing ever goes back to reading logs whole (bite-checked by reverting List to Load-based derivation: 6.3 MB allocated vs the 2.3 MB ceiling); TestListStartedIsTheFileTime pins Started to the mod time. Gate green afterwards: make vet over release and dev builds, make test, make race, make cover-check at 91.9%.",
+    "files": [
+      "internal/session/session.go",
+      "internal/session/listing_test.go",
+      "internal/session/listing_bench_test.go",
+      "CHANGELOG.md"
+    ]
   }
 ]

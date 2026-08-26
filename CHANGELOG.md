@@ -4,7 +4,12 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ## [0.20.1] - unreleased
 
+### Performance
+
+- **Listing a session history no longer reads every conversation back.** `session.List` - which stands behind `zot sessions`, `zot --resume last`, and the automatic continuation of an unfinished run that every dispatch performs - loaded each log in full: every message text, every captured tool output, decoded into memory only to throw all of it away but the task line and the outcome. A project run unattended accumulates one log per run, so the cost of starting any order climbed with everything ever run: measured against a directory of 600 logs (~190 MB), a single-order dispatch paid ~1.2 s before its first provider call (0.18 s with a small history), `zot sessions` took 1.24 s, and both scale linearly into minutes as the months accumulate. The listing now scans each log for just what it shows - the meta record's task and provenance, whether a result closed it, and which result - and never hands a message or event payload to the decoder. The same 600-log directory lists in 0.07 s and dispatch costs no more than it does with an empty history; on a synthetic benchmark the scan is ~35x faster than reading whole (`go test ./internal/session -bench OverHistory`). Nothing else changed: resumes, exports and receipts still read logs whole, and listings are byte-identical for logs of every shape - concluded, resumed, compacted, crashed mid-line, or written by anything other than zot's own encoder.
+
 ### Fixed
+
 
 - **Asking zot for help now succeeds.** `zot --help` (and `zot -h`) went through pflag's built-in handling: the usage block was dumped on stderr, a stray `pflag: help requested` line was printed on stdout, and the exit status was 2 — so `zot --help | less` showed one useless line, the text never reached a pipe or a file where it was pointed, and anything scripting around the command saw it fail. The first command anyone runs was broken. Help is now a real flag on every surface that takes one: `zot --help`/`-h`, `zot new --help`, `zot sessions --help` and `zot sessions export --help` each print their usage to stdout and exit 0, before any validation runs (`zot new --provider x --help` answers with help rather than refusing), and without scaffolding anything. Error paths are unchanged: an unknown flag still explains itself on stderr with a non-zero status, so asking for help and being wrong keep their separate audiences.
 

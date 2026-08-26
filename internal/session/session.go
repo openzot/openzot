@@ -18,6 +18,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -577,10 +578,13 @@ type Entry struct {
 
 // List enumerates the sessions in dir, newest first.
 //
-// Reads each log rather than just stat-ing it, because the useful columns - the
-// task, whether it finished - live inside. Sessions are small and there are not
-// many; a listing that only showed filenames would send the user to `cat`
-// anyway.
+// Each log is read for what a listing shows - the meta record's task and
+// provenance, and whether a result closed it - and nothing more. The message
+// and event payloads that make up the bulk of a log are skipped rather than
+// decoded: a directory holds one log per run, an unattended project accumulates
+// months of them, and this listing is read on every dispatch (an order whose
+// last run did not conclude is continued) as well as by `zot sessions`. A
+// caller that needs the conversation loads the log itself (Load).
 func List(dir string) ([]Entry, error) {
 	files, err := os.ReadDir(dir)
 
@@ -601,25 +605,16 @@ func List(dir string) ([]Entry, error) {
 
 		path := filepath.Join(dir, file.Name())
 
-		session, err := Load(path)
-		if err != nil {
+		entry, ok := scanEntry(path)
+		if !ok {
 			continue
 		}
 
-		entry := Entry{
-			ID:          strings.TrimSuffix(file.Name(), ".jsonl"),
-			Path:        path,
-			Task:        session.Meta.Task,
-			Complete:    session.Complete(),
-			ResumedFrom: session.Meta.ResumedFrom,
-		}
+		entry.ID = strings.TrimSuffix(file.Name(), ".jsonl")
+		entry.Path = path
 
 		if info, err := file.Info(); err == nil {
 			entry.Started = info.ModTime()
-		}
-
-		if session.Result != nil {
-			entry.Reason = session.Result.Reason
 		}
 
 		entries = append(entries, entry)
@@ -630,6 +625,119 @@ func List(dir string) ([]Entry, error) {
 	})
 
 	return entries, nil
+}
+
+// listingRecord is the slice of a log line a listing reads. Everything else in
+// the line - a message's text, an event's captured tool output, megabytes over
+// a whole directory - stays out of the decoder, which is what makes scanning a
+// full history cheap.
+type listingRecord struct {
+	Kind   Kind    `json:"kind"`
+	Meta   *Meta   `json:"meta,omitempty"`
+	Result *Result `json:"result,omitempty"`
+}
+
+// scanEntry reads one log for listing: the meta record's task and provenance,
+// and the run's outcome when it recorded one. A half-written line - the normal
+// shape of a crash - is skipped, exactly as Read skips it; ok is false only
+// when the log cannot be read at all.
+func scanEntry(path string) (Entry, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Entry{}, false
+	}
+
+	defer file.Close()
+
+	var entry Entry
+
+	scanner := bufio.NewScanner(file)
+
+	// a tool result can be large, and it is one line
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+
+		switch kindOf(line) {
+		case KindMessage, KindEvent, KindReset:
+			// nothing a listing shows - and these lines are where the bytes of
+			// a long run live. The kind check is what keeps them from reaching
+			// the decoder: skipping a value inside Unmarshal still reads every
+			// byte of it, and over months of runs that reading is seconds per
+			// dispatch.
+
+		default:
+			// a meta or result record (both tiny), or a line whose kind cannot
+			// be read off its head: decode it whole, so no log this package can
+			// read back is ever mislisted
+			var record listingRecord
+
+			if json.Unmarshal(line, &record) != nil {
+				continue // half-written, as a crash leaves behind
+			}
+
+			switch record.Kind {
+			case KindMeta:
+				if record.Meta != nil {
+					entry.Task = record.Meta.Task
+					entry.ResumedFrom = record.Meta.ResumedFrom
+				}
+
+			case KindResult:
+				entry.Complete = true
+
+				if record.Result != nil {
+					entry.Reason = record.Result.Reason
+				}
+			}
+		}
+	}
+
+	if scanner.Err() != nil {
+		return Entry{}, false
+	}
+
+	return entry, true
+}
+
+// kindOf reads a record's kind off the head of a log line without decoding the
+// line. The writer encodes Kind first, so every line this package writes opens
+// {"kind":"<kind>"...; a line that does not open that way - hand-edited, or
+// written by something else - returns "", telling the caller to decode it.
+func kindOf(line []byte) Kind {
+	const lead = `{"kind":"`
+
+	if !bytes.HasPrefix(line, []byte(lead)) {
+		return ""
+	}
+
+	line = line[len(lead):]
+
+	end := bytes.IndexByte(line, '"')
+	if end < 0 || bytes.ContainsRune(line[:end], '\\') {
+		// an escaped quote inside the kind name is not worth unescaping here;
+		// no kind contains one, so let the caller decode the line whole
+		return ""
+	}
+
+	switch Kind(line[:end]) {
+	case KindMeta:
+		return KindMeta
+	case KindMessage:
+		return KindMessage
+	case KindEvent:
+		return KindEvent
+	case KindResult:
+		return KindResult
+	case KindReset:
+		return KindReset
+	default:
+		return ""
+	}
 }
 
 // Resolve turns a session reference into a path.
