@@ -199,10 +199,24 @@ not forward one to a URL you just typed.
 
 ## The Responses API
 
-On OpenAI, reasoning models use the
+On OpenAI's own endpoint, reasoning models use the
 [Responses API](https://platform.openai.com/docs/api-reference/responses)
 automatically. It carries reasoning state between tool rounds as an opaque item
 the model resumes from; chat-completions has nowhere to put it, so a reasoning
 model driven that way re-derives its thinking on every round.
 
-Only OpenAI implements it today, so everywhere else stays on chat-completions.
+Only OpenAI implements it today, so everywhere else stays on chat-completions -
+any connection with its own `base_url` included. An endpoint that does not
+implement Responses answers such a request with a bare 404 on the run's first
+turn, which is not a failure worth risking by inference: a gateway that does
+implement Responses can be opted in, and one that pretends to can be held to
+chat-completions, with `responses:`:
+
+```yaml
+providers:
+  corporate:
+    driver: openai
+    base_url: https://models.example.com/v1
+    api_key: '$CORPORATE_MODEL_KEY'
+    responses: true   # false forces chat-completions; unset is automatic
+```

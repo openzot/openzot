@@ -242,6 +242,7 @@ func TestAProviderWithoutAProviderIsRejected(t *testing.T) {
 // name passed through untouched.
 func TestResolveBuiltInProviders(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
 	t.Setenv("ZOT_CONFIG", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-anthropic")
@@ -273,6 +274,89 @@ func TestResolveBuiltInProviders(t *testing.T) {
 	}
 }
 
+// providers.<name>.responses has to survive the whole chain - config file,
+// provider connection, resolved client - because a wire format chosen anywhere
+// short of the client is not the wire format the run speaks. A reasoning model
+// on an overridden endpoint is the case that decides it: automatic selection
+// must leave it on chat-completions, and an explicit answer either way must win.
+func TestResolveCarriesTheResponsesChoice(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+
+	path := writeCfg(t, `
+agent:
+  model: glm-5.2
+default_provider: gateway
+providers:
+  gateway:
+    driver: openai
+    base_url: https://models.example.com/v1
+    api_key: sk-gateway
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	client, _, err := resolve(cfg, DefaultInstructions)
+
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	// glm-5.2 reasons, but the endpoint is one the operator named; assuming it
+	// implements Responses is what sent runs to a 404 on their first turn
+	if client.UsesResponses() {
+		t.Error("an overridden endpoint was handed Responses requests automatically")
+	}
+
+	on := true
+
+	gateway := cfg.Providers["gateway"]
+	gateway.Responses = &on
+	cfg.Providers["gateway"] = gateway
+
+	client, _, err = resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve(responses: true): %v", err)
+	}
+
+	// an endpoint that does implement Responses can be opted in
+	if !client.UsesResponses() {
+		t.Error("responses: true did not reach the client")
+	}
+}
+
+// The same knob turned against OpenAI itself forces chat-completions there too -
+// false means false, not "back to whatever you would have done".
+func TestAResponsesOptOutReachesOpenAIIself(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	t.Setenv("OPENAI_API_KEY", "sk-openai")
+
+	path := writeCfg(t, `
+agent:
+  model: glm-5.2
+default_provider: openai
+providers:
+  openai:
+    responses: false
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	client, _, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if client.UsesResponses() {
+		t.Error("responses: false did not reach the client")
+	}
+}
+
 // A custom model entry aliases a real id, caps iterations, and carries its own
 // credential, all of which take priority over the run defaults.
 func TestResolveCustomModelAlias(t *testing.T) {
@@ -280,6 +364,7 @@ func TestResolveCustomModelAlias(t *testing.T) {
 	t.Setenv("ZOT_CONFIG", "")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	path := writeCfg(t, `
+
 agent:
   model: fast
 default_provider: mygateway

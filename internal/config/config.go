@@ -86,6 +86,16 @@ type ProviderConfig struct {
 	// APIKey is the provider credential. Supports "$ENV_VAR" references, so no
 	// secret need be written to disk.
 	APIKey string `yaml:"api_key"`
+	// Responses selects which API this connection speaks when the choice is
+	// zot's to make: true sends Responses-API requests, false forces
+	// chat-completions, and unset leaves the automatic rule - Responses for a
+	// catalogued reasoning model served by OpenAI's own endpoint,
+	// chat-completions for everything else, an overridden base_url included.
+	// An endpoint that does not implement Responses answers such a request
+	// with a bare 404 on the run's first turn, which is why the inference
+	// never sends one to an endpoint somebody typed into the config; an
+	// endpoint that does implement it is what responses: true is for.
+	Responses *bool `yaml:"responses"`
 	// Models is an optional custom model list for this provider. When omitted,
 	// callers can use the built-in catalogue. When present, its keys are the
 	// selectable names and each entry may alias or override that model.
@@ -102,8 +112,10 @@ type ModelConfig struct {
 	// model; leave empty to use the selected name as-is.
 	Model string `yaml:"model"`
 	// MaxIterations overrides the global iteration cap for this model.
+	// MaxIterations overrides the global iteration cap for this model.
 	MaxIterations int `yaml:"max_iterations"`
 	// APIKey is this model's own credential, overriding the provider's. Useful
+
 	// where one gateway fronts several providers, each wanting its own key.
 	// Supports "$ENV_VAR".
 	APIKey string `yaml:"api_key"`

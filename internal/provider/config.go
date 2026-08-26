@@ -322,7 +322,7 @@ func (c Config) Resolve() (Config, error) {
 		return Config{}, ErrMissingCredential
 	}
 
-	resolved.UseResponses = resolved.wantsResponses()
+	resolved.UseResponses = resolved.wantsResponses(overridden)
 	resolved.Headers = resolved.withAttribution()
 
 	return resolved, nil
@@ -330,12 +330,13 @@ func (c Config) Resolve() (Config, error) {
 
 // wantsResponses decides which wire format to use.
 //
-// Only OpenAI itself implements the Responses API today; the other
-// OpenAI-compatible providers implement chat-completions only, and sending them
-// a Responses request fails outright. So this stays conservative and opt-in
-// everywhere else - a caller pointing at a gateway that does support it can set
-// UseResponses directly.
-func (c Config) wantsResponses() bool {
+// Only OpenAI's own endpoint is assumed to implement the Responses API; every
+// other OpenAI-compatible endpoint - a gateway, a self-hosted deployment, a
+// proxy - stays on chat-completions unless the operator asks for Responses
+// explicitly. Sending one unasked fails outright on an endpoint that does not
+// implement it, and "404 page not found" on a run's first turn explains
+// nothing: the operator would be left debugging the URL rather than the API.
+func (c Config) wantsResponses(overridden bool) bool {
 	if c.DisableResponses {
 		return false
 	}
@@ -344,7 +345,7 @@ func (c Config) wantsResponses() bool {
 		return true
 	}
 
-	if c.Provider != OpenAI {
+	if overridden || c.Provider != OpenAI {
 		return false
 	}
 

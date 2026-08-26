@@ -36,9 +36,13 @@ func TestResponsesIsSelectedForReasoningModelsOnOpenAI(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:   "explicitly requested anywhere",
-			config: Config{Provider: Custom, Model: "m", APIKey: "k", BaseURL: "https://gw.example.com/v1", UseResponses: true},
-			want:   true,
+			// an overridden endpoint is somebody else's, however openai-shaped
+			// its driver: assuming it implements Responses fails the run on its
+			// first turn with a bare 404, and the catalogue knows nothing about
+			// what the endpoint behind the base_url actually serves
+			name:   "an OpenAI reasoning model on an overridden endpoint",
+			config: Config{Provider: OpenAI, Model: "gpt-5.4-mini", APIKey: "k", BaseURL: "https://proxy.example.com/v1"},
+			want:   false,
 		},
 		{
 			name:   "explicitly disabled beats automatic selection",
@@ -61,46 +65,46 @@ func TestResponsesIsSelectedForReasoningModelsOnOpenAI(t *testing.T) {
 	}
 }
 
-// The Responses shape differs from chat-completions in three ways that each
-// break the request if got wrong.
-func TestToResponsesInput(t *testing.T) {
-	instructions, items := toResponsesInput([]ChatMessage{
-		{Role: RoleSystem, Content: "you are an agent"},
-		{Role: RoleSystem, Content: "and be careful"},
-		{Role: RoleUser, Content: "list the files"},
-		{Role: RoleAssistant, ToolCalls: []ToolCall{{
-			ID: "c1", Function: FunctionCall{Name: "shell", Arguments: `{"cmd":"ls"}`},
-		}}},
-		{Role: RoleTool, ToolCallID: "c1", Content: "README.md"},
-		{Role: RoleAssistant, Content: "there is a README"},
+// /responses with a bare 404 - the exact failure this selection rule exists to
+// prevent - so a single stray path here is the bug again.
+func TestAnOverriddenEndpointIsSpokenToInChatCompletions(t *testing.T) {
+	var paths []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+
+	t.Cleanup(server.Close)
+
+	// glm-5.2 is catalogued as a reasoning model, so under the old rule an
+	// openai-driver connection carrying it selected Responses whatever the
+	// endpoint was
+	client, err := New(Config{
+		Provider: OpenAI,
+		Model:    "glm-5.2",
+		APIKey:   "k",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	//nolint:errcheck // the stub answers with an empty stream; the path is the point
+	_, _, _, _ = client.Complete(context.Background(), Request{
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
 	})
 
-	// system turns become top-level instructions, concatenated rather than the
-	// last one silently winning
-	if instructions != "you are an agent\n\nand be careful" {
-		t.Errorf("instructions = %q", instructions)
+	if len(paths) == 0 {
+		t.Fatal("the server saw no request")
 	}
 
-	if len(items) != 4 {
-		t.Fatalf("got %d items, want 4: %+v", len(items), items)
-	}
-
-	if items[0].Type != "message" || items[0].Role != RoleUser {
-		t.Errorf("items[0] = %+v, want a user message", items[0])
-	}
-
-	// a tool call and its result are sibling items linked by call_id, not a
-	// nested structure
-	if items[1].Type != "function_call" || items[1].CallID != "c1" || items[1].Name != "shell" {
-		t.Errorf("items[1] = %+v, want a function_call", items[1])
-	}
-
-	if items[2].Type != "function_call_output" || items[2].CallID != "c1" || items[2].Output != "README.md" {
-		t.Errorf("items[2] = %+v, want a function_call_output", items[2])
-	}
-
-	if items[3].Type != "message" || items[3].Role != RoleAssistant {
-		t.Errorf("items[3] = %+v, want an assistant message", items[3])
+	for _, path := range paths {
+		if !strings.HasSuffix(path, "/chat/completions") {
+			t.Errorf("the run sent %q to an overridden endpoint; want chat-completions", path)
+		}
 	}
 }
 

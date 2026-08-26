@@ -60,6 +60,13 @@ type ClientOptions struct {
 	// self-hosted deployments. Must be https unless it is loopback.
 	BaseURL string
 
+	// Responses selects the wire format for this connection: true sends
+	// Responses-API requests, false forces chat-completions, and nil leaves
+	// the provider's automatic choice - Responses for a catalogued reasoning
+	// model served by OpenAI's own endpoint, chat-completions everywhere else.
+	// See provider.Config.UseResponses.
+	Responses *bool
+
 	// Headers are merged into every request. An entry here wins over the
 	// attribution headers below.
 	Headers map[string]string
@@ -77,7 +84,8 @@ type Attribution = provider.Attribution
 
 // NewClient validates the options and returns a client.
 func NewClient(options ClientOptions) (*Client, error) {
-	inner, err := provider.New(provider.Config{
+
+	config := provider.Config{
 		Provider: options.Provider,
 		Model:    options.Model,
 		APIKey:   options.APIKey,
@@ -85,7 +93,17 @@ func NewClient(options ClientOptions) (*Client, error) {
 		Headers:  options.Headers,
 
 		Attribution: options.Attribution,
-	})
+	}
+
+	if options.Responses != nil {
+		if *options.Responses {
+			config.UseResponses = true
+		} else {
+			config.DisableResponses = true
+		}
+	}
+
+	inner, err := provider.New(config)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +124,13 @@ func (c *Client) Provider() string {
 // BaseURL returns the endpoint the client will call.
 func (c *Client) BaseURL() string {
 	return c.inner.Config().BaseURL
+}
+
+// UsesResponses reports whether the client sends Responses-API requests rather
+// than chat-completions - the resolved answer, after the automatic rule and any
+// explicit override, not the configuration's wish.
+func (c *Client) UsesResponses() bool {
+	return c.inner.Config().UseResponses
 }
 
 // Providers lists the recognised provider identifiers.
@@ -172,10 +197,10 @@ type SummaryRecorder struct {
 	Summary *Summary
 }
 
-func (r *SummaryRecorder) RecordMessage(Message) error                     { return nil }
-func (r *SummaryRecorder) RecordEvent(_, _, _ string, _ int) error         { return nil }
-func (r *SummaryRecorder) RecordFailure(*Failure) error                    { return nil }
-func (r *SummaryRecorder) RecordReset() error                              { return nil }
+func (r *SummaryRecorder) RecordMessage(Message) error             { return nil }
+func (r *SummaryRecorder) RecordEvent(_, _, _ string, _ int) error { return nil }
+func (r *SummaryRecorder) RecordFailure(*Failure) error            { return nil }
+func (r *SummaryRecorder) RecordReset() error                      { return nil }
 
 func (r *SummaryRecorder) RecordResult(summary Summary) error {
 	captured := summary

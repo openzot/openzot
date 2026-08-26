@@ -95,12 +95,16 @@ func TestChatOmitsMaxTokensWhenUnset(t *testing.T) {
 
 // The Responses transport carries the same cap as `max_output_tokens`, the name
 // that API uses.
+// The Responses transport carries the same cap as `max_output_tokens`, the name
+// that API uses.
 func TestResponsesSendsMaxOutputTokens(t *testing.T) {
 	limit := 2048
 
 	body := captureBody(t,
-		// a reasoning model on OpenAI selects the Responses transport
-		Config{Provider: OpenAI, Model: "gpt-5.4-mini", APIKey: "k"},
+		// forced, not inferred: captureBody points the connection at its own
+		// endpoint, and an overridden endpoint is never assumed to speak
+		// Responses (see TestResponsesIsSelectedForReasoningModelsOnOpenAI)
+		Config{Provider: OpenAI, Model: "gpt-5.4-mini", APIKey: "k", UseResponses: true},
 		Request{Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}}, MaxTokens: &limit})
 
 	var payload struct {

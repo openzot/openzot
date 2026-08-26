@@ -4,7 +4,13 @@ All notable changes to zot, following [Keep a Changelog](https://keepachangelog.
 
 ## [0.20.1] - unreleased
 
+### Fixed
+
+- **A custom OpenAI-compatible endpoint is no longer handed Responses-API requests it never agreed to speak.** The wire format was inferred from the driver and the model alone: a connection with `driver: openai` carrying any model the catalogue marks as reasoning - including zot's own default, glm-5.2 - sent `POST <base_url>/responses`, even when `base_url` pointed at a gateway or self-hosted deployment that only implements chat-completions. That contradicted zot's own documented rule ("only OpenAI implements it today, so everywhere else stays on chat-completions") and failed in the worst way possible: the run started fine, then died on its first turn with `provider: 404 page not found (404)` - no hint that the wrong API had been spoken, and no way to say otherwise from configuration. Automatic selection now applies only to OpenAI's built-in endpoint; an overridden `base_url` stays on chat-completions unless the operator asks for Responses explicitly. Asking is now possible: providers take a tri-state `responses:` field (`true` forces Responses, `false` forces chat-completions, unset is automatic), carried through the config file to the client the run speaks with.
+
+
 ### Performance
+
 
 - **Listing a session history no longer reads every conversation back.** `session.List` - which stands behind `zot sessions`, `zot --resume last`, and the automatic continuation of an unfinished run that every dispatch performs - loaded each log in full: every message text, every captured tool output, decoded into memory only to throw all of it away but the task line and the outcome. A project run unattended accumulates one log per run, so the cost of starting any order climbed with everything ever run: measured against a directory of 600 logs (~190 MB), a single-order dispatch paid ~1.2 s before its first provider call (0.18 s with a small history), `zot sessions` took 1.24 s, and both scale linearly into minutes as the months accumulate. The listing now scans each log for just what it shows - the meta record's task and provenance, whether a result closed it, and which result - and never hands a message or event payload to the decoder. The same 600-log directory lists in 0.07 s and dispatch costs no more than it does with an empty history; on a synthetic benchmark the scan is ~35x faster than reading whole (`go test ./internal/session -bench OverHistory`). Nothing else changed: resumes, exports and receipts still read logs whole, and listings are byte-identical for logs of every shape - concluded, resumed, compacted, crashed mid-line, or written by anything other than zot's own encoder.
 

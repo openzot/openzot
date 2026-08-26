@@ -466,10 +466,11 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	instructions = withNonInteractiveContract(instructions)
 
 	client, err := agent.NewClient(agent.ClientOptions{
-		Provider: driver,
-		Model:    model,
-		APIKey:   credential,
-		BaseURL:  providerConfig.BaseURL,
+		Provider:  driver,
+		Model:     model,
+		APIKey:    credential,
+		BaseURL:   providerConfig.BaseURL,
+		Responses: providerConfig.Responses,
 
 		Attribution: agent.Attribution{
 			Name:     cfg.Attribution.Name,
@@ -481,16 +482,17 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 		return nil, empty, fmt.Errorf("provider %q: %w", cfg.DefaultProvider, err)
 	}
 
-	// max_time was validated at load, so a parse error here would be a bug; treat
-	// it as unbounded rather than failing a run that already passed validation.
-	maxDuration, _ := cfg.Agent.MaxDuration()
-
 	// The loader rescans the context directories every time the engine renders
 	// the system prompt, so a SKILL.md that appears mid-run is described to the
 	// model on its next turn. Programmatic skills ride along as the static layer.
 	skills := agent.NewSkillLoader(&agent.SkillsResult{Skills: cfg.Skills}, cfg.SkillDirectories...)
 
+	// max_time was validated at load, so a parse error here would be a bug; treat
+	// it as unbounded rather than failing a run that already passed validation.
+	maxDuration, _ := cfg.Agent.MaxDuration()
+
 	opts := agent.ExecuteWithToolsOptions{
+
 		Instructions: instructions,
 		Tools: agent.DefaultToolsFor(agent.ToolOptions{
 			MaxOutput: cfg.Agent.MaxToolOutput,

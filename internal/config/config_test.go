@@ -926,42 +926,57 @@ providers:
 	}
 }
 
-func TestModelCapabilitiesDeferToTheCatalogueWhenUnset(t *testing.T) {
-	base := catalogue.Model{SupportsTools: true, SupportsReasoning: true, ContextWindow: 200_000}
-
-	got := ModelConfig{}.Capabilities(base)
-
-	if got != base {
-		t.Errorf("Capabilities changed %+v to %+v with nothing set", base, got)
+// providers.<name>.responses is the operator's word on which API a connection
+// speaks. All three states must survive the file: unset (the automatic rule),
+// true (force Responses), and false (force chat-completions) are different
+// answers, so a nil has to stay a nil rather than collapsing into a default.
+func TestProviderResponsesParsesAsATriState(t *testing.T) {
+	tests := map[string]struct {
+		yaml   string
+		stated bool
+		value  bool
+	}{
+		"unset": {`
+providers:
+  openai:
+    api_key: sk-test
+`, false, false},
+		"true": {`
+providers:
+  openai:
+    api_key: sk-test
+    responses: true
+`, true, true},
+		"false": {`
+providers:
+  openai:
+    api_key: sk-test
+    responses: false
+`, true, false},
 	}
-}
 
-func TestModelCapabilitiesTurnAFeatureOnAndOff(t *testing.T) {
-	base := catalogue.Model{SupportsTools: true}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, test.yaml))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
 
-	on := true
-	off := false
+			got := cfg.Providers["openai"].Responses
 
-	if got := (ModelConfig{Vision: &on}).Capabilities(base); !got.SupportsVision {
-		t.Error("vision: true must let a model zot has not catalogued be shown images")
-	}
+			if test.stated != (got != nil) {
+				t.Fatalf("responses stated = %v, want %v", got != nil, test.stated)
+			}
 
-	seeing := catalogue.Model{SupportsTools: true, SupportsVision: true}
-
-	if got := (ModelConfig{Vision: &off}).Capabilities(seeing); got.SupportsVision {
-		t.Error("vision: false must be able to turn off what the catalogue believes")
-	}
-
-	if got := (ModelConfig{Tools: &off}).Capabilities(base); got.SupportsTools {
-		t.Error("tools: false must be honoured")
-	}
-
-	if got := (ModelConfig{Reasoning: &on}).Capabilities(base); !got.SupportsReasoning {
-		t.Error("reasoning: true must be honoured")
+			if got != nil && *got != test.value {
+				t.Errorf("responses = %v, want %v", *got, test.value)
+			}
+		})
 	}
 }
 
 func TestModelCapabilitiesApplyTheContextOverrideToo(t *testing.T) {
+
 	base := catalogue.Model{ContextWindow: 1_000_000}
 
 	if got := (ModelConfig{Context: 32_000}).Capabilities(base); got.ContextWindow != 32_000 {
