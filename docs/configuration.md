@@ -27,21 +27,24 @@ with any of them: `zot --config ~/zot.yaml sessions`, `zot --dir proj new "the
 objective"`. Everything after the command word belongs to that command.
 
 ## Flags
+
 | Flag                                          | Effect                                                             |
 | --------------------------------------------- | ------------------------------------------------------------------ |
 | `--provider` / `--model`                       | which provider and model to run against                           |
 | `--dir`                                       | the directory the agent reads, writes and runs commands in; also accepted by `zot new`, which scaffolds the order under `<dir>/.zot/orders` (and drafts there with `--draft`) |
-
-
-| `--dir`                                       | the directory the agent reads, writes and runs commands in; also accepted by `zot new`, which scaffolds the order under `<dir>/.zot/orders` (and drafts there with `--draft`) |
 | `--max-iterations`                            | cap the agentic rounds; the default is deliberately large          |
 | `--resume` / `--session-dir` / `--no-session` | see [Sessions](#sessions)                                          |
 | `--watch`                                     | keep running and watch a folder or glob for new orders - see [Watch mode](#watch-mode) |
-| `--records-dir`                               | where run records are written; defaults to `<dir>/.zot/records` - see [The book](#the-book) |
 | `--orders-dir`                                | where this project's orders live: what a bare `zot` runs, what a bare `--watch` watches, and where `zot new` files one. Defaults to `<dir>/.zot/orders` |
+| `--records-dir`                               | where run records are written; defaults to `<dir>/.zot/records` - see [The book](#the-book) |
+| `--rerun`                                     | run orders even when the ledger already records a successful run of the same content - what a standing order runs under |
+| `--fresh`                                     | start orders from scratch even when an unfinished run of the same order exists - the escape from an automatic continuation |
 | `--diff`                                      | show a syntax-highlighted diff under each write                    |
 | `--plain`                                     | stream unstyled output; auto-enabled when stdout is not a terminal |
+| `--color`                                     | colorize a non-interactive stream: `auto`, `always`, or `never` - `auto` stays plain for pipes and CI |
 | `--config`                                    | use a specific config file                                         |
+| `-h` / `--help`                               | show help and exit                                                 |
+| `--version`                                   | print version and exit                                             |
 
 ## Controls
 

@@ -244,6 +244,13 @@ providers:
   #   base_url: 'https://gateway.internal.example.com/v1'
   #   api_key: '$GATEWAY_KEY'
   #
+  #   # Which API this connection speaks when the choice is zot's: 'true' forces
+  #   # Responses-API requests, 'false' forces chat-completions, and unset leaves
+  #   # the automatic rule - Responses only on OpenAI's own endpoint, since an
+  #   # endpoint that does not implement it answers such a request with a bare 404
+  #   # on the run's first turn. See docs/providers.md.
+  #   responses: false
+  #
   #   # Optional custom model list. When present, --model must name one of these
   #   # keys. Each entry can alias the provider's real model ID and override its
   #   # run settings. Omit the block to use the built-in catalogue or a new model
