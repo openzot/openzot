@@ -678,7 +678,11 @@ func resolveOrders(args []string, resuming bool, ordersRoot string) ([]order.Ord
 
 // listOrdersRoot lists the orders directory for a bare invocation, or explains
 // what to do instead. An empty book is not an error state to decode - it is
-// someone who has not written an order yet.
+// someone who has not written an order yet, and one sentence answers them:
+// what was looked at, what to do next, and where the rest is explained. The
+// full usage block would bury that sentence under a hundred lines of flags for
+// a tool they are still meeting - and it is never printed here, because the
+// answer travels as the error itself.
 func listOrdersRoot(ordersRoot string) ([]string, error) {
 	var found []string
 
@@ -691,14 +695,24 @@ func listOrdersRoot(ordersRoot string) ([]string, error) {
 	}
 
 	if len(found) == 0 {
-		usage(os.Stderr)
-
+		// The diagnosis says which kind of empty this is: a directory that does
+		// not exist yet reads differently from one that holds no orders, and
+		// only the second means "right place, nothing written" - the first is
+		// just as often a --dir pointed somewhere else than a project awaiting
+		// its first order.
 		where := "no orders directory is configured"
+
 		if ordersRoot != "" {
-			where = ordersRoot + " holds none"
+			if _, err := os.Stat(ordersRoot); err == nil {
+				where = ordersRoot + " holds no orders"
+			} else {
+				where = "there is no orders directory at " + ordersRoot + " yet"
+			}
 		}
 
-		return nil, fmt.Errorf("no order given, and %s (write one with `zot new \"the objective\"`)", where)
+		return nil, fmt.Errorf(
+			"no order given, and %s - write one with `zot new \"the objective\"`, then run zot again (--help says more)",
+			where)
 	}
 
 	return found, nil

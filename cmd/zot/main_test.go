@@ -155,6 +155,75 @@ func TestResolveOrdersOnAResume(t *testing.T) {
 	}
 }
 
+// A bare `zot` in a project that has no orders yet is someone's first contact
+// with the tool, and the answer to it is one sentence: what was looked at,
+// what to do next. The full usage block is not part of that answer - it used to
+// be dumped on stderr here, burying the actionable line under a hundred lines
+// of flags for a tool they are still meeting - so this test holds both halves
+// of the fix: the returned error says what a person needs, and stderr stays
+// silent, because the answer travels as the error rather than ahead of it.
+func TestAnEmptyBookAnswersWithAPointerNotTheManual(t *testing.T) {
+	project := t.TempDir()
+
+	t.Chdir(project)
+
+	withArgs(t)
+
+	stderr, err := captureStderr(t, run)
+	if err == nil {
+		t.Fatal("a bare zot with nothing to run must be an error")
+	}
+
+	root := filepath.Join(project, ".zot", "orders")
+
+	if !strings.Contains(err.Error(), root) {
+		t.Errorf("the answer should name the orders root %q: %v", root, err)
+	}
+
+	// the next step is named, and so is where everything else is explained -
+	// the manual itself is one --help away, never printed unasked
+	for _, want := range []string{"zot new", "--help"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the answer should point at %q: %v", want, err)
+		}
+	}
+
+	if stderr != "" {
+		t.Errorf("stderr should carry nothing on this path, got %d bytes: %q", len(stderr), stderr)
+	}
+}
+
+// "Empty" is two different situations that read differently to the person
+// staring at them: a directory that does not exist yet is just as often a --dir
+// pointed somewhere else as it is a project awaiting its first order, while one
+// that exists and holds no orders means right place, nothing written. The
+// answer says which.
+func TestAnEmptyBookSaysWhichKindOfEmptyItIs(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".zot", "orders")
+
+	_, err := listOrdersRoot(root)
+	if err == nil {
+		t.Fatal("a missing orders directory must be an error")
+	}
+
+	if !strings.Contains(err.Error(), "no orders directory at "+root+" yet") {
+		t.Errorf("a missing directory should be named as missing: %v", err)
+	}
+
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = listOrdersRoot(root)
+	if err == nil {
+		t.Fatal("an empty orders directory must be an error")
+	}
+
+	if !strings.Contains(err.Error(), root+" holds no orders") {
+		t.Errorf("an existing but empty directory should be named as holding none: %v", err)
+	}
+}
+
 // `zot new` writes an order zot itself will run.
 func TestNewOrderScaffoldsARunnableOrder(t *testing.T) {
 	t.Chdir(t.TempDir())
