@@ -1,0 +1,17 @@
+# zot work order - what to do, and what "done" means.
+
+# An optional short label for this order, shown in the viewer. Without
+# one the file name is used, with its dashes read as spaces.
+# title:
+
+objective: |-
+  scaffold me from behind a flag
+
+# The objective is not met until every one of these holds.
+# acceptance:
+#   - the new behaviour is covered by a test that fails without the change
+#   - the full test suite passes
+
+# Rules that hold for the whole run.
+# constraints:
+#   - do not change public API signatures

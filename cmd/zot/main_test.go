@@ -3006,3 +3006,169 @@ func TestSessionsExport(t *testing.T) {
 		t.Error("exporting an unknown session succeeded")
 	}
 }
+
+// A subcommand word is honoured wherever the command line puts it, not only
+// immediately after the program name: global flags travel before it, so
+// `zot --config x sessions` lists sessions instead of failing to find an order
+// file named sessions. Each case below dispatches through run() with the
+// command word parked behind a flag.
+func TestASubcommandAfterGlobalFlagsIsHonoured(t *testing.T) {
+	t.Run("sessions after flags lists the named directory", func(t *testing.T) {
+		dir := t.TempDir()
+
+		writeSessionLog(t, dir, "20260826-080000",
+			`{"kind":"meta","at":"2026-08-26T08:00:00Z","meta":{"id":"20260826-080000","task":"listed from behind a flag"}}
+			 {"kind":"result","at":"2026-08-26T08:00:10Z","result":{"reason":"settled","code":0}}`)
+
+		withArgs(t, "--session-dir", dir, "sessions")
+
+		output, err := captureStdout(t, run)
+
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+
+		if !strings.Contains(output, "listed from behind a flag") {
+			t.Errorf("the listing did not come from --session-dir:\n%s", output)
+		}
+	})
+
+	t.Run("new after flags scaffolds into the named directory", func(t *testing.T) {
+		dir := t.TempDir()
+
+		withArgs(t, "--dir", dir, "new", "scaffold me from behind a flag")
+
+		output, err := captureStdout(t, run)
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+
+		if !strings.Contains(output, "wrote ") {
+			t.Fatalf("zot new said nothing about writing:\n%s", output)
+		}
+
+		scaffolded, err := filepath.Glob(filepath.Join(dir, order.BookDir, "orders", "*.yaml"))
+		if err != nil || len(scaffolded) != 1 {
+			t.Fatalf("the scaffold did not land under --dir (%v): %v", dir, scaffolded)
+		}
+
+		body, err := os.ReadFile(scaffolded[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !strings.Contains(string(body), "scaffold me from behind a flag") {
+			t.Errorf("the scaffolded order does not carry the objective:\n%s", body)
+		}
+	})
+
+	t.Run("config path answers after flags", func(t *testing.T) {
+		t.Setenv("ZOT_CONFIG", "/some/where/config.yaml")
+
+		withArgs(t, "--model", "glm-5.2", "config", "path")
+
+		output, err := captureStdout(t, run)
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+
+		if !strings.Contains(output, "/some/where/config.yaml") {
+			t.Errorf("output = %q, want the config path", output)
+		}
+	})
+
+	t.Run("sessions export runs after flags", func(t *testing.T) {
+		dir := t.TempDir()
+
+		writeSessionLog(t, dir, "20260826-090000",
+			`{"kind":"meta","at":"2026-08-26T09:00:00Z","meta":{"id":"20260826-090000","task":"exported from behind a flag"}}`)
+
+		withArgs(t, "--session-dir", dir, "sessions", "export")
+
+		output, err := captureStdout(t, run)
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+
+		if !strings.Contains(output, `"id":"20260826-090000"`) {
+			t.Errorf("the export did not come from --session-dir:\n%s", output)
+		}
+	})
+}
+
+// The escape hatches hold. After `--` everything is positional - a command word
+// there is an order file like any other - and an unknown flag ends the search,
+// because reporting typos is pflag's job and guessing past one would swallow
+// the mistake.
+func TestACommandWordIsNotReadOutOfAPositionalPosition(t *testing.T) {
+	t.Run("after -- the word is an order file", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+
+		withArgs(t, "--", "sessions")
+
+		err := run()
+		if err == nil || !strings.Contains(err.Error(), "read order") {
+			t.Fatalf("want the ordinary order-file failure, got %v", err)
+		}
+	})
+	t.Run("an unknown flag stops the search", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+
+		withArgs(t, "--nope", "sessions")
+
+		quietStderr(t)
+
+		output, _ := captureStdout(t, run)
+
+		if output != "" {
+			t.Errorf("a command was dispatched past an unknown flag:\n%s", output)
+		}
+	})
+}
+
+// subcommandAt must agree with the parse it precedes: which flags swallow the
+// argument after them decides whether a later word is a command or a value.
+
+// argument after them decides whether a later word is a command or a value.
+// The walk reads whatever FlagSet will parse the line, so this table pins that
+// agreement against the arities zot actually defines.
+func TestSubcommandAtFindsTheCommandAmongFlags(t *testing.T) {
+	original := pflag.CommandLine
+	t.Cleanup(func() { pflag.CommandLine = original })
+
+	pflag.CommandLine = pflag.NewFlagSet("zot", pflag.ContinueOnError)
+	pflag.String("config", "", "")
+	pflag.String("dir", ".", "")
+	pflag.Int("max-iterations", 0, "")
+	pflag.Bool("plain", false, "")
+	pflag.BoolP("help", "h", false, "")
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+		at   int
+	}{
+		{"the first position still works", []string{"sessions"}, "sessions", 0},
+		{"after a string flag", []string{"--config", "c.yaml", "sessions"}, "sessions", 2},
+		{"after several flags", []string{"--plain", "--dir", ".", "sessions"}, "sessions", 3},
+		{"an int flag consumes its value", []string{"--max-iterations", "5", "sessions"}, "sessions", 2},
+		{"= splices the value onto the flag", []string{"--dir=new", "order.yaml"}, "", -1},
+		{"a command word as a flag value is a value", []string{"--dir", "new", "order.yaml"}, "", -1},
+		{"shorthands are boolean here", []string{"-h", "new"}, "new", 1},
+		{"a bool flag consumes nothing", []string{"--plain", "sessions"}, "sessions", 1},
+		{"an unknown flag ends the walk", []string{"--nope", "sessions"}, "", -1},
+		{"-- makes everything positional", []string{"--", "sessions"}, "", -1},
+		{"an order file first means no command", []string{"fix.yaml", "sessions"}, "", -1},
+		{"no arguments at all", nil, "", -1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			name, at := subcommandAt(test.args)
+			if name != test.want || at != test.at {
+				t.Errorf("subcommandAt(%q) = %q,%d; want %q,%d", test.args, name, at, test.want, test.at)
+			}
+		})
+	}
+}

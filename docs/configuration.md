@@ -22,13 +22,17 @@ credentials come from their own conventional variables (`OPENAI_API_KEY`,
 config, referencing a variable you export. Every field is documented in
 [configs/zot.example.yaml](../configs/zot.example.yaml).
 
+Commands accept global flags ahead of them, so a non-default config travels
+with any of them: `zot --config ~/zot.yaml sessions`, `zot --dir proj new "the
+objective"`. Everything after the command word belongs to that command.
+
 ## Flags
-
-`zot --help` lists them all. The ones worth knowing:
-
 | Flag                                          | Effect                                                             |
 | --------------------------------------------- | ------------------------------------------------------------------ |
 | `--provider` / `--model`                       | which provider and model to run against                           |
+| `--dir`                                       | the directory the agent reads, writes and runs commands in; also accepted by `zot new`, which scaffolds the order under `<dir>/.zot/orders` (and drafts there with `--draft`) |
+
+
 | `--dir`                                       | the directory the agent reads, writes and runs commands in; also accepted by `zot new`, which scaffolds the order under `<dir>/.zot/orders` (and drafts there with `--draft`) |
 | `--max-iterations`                            | cap the agentic rounds; the default is deliberately large          |
 | `--resume` / `--session-dir` / `--no-session` | see [Sessions](#sessions)                                          |

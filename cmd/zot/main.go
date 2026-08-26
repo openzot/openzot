@@ -60,35 +60,10 @@ func main() {
 }
 
 func run() error {
-	// `zot config` opens the config file in $EDITOR, seeding it from the embedded
-	// template on first run. `zot config path` prints its location.
-	if len(os.Args) > 1 && os.Args[1] == "config" {
-		if len(os.Args) > 2 && os.Args[2] == "path" {
-			fmt.Println(config.DefaultConfigPath())
-			return nil
-		}
-		return editConfig()
-	}
-
-	// `zot sessions` lists what previous runs left behind. Its own subcommand
-	// rather than a flag because it takes no order and produces no run.
-	// `zot sessions export` renders sessions for use outside zot.
-	if len(os.Args) > 1 && os.Args[1] == "sessions" {
-		if len(os.Args) > 2 && os.Args[2] == "export" {
-			return exportSessions(os.Args[3:], os.Stdout, os.Stderr)
-		}
-
-		return listSessions(os.Args[2:])
-	}
-
-	// `zot new` scaffolds a work order. The two-step shape is deliberate: the
-	// pause between writing the order and running it is where acceptance
-	// criteria get written, and it is what keeps zot from feeling like a
-	// prompt box.
-	if len(os.Args) > 1 && os.Args[1] == "new" {
-		return newOrder(os.Args[2:], os.Stdout)
-	}
-
+	// The top-level flags are defined up front rather than after the subcommand
+	// check below, because finding a subcommand among the arguments means walking
+	// them the way pflag is about to - and that needs to know which flags take a
+	// value of their own.
 	configPath := pflag.String("config", "", "path to zot config (default: "+config.DefaultConfigPath()+", optional)")
 	provider := pflag.String("provider", "", "model provider to run against: zai (default), openai, anthropic, groq, ollama, or a provider named in the config")
 	model := pflag.String("model", "", "override the model name (default: glm-5.2, which only the zai provider serves)")
@@ -108,6 +83,65 @@ func run() error {
 	showVersion := pflag.Bool("version", false, "print version and exit")
 	showHelp := pflag.BoolP("help", "h", false, "show this help and exit")
 	pflag.Usage = func() { usage(os.Stderr) }
+	// A subcommand is honoured wherever the command line puts it, not only
+	// immediately after the program name: `zot --config x sessions` is how a
+	// person with a non-default config writes it, and reading the word as an
+	// order file instead failed with an error about a file named sessions not
+	// existing. Everything after the word belongs to the command, exactly as it
+	// did when the word came first - and the flags ahead of it travel with it,
+	// so `--session-dir x sessions` lists x rather than the default directory.
+	//
+	// Those flags are parsed as the globals they are - so a typo in one is
+	// still reported by the parser that owns it. What travels on to the
+	// command is then the values of the globals that command speaks itself;
+	// a run-only flag like --rerun has nothing to do with a listing, and is
+	// simply left behind with the run it belongs to.
+	if name, at := subcommandAt(os.Args[1:]); name != "" && !answeredFirst(os.Args[1:at+1]) {
+		before := os.Args[1 : at+1]
+		after := os.Args[at+2:]
+
+		// this is what fills the flag variables the forwarding below reads;
+		// every token here was already vetted by the walk
+		pflag.CommandLine.Parse(before)
+
+		var args []string
+
+		switch name {
+		// `zot config` opens the config file in $EDITOR, seeding it from the
+		// embedded template on first run. `zot config path` prints its location.
+		// It takes no flags of its own.
+		case "config":
+			if len(after) > 0 && after[0] == "path" {
+				fmt.Println(config.DefaultConfigPath())
+
+				return nil
+			}
+
+			return editConfig()
+
+		// `zot sessions` lists what previous runs left behind. Its own subcommand
+		// rather than a flag because it takes no order and produces no run.
+		// `zot sessions export` renders sessions for use outside zot.
+		case "sessions":
+			args = sessionDirFlag(args, *sessionDir)
+
+			if len(after) > 0 && after[0] == "export" {
+				return exportSessions(append(args, after[1:]...), os.Stdout, os.Stderr)
+			}
+
+			return listSessions(append(args, after...))
+
+		// `zot new` scaffolds a work order. The two-step shape is deliberate:
+		// the pause between writing the order and running it is where acceptance
+		// criteria get written, and it is what keeps zot from feeling like a
+		// prompt box.
+		case "new":
+			args = newOrderFlags(args, *configPath, *provider, *model, *dir, *ordersFlag)
+
+			return newOrder(append(args, after...), os.Stdout)
+		}
+	}
+
 	pflag.Parse()
 
 	// Asking for help must succeed: the usage goes to stdout where a pager or
@@ -356,7 +390,108 @@ func run() error {
 	return nil
 }
 
+// sessionDirFlag adds --session-dir to args when a value was given ahead of the
+// command word, so `zot --session-dir x sessions` lists x.
+func sessionDirFlag(args []string, dir string) []string {
+
+	if dir == "" {
+		return args
+	}
+
+	return append(args, "--session-dir", dir)
+}
+
+// newOrderFlags adds to args the globals ahead of the command word that `zot
+// new` speaks itself. Empty means unset: nothing is forwarded that was not
+// newOrderFlags adds to args the globals ahead of the command word that `zot
+// new` speaks itself. Empty means unset: nothing is forwarded that was not
+// given, so the command's own defaults stand.
+func newOrderFlags(args []string, configPath, provider, model, dir, ordersDir string) []string {
+	for _, flag := range []struct{ name, value string }{
+
+		{"--model", model},
+		{"--dir", dir},
+		{"--orders-dir", ordersDir},
+	} {
+		if flag.value != "" {
+			args = append(args, flag.name, flag.value)
+		}
+	}
+
+	return args
+}
+
+// answeredFirst reports whether help or version appears among the flags ahead
+
+// answeredFirst reports whether help or version appears among the flags ahead
+// of a command word. Either is answered by the ordinary parse wherever it sits,
+// exactly as when no command follows - asking for the version is not a request
+// to run the command as well.
+func answeredFirst(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "-h", "--help", "--version":
+			return true
+		}
+	}
+
+	return false
+}
+
+// commands are the words that name a subcommand.
+var commands = map[string]bool{
+	"config":   true,
+	"sessions": true,
+	"new":      true,
+}
+
+// subcommandAt walks args the way pflag is about to parse them, looking for the
+// first bare word, and reports it with its index when that word names a
+// subcommand (-1 with an empty name otherwise).
+
+// A known flag that takes a value consumes the argument following it, so
+// `zot --dir new order.yaml` names a working directory rather than the new
+// command, while `--dir=new` needs no following argument. `--` ends the walk -
+// everything after it is positional by definition - as does a word that names no
+// command, because from there on the line is an ordinary run. An unknown flag
+// ends it too: reporting typos is pflag's job during the parse, and guessing
+// past one could swallow a mistake.
+func subcommandAt(args []string) (string, int) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--":
+			return "", -1
+
+		case strings.HasPrefix(arg, "--"):
+			name, _, inline := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+			flag := pflag.Lookup(name)
+
+			if flag == nil {
+				return "", -1
+			}
+
+			if flag.Value.Type() != "bool" && !inline {
+				i++
+			}
+
+		case len(arg) > 1 && arg[0] == '-' && arg[1] != '-':
+			// shorthands are all boolean here (-h), so nothing follows them
+
+		default:
+			if commands[arg] {
+				return arg, i
+			}
+
+			return "", -1 // an order file: the ordinary parse owns the rest
+		}
+	}
+	return "", -1
+}
+
 // oneRun is everything a single order's run needs. The batch loop and watch
+
 // mode both go through execute, so an order runs identically however it was
 // named: a fresh conversation, its own session log, its own recorded outcome.
 type oneRun struct {
