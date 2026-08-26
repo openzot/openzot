@@ -32,6 +32,7 @@ func entryFromLoad(path string) Entry {
 		Task:        loaded.Meta.Task,
 		Complete:    loaded.Complete(),
 		ResumedFrom: loaded.Meta.ResumedFrom,
+		Workdir:     loaded.Meta.Workdir,
 	}
 
 	if loaded.Result != nil {
@@ -62,6 +63,7 @@ func TestListMatchesAFullRead(t *testing.T) {
 		Task:     "settled run",
 		Provider: "zai",
 		Driver:   "openai",
+		Workdir:  "/projects/arcade",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -75,11 +77,12 @@ func TestListMatchesAFullRead(t *testing.T) {
 	_ = writer.Close()
 
 	writeLog(t, dir, "20260805-100000",
-		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"failed run","resumedFrom":"20260805-090000"}}
+		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"failed run","workdir":"/projects/machinery","resumedFrom":"20260805-090000"}}
 		 {"kind":"message","at":"2026-08-05T10:00:01Z","message":{"type":"user","text":"go"}}
 		 {"kind":"result","at":"2026-08-05T10:30:00Z","result":{"reason":"error","message":"the provider failed","error":"provider: upstream exploded (500)","code":1,"inputTokens":12345,"outputTokens":678}}`)
 
 	// no result at all: the run never concluded
+
 	writeLog(t, dir, "20260805-110000",
 		`{"kind":"meta","at":"2026-08-05T11:00:00Z","meta":{"id":"20260805-110000","task":"killed run"}}
 		 {"kind":"message","at":"2026-08-05T11:00:01Z","message":{"type":"user","text":"go"}}
@@ -119,6 +122,10 @@ func TestListMatchesAFullRead(t *testing.T) {
 
 		if got.ResumedFrom != want.ResumedFrom {
 			t.Errorf("%s: resumedFrom = %q, want %q", got.ID, got.ResumedFrom, want.ResumedFrom)
+		}
+
+		if got.Workdir != want.Workdir {
+			t.Errorf("%s: workdir = %q, want %q", got.ID, got.Workdir, want.Workdir)
 		}
 
 		if !got.Ended.Equal(want.Ended) || got.Duration != want.Duration {
@@ -235,6 +242,49 @@ func TestListDoesNotDecodePayloadsWhileListing(t *testing.T) {
 		if !entry.Complete || entry.Reason != "settled" {
 			t.Errorf("%s: outcome = (%v, %q), want the result record read", entry.ID, entry.Complete, entry.Reason)
 		}
+	}
+}
+
+// A listing must carry where each run operated - the workdir its meta record
+// states - because session logs of every project share one directory, and a
+// caller deciding whether an unfinished run belongs to the project in front of
+// it (the automatic continuation does exactly that) cannot go on task text
+// alone. A log whose meta recorded no workdir lists one none.
+func TestListLiftsWhereTheRunRan(t *testing.T) {
+	dir := t.TempDir()
+
+	writer, err := Create(dir, "20260805-090000", Meta{Task: "t", Workdir: "/projects/arcade"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_ = writer.Result(Result{Reason: "settled"})
+	_ = writer.Close()
+
+	// not written by this package's encoder, and with no workdir at all
+	writeLog(t, dir, "20260805-100000",
+		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"old log"}}`)
+
+	entries, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+
+	byID := map[string]Entry{}
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+
+	if got := byID["20260805-090000"].Workdir; got != "/projects/arcade" {
+		t.Errorf("workdir = %q, want /projects/arcade", got)
+	}
+
+	if got := byID["20260805-100000"].Workdir; got != "" {
+		t.Errorf("workdir = %q, want empty for a meta record without one", got)
 	}
 }
 

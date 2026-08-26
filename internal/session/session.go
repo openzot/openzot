@@ -575,6 +575,14 @@ type Entry struct {
 	// chain of resumes without loading every session in the directory.
 	ResumedFrom string
 
+	// Workdir is the directory the run operated in, as its meta record states
+	// it. Listed beside the task so a caller can tell which project a log
+	// belongs to without loading it - the automatic continuation of an
+	// unfinished run is exactly that decision, and deciding it from task text
+	// alone continues another project's run. Empty for a log whose meta
+	// recorded none.
+	Workdir string
+
 	// Ended is when the result record was written - when the run concluded,
 	// as it said so itself. Zero for a run that recorded no outcome.
 	Ended time.Time
@@ -714,6 +722,7 @@ func scanEntry(path string) (Entry, bool) {
 				if record.Meta != nil {
 					entry.Task = record.Meta.Task
 					entry.ResumedFrom = record.Meta.ResumedFrom
+					entry.Workdir = record.Meta.Workdir
 					began = record.At
 				}
 
@@ -733,6 +742,7 @@ func scanEntry(path string) (Entry, bool) {
 				}
 			}
 		}
+
 	}
 
 	if scanner.Err() != nil {

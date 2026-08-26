@@ -349,7 +349,7 @@ func run() error {
 	// watch's.
 
 	if *watchFlag {
-		return startWatch(ctx, watchTarget, newWatchRunner(ctx, cfg, sessions, ledger, *rerun, *fresh))
+		return startWatch(ctx, watchTarget, newWatchRunner(ctx, cfg, sessions, ledger, workDir, *rerun, *fresh))
 	}
 
 	// Each order is its own run: a fresh conversation, its own session log, its
@@ -361,6 +361,7 @@ func run() error {
 		ctx:      ctx,
 		cfg:      cfg,
 		sessions: sessions,
+		workdir:  workDir,
 		ledger:   ledger,
 		rerun:    *rerun,
 		fresh:    *fresh,
@@ -499,6 +500,13 @@ type oneRun struct {
 	cfg      zot.Config
 	sessions string
 
+	// workdir is the directory this invocation's runs operate in, resolved
+	// after the chdir into --dir. An unfinished run of an order is continued
+	// only when its log was recorded from this same directory: session logs
+	// share one global directory across projects, and task text alone cannot
+	// tell two projects' identical orders apart - a working directory can.
+	workdir string
+
 	// ledger is where the run's outcome is recorded and where doneness is read
 	// from. A zero Ledger records nothing and satisfies nothing.
 	ledger order.Ledger
@@ -544,7 +552,7 @@ func (r oneRun) executeAt(o order.Order, quitOnDone bool, index, size int) error
 	var seed *session.Session
 
 	if !r.fresh && r.sessions != "" {
-		if unfinished, ok := unfinishedRunOf(r.sessions, o.Task()); ok {
+		if unfinished, ok := unfinishedRunOf(r.sessions, o.Task(), r.workdir); ok {
 			seed = unfinished
 
 			fmt.Fprintf(os.Stderr,
@@ -1489,9 +1497,19 @@ Flags:`)
 
 // unfinishedRunOf finds the newest session of this exact order that did not
 // conclude - no recorded outcome (killed, crashed), or an interruption
-// (aborted, a guard stop, a provider error). A settled run is done and a
-// declared failure is a conclusion; neither is resumed.
-func unfinishedRunOf(dir, task string) (*session.Session, bool) {
+// (aborted, a guard stop, a provider error) - and was recorded from the
+// working directory this run operates in. A settled run is done and a declared
+// failure is a conclusion; neither is resumed.
+//
+// The working directory has to match because the session directory is shared:
+// every project's runs land in one place, and an identical order text - two
+// projects both asking to "keep the fleet healthy overnight", say - would
+// otherwise continue whichever project's run happened to be interrupted last,
+// replaying one project's half-done conversation into another's tree. A log
+// that records no workdir at all belongs to no provable project, so it is
+// left alone rather than assumed to be this one; --resume continues it
+// explicitly for anyone who knows better.
+func unfinishedRunOf(dir, task, workdir string) (*session.Session, bool) {
 	entries, err := session.List(dir)
 	if err != nil {
 		return nil, false
@@ -1506,7 +1524,7 @@ func unfinishedRunOf(dir, task string) (*session.Session, bool) {
 	// newest first: only the most recent run of the order counts - older
 	// unfinished runs were superseded by whatever came after them
 	for _, entry := range entries {
-		if entry.Task != task {
+		if entry.Task != task || entry.Workdir != workdir {
 			continue
 		}
 
@@ -1533,16 +1551,6 @@ func unfinishedRunOf(dir, task string) (*session.Session, bool) {
 	return nil, false
 }
 
-// MaxResumeDepth is how many times an order may be continued before the next
-// attempt starts clean instead.
-//
-// The other half of "continue an unfinished run": resuming is right when the
-// last attempt was interrupted, and wrong once the transcript itself is what
-// keeps failing. An unattended schedule turns that difference into a ratchet -
-// each run resumes a longer, more damaged conversation, gets less far, and
-// hands an even longer one to the next - and nothing in the ledger stops it,
-// because a run that errors is neither settled nor failed. A resume that
-// concludes clears this on its own: the chain ends and the next run starts
 // from nothing, so this counts a losing streak rather than a lifetime.
 const MaxResumeDepth = 3
 

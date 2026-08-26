@@ -2717,13 +2717,16 @@ providers:
 		t.Fatal(err)
 	}
 
-	// an unfinished earlier run of this exact order: no result record at all
+	// an unfinished earlier run of this exact order, recorded from the same
+	// directory the new run will work in: no result record at all
 	loaded, err := order.Load(orderPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	writer, err := session.Create(sessions, "20260822-020000", session.Meta{Task: loaded.Task()})
+	target := t.TempDir()
+
+	writer, err := session.Create(sessions, "20260822-020000", session.Meta{Task: loaded.Task(), Workdir: target})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2733,7 +2736,7 @@ providers:
 
 	writer.Close()
 
-	withArgs(t, "--config", configPath, "--dir", t.TempDir(), orderPath)
+	withArgs(t, "--config", configPath, "--dir", target, orderPath)
 
 	diagnostics, err := captureStderr(t, func() error {
 		_, runErr := captureStdout(t, run)
@@ -2828,7 +2831,9 @@ providers:
 
 	loaded, _ := order.Load(orderPath)
 
-	writer, err := session.Create(sessions, "20260822-030000", session.Meta{Task: loaded.Task()})
+	target := t.TempDir()
+
+	writer, err := session.Create(sessions, "20260822-030000", session.Meta{Task: loaded.Task(), Workdir: target})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2837,7 +2842,7 @@ providers:
 
 	writer.Close()
 
-	withArgs(t, "--config", configPath, "--dir", t.TempDir(), "--fresh", orderPath)
+	withArgs(t, "--config", configPath, "--dir", target, "--fresh", orderPath)
 
 	if _, err := captureStdout(t, run); err != nil {
 		t.Fatalf("run: %v", err)
@@ -2858,12 +2863,19 @@ providers:
 	}
 }
 
-// writeSession lays down a session log for the resume tests: a meta record, and
-// a result record only when the run concluded.
+// testWorkdir is the working directory recorded in every log these resume
+// tests lay down, and the one unfinishedRunOf is asked to match. A fixed
+// string rather than the process's real working directory, because full-run
+// tests chdir into temp directories they later delete.
+const testWorkdir = "/projects/mine"
+
+// writeSession lays down a session log for the resume tests: a meta record
+// naming the directory the run operated in, and a result record only when the
+// run concluded.
 func writeSession(t *testing.T, dir, id, task, resumedFrom, reason string) {
 	t.Helper()
 
-	writer, err := session.Create(dir, id, session.Meta{Task: task, ResumedFrom: resumedFrom})
+	writer, err := session.Create(dir, id, session.Meta{Task: task, Workdir: testWorkdir, ResumedFrom: resumedFrom})
 	if err != nil {
 		t.Fatalf("session.Create(%s): %v", id, err)
 	}
@@ -2896,7 +2908,7 @@ func TestResumingStopsAfterAChainThatNeverConcludes(t *testing.T) {
 	writeSession(t, dir, "0003", task, "0002", "")
 	writeSession(t, dir, "0004", task, "0003", "")
 
-	if _, ok := unfinishedRunOf(dir, task); ok {
+	if _, ok := unfinishedRunOf(dir, task, testWorkdir); ok {
 		t.Fatalf("a chain of %d unconcluded resumes must start clean rather than resume again", MaxResumeDepth)
 	}
 
@@ -2907,7 +2919,7 @@ func TestResumingStopsAfterAChainThatNeverConcludes(t *testing.T) {
 	writeSession(t, shallow, "0002", task, "0001", "")
 	writeSession(t, shallow, "0003", task, "0002", "")
 
-	if _, ok := unfinishedRunOf(shallow, task); !ok {
+	if _, ok := unfinishedRunOf(shallow, task, testWorkdir); !ok {
 		t.Error("a short chain must still be continued: interrupted work is worth picking up")
 	}
 }
@@ -2927,7 +2939,7 @@ func TestASettledRunClearsTheResumeChain(t *testing.T) {
 	// the shift after the settled one started clean, and was interrupted
 	writeSession(t, dir, "0004", task, "", "")
 
-	if _, ok := unfinishedRunOf(dir, task); !ok {
+	if _, ok := unfinishedRunOf(dir, task, testWorkdir); !ok {
 		t.Error("a settled run breaks the chain; the interruption after it must still be resumable")
 	}
 }
@@ -2941,8 +2953,65 @@ func TestAMissingLinkDoesNotCountAsAChain(t *testing.T) {
 
 	writeSession(t, dir, "0009", task, "gone", "")
 
-	if _, ok := unfinishedRunOf(dir, task); !ok {
+	if _, ok := unfinishedRunOf(dir, task, testWorkdir); !ok {
 		t.Error("an unresolvable predecessor must not be assumed to be a long chain")
+	}
+}
+
+// Session logs share one directory across every project, so an unfinished run
+// has to prove which project it belongs to before it is continued: task text
+// alone matches any project whose order words the objective the same way, and
+// continuing one project's half-done conversation inside another's tree works
+// on the wrong files while believing it already did half the work. The log's
+// own workdir record is that proof. One recorded from somewhere else - or from
+// nowhere at all - is left for its own project (or an explicit --resume).
+func TestAnUnfinishedRunOfAnotherProjectIsNotContinued(t *testing.T) {
+	const task = "keep the fleet healthy overnight"
+
+	dir := t.TempDir()
+
+	elsewhere := t.TempDir()
+
+	// another project's interrupted shift of the same order text, newest first
+	writer, err := session.Create(dir, "20260822-010000", session.Meta{Task: task, Workdir: elsewhere})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = writer.Message(session.Message{Type: "bot", Text: "OTHER PROJECT'S HALF-DONE WORK"})
+	writer.Close()
+
+	// ...and this project's own older interruption of it
+	writer, err = session.Create(dir, "20260822-000000", session.Meta{Task: task, Workdir: testWorkdir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writer.Close()
+
+	if seed, ok := unfinishedRunOf(dir, task, testWorkdir); !ok {
+		t.Error("an interrupted run of this project must still be continued")
+	} else if seed.Meta.Workdir != testWorkdir {
+		t.Errorf("continued %q, want this project's run", seed.Meta.ID)
+	}
+
+	// a log with no workdir recorded cannot be attributed to any project
+	unattributed := t.TempDir()
+
+	writer, err = session.Create(unattributed, "20260822-020000", session.Meta{Task: task})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writer.Close()
+
+	if _, ok := unfinishedRunOf(unattributed, task, testWorkdir); ok {
+		t.Error("a log that records no working directory must not be continued on faith")
+	}
+
+	// nothing of this order's shape here at all: no match either way
+	if _, ok := unfinishedRunOf(t.TempDir(), task, testWorkdir); ok {
+		t.Error("an empty history has nothing to continue")
 	}
 }
 

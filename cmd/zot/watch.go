@@ -22,13 +22,15 @@ type watchRunner struct {
 
 // newWatchRunner wires a dispatcher to the resolved command line. run is the
 // engine entry point, split out so tests can inject a fake and never reach a
-// provider.
-func newWatchRunner(ctx context.Context, cfg zot.Config, sessions string, ledger order.Ledger, rerun, fresh bool) watchRunner {
+// provider. workdir is the directory the watched orders run in - the same
+// directory an unfinished run must have been recorded from to be continued.
+func newWatchRunner(ctx context.Context, cfg zot.Config, sessions string, ledger order.Ledger, workdir string, rerun, fresh bool) watchRunner {
 	return watchRunner{
 		runs: oneRun{
 			ctx:      ctx,
 			cfg:      cfg,
 			sessions: sessions,
+			workdir:  workdir,
 			ledger:   ledger,
 			rerun:    rerun,
 			fresh:    fresh,
@@ -37,7 +39,6 @@ func newWatchRunner(ctx context.Context, cfg zot.Config, sessions string, ledger
 	}
 }
 
-// Dispatch runs one picked-up order. An order that does not settle is reported
 // and the watch moves on - a factory pointed at a folder cannot let 3am's
 // failed order end 4am's good one - and only a deliberate stop ends the watch:
 // stopping is the operator's decision, not an order failing.
