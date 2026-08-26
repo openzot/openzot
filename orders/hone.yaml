@@ -1,0 +1,61 @@
+# zot work order - the standing order for honing zot itself, run every shift.
+#
+# Every run of this order is one pass across the stone: build and test the
+# tool, use it, read the log of every pass made before, find the dullest
+# facet, make exactly one improvement, prove it, and append one entry to the
+# ledger. The order never changes; what changes is the tool it sharpens, and
+# orders/ledger.json, which is how each shift knows every pass that came
+# before it.
+
+title: Hone zot
+
+objective: |-
+  Make zot better in exactly one way, prove the improvement, and record the
+  pass in the ledger.
+
+  Use before you touch. Read AGENTS.md and .agents/skills/. Build the tool
+  (make build, make dev), run the gate (make vet, make test, make
+  cover-check), and then exercise the binary yourself: run ./zot --help,
+  create an order with zot new in a scratch directory, run it against a
+  stub or dry mode if one exists, open the TUI, read a session log. Read the
+  code paths you exercised. Write down what is dull - at least five
+  candidate grievances spanning different facets:
+
+    correctness   wrong behaviour, a bug, a race, a lost error
+    robustness    a failure that is not handled, recovered or reported well
+    performance   wasted work, latency, memory, token spend
+    ux            the CLI and TUI: output, flags, messages, progress, defaults
+    craft         code that is harder to read, test or change than it should be
+    docs          README, docs/, --help and example config out of step with the code
+    repair        the gate is failing: fix that first, and that is the pass
+
+  Then read orders/ledger.json - every pass already made, with its facet,
+  grievance, change and proof. Strike out any candidate an earlier pass
+  already fixed, and any in the facet of the previous pass. From what is
+  left, pick the grievance zot most needs fixed - judged by what a person
+  running zot would notice, not by how easy the fix is. A pass that only
+  tidies something nobody would feel does not clear the bar unless the gate
+  itself is failing.
+
+  Then make the pass: one improvement, confined to its facet, with tests
+  that assert the new behaviour, a CHANGELOG.md line when the change is
+  visible to a user, and every part of the gate green afterwards. Proved
+  beats asserted, and focused beats sprawling - but focused does not mean
+  timid: size the pass to a shift and make it count. A pass is done when
+  running the tool shows the thing you named, and the entry's proof says
+  what you saw.
+
+acceptance:
+  - 'make vet, make test and make cover-check all exit 0, run after the change.'
+  - 'orders/ledger.json has exactly one new entry appended, with the fields shift (= the previous entry''s shift + 1, or 1), date (today, YYYY-MM-DD), facet (one of correctness, robustness, performance, ux, craft, docs, repair), grievance, change, proof and files (the paths changed); the file is still valid JSON; and the new facet differs from the previous entry''s facet unless it is repair.'
+  - 'The change made this shift is confined to the facet the entry names, and no improvement a previous entry proved has been undone - unless this entry''s grievance says why the old proof no longer holds.'
+  - 'Every behaviour the change adds or alters is covered by a test that would fail without it.'
+  - 'A change a user of zot can see (a flag, a message, output, a default, a file format) has a line in CHANGELOG.md under the unreleased section.'
+  - 'Nothing under .github/, orders/hone.yaml, or scripts/ was changed.'
+
+constraints:
+  - 'One pass, one facet, one entry. Not two small improvements, not one that straddles facets.'
+  - 'Never break the blade: the gate is green at the end of the shift, whatever else happens. When a change and the gate conflict, the gate wins and the change shrinks.'
+  - 'This is 0.x: replace rather than deprecate, and delete the old thing everywhere, as AGENTS.md says.'
+  - 'Do not modify .github/, orders/hone.yaml or scripts/. Do not git commit, push, tag or change branches - the workflow commits the shift.'
+  - 'Use your own work: run the gate and the binary before touching anything, and again before declaring success. A pass whose proof was not observed by running zot is not a pass.'

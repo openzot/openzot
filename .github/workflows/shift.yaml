@@ -1,0 +1,301 @@
+# One shift of the whetstone, turned on zot itself: zot runs the standing
+# order orders/hone.yaml - builds and uses the tool, reads the ledger of every
+# pass before, hones one facet, proves it with the gate, writes one ledger
+# entry - and the workflow commits the pass to WORK_BRANCH, and only ever to
+# WORK_BRANCH. main is for humans: a standing pull request from WORK_BRANCH is
+# where passes are reviewed.
+#
+# The progress card is orders/ledger.json: one entry per pass, appended by the
+# order and committed with it, so the PR shows what was done and why, and the
+# next shift knows every pass that came before.
+name: shift
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Queue rather than skip, and never cancel: a due shift waits for the running
+# one, and starts the moment it ends.
+concurrency:
+  group: zot-shift
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+# The one branch this workflow reads from and lands on; every ref below goes
+# through it. A schedule run is created on the default branch, so
+# github.ref_name would say `main` - never use it.
+env:
+  WORK_BRANCH: work
+
+jobs:
+  shift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    # The provider key lives in this environment, not in the repository: only
+    # a job that names the environment can read it. (Job-level `environment`
+    # cannot read `env`, so this is the one place the name is spelled out.)
+    environment: work
+    steps:
+      # A repository without the provider key idles rather than failing every
+      # half hour. The shift says so and goes home.
+      - name: Is the line staffed?
+        id: staffed
+        env:
+          KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::notice::no OPENROUTER_API_KEY secret - idle shift"
+            echo "staffed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "staffed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Named ref, not github.sha: a shift that waited its turn in the
+      # concurrency group was created while the previous one was still
+      # working and would otherwise check out a stale tree. Naming the branch
+      # fetches its tip at job start, and keeps main out of the shift.
+      - uses: actions/checkout@v6
+        if: steps.staffed.outputs.staffed == 'true'
+        with:
+          ref: ${{ env.WORK_BRANCH }}
+          lfs: true
+          # full history: the shift works on a branch of its own and lands it
+          # with a squash merge, and recovering a stranded branch needs the
+          # merge base to exist locally
+          fetch-depth: 0
+
+      # Each run works on a shift/<run-id> branch of its own and pushes a snapshot of the
+      # working tree to it every five minutes while the model works, so a
+      # runner that dies loses at most five minutes; the next shift finds the
+      # stranded branch and folds it back in.
+      - name: Open the shift branch
+        if: steps.staffed.outputs.staffed == 'true'
+        id: branch
+        run: |
+          set -u
+          [ "$(git rev-parse --abbrev-ref HEAD)" = "$WORK_BRANCH" ] || { echo "::error::not on $WORK_BRANCH"; exit 1; }
+          git config user.name 'zot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          branch="shift/${GITHUB_RUN_ID}"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+          # Recover work stranded by a shift that never got to merge: squash
+          # each leftover shift/* branch into this shift's working tree. A
+          # branch that no longer merges cleanly is left where it is, loudly.
+          git fetch -q origin '+refs/heads/shift/*:refs/remotes/origin/shift/*' 2>/dev/null || true
+          for stranded in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/shift); do
+            if git merge --squash -q "$stranded" 2>/dev/null; then
+              if ! git diff --cached --quiet; then
+                git commit -q -m "shift: recovered stranded work from ${stranded#origin/}"
+                echo "recovered ${stranded#origin/}"
+              else
+                git reset -q --hard
+              fi
+              git push -q origin ":refs/heads/${stranded#origin/}" || true
+            else
+              git reset -q --hard
+              echo "::warning::${stranded#origin/} does not merge cleanly; left in place for a human"
+            fi
+          done
+
+          git checkout -q -b "$branch"
+          git push -q origin "HEAD:refs/heads/$branch"
+
+      - name: Keep snapshots flowing
+        if: steps.staffed.outputs.staffed == 'true'
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          nohup bash -c '
+            while sleep 300; do
+              git add -A >/dev/null 2>&1 || continue
+              if ! git diff --cached --quiet 2>/dev/null; then
+                git commit -q -m "snapshot: $(date -u +%H:%M:%SZ)" 2>/dev/null \
+                  && git push -q origin "HEAD:refs/heads/$BRANCH" 2>/dev/null \
+                  || true
+              fi
+            done
+          ' > /tmp/snapshotter.log 2>&1 &
+          echo $! > /tmp/snapshotter.pid
+          disown
+
+      - uses: actions/setup-go@v6
+        if: steps.staffed.outputs.staffed == 'true'
+        with:
+          go-version-file: go.mod
+
+      - name: Work the orders
+        if: steps.staffed.outputs.staffed == 'true'
+        id: zot
+        uses: openzot/actions/run@v0
+        # a step timeout: a shift cut short here still lands below and is
+        # continued by the next shift (cache-sessions keeps the conversation).
+        timeout-minutes: 85
+        continue-on-error: true
+        with:
+          orders: orders/hone.yaml
+          rerun: true # the standing order runs every shift
+          # a standing order must never be retired by its own receipt: keep
+          # zot's run records out of the checkout (the project's .zot/ is the
+          # order book for humans, not for this)
+          records-dir: ${{ runner.temp }}/zot/records
+          provider: openrouter
+          model: stealth/ox-alpha
+          cache-sessions: true
+          cache-key: zot-tool-sessions
+          config: |
+            default_provider: openrouter
+            providers:
+              openrouter:
+                api_key: $OPENROUTER_API_KEY
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      # The gate is the project's own: what AGENTS.md says must pass.
+      - name: Vet
+        if: steps.staffed.outputs.staffed == 'true'
+        id: vet
+        continue-on-error: true
+        run: make vet
+
+      - name: Test
+        if: steps.staffed.outputs.staffed == 'true'
+        id: test
+        continue-on-error: true
+        run: make test
+
+      - name: Coverage gate
+        if: steps.staffed.outputs.staffed == 'true'
+        id: cover
+        continue-on-error: true
+        run: make cover-check
+
+      # Land the shift on WORK_BRANCH as one clean commit: a squash merge, so
+      # five-minute snapshots never reach its history. If WORK_BRANCH will not
+      # take it, the shift branch simply stays - it *is* the rescue - and the
+      # next shift folds it back in. main is never touched.
+      - name: Land the shift
+        if: always() && steps.staffed.outputs.staffed == 'true'
+        id: commit
+        env:
+          OUTCOME: ${{ steps.zot.outputs.outcome }}
+          SUMMARY: ${{ steps.zot.outputs.summary }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          set +e
+          set -u
+
+          if [ -z "${BRANCH:-}" ]; then
+            echo "no shift branch; nothing to land"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          kill "$(cat /tmp/snapshotter.pid 2>/dev/null)" 2>/dev/null
+
+          git add -A
+          git diff --cached --quiet || git commit -q -m "snapshot: end of shift"
+          git push -q origin "HEAD:refs/heads/$BRANCH"
+
+          if git diff --quiet "origin/${WORK_BRANCH}...HEAD" 2>/dev/null; then
+            echo "nothing to land"
+            git push -q origin ":refs/heads/$BRANCH" || true
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pass="$(python3 -c 'import json; l=json.load(open("orders/ledger.json")); e=l[-1] if l else None; print("pass %s (%s) - %s" % (e["shift"], e["facet"], e["change"][:80]) if e else "")' 2>/dev/null || true)"
+
+          if [ "$OUTCOME" = settled ] && [ -n "$pass" ]; then
+            subject="shift: ${pass}"
+          else
+            subject="shift: work in progress (${OUTCOME:-no outcome})"
+          fi
+
+          landed=false
+          for attempt in 1 2 3; do
+            git fetch -q origin "${WORK_BRANCH}"
+            git checkout -q -B landing "origin/${WORK_BRANCH}"
+
+            if ! git merge --squash -q "$BRANCH" 2>/dev/null; then
+              echo "squash of ${BRANCH} onto ${WORK_BRANCH} conflicted (attempt ${attempt})"
+              git reset -q --hard
+              break
+            fi
+
+            if git diff --cached --quiet; then
+              echo "nothing to land after all"
+              landed=true
+              break
+            fi
+
+            git commit -q -m "$subject" -m "${SUMMARY:-}" -m "run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+            if git push -q origin "landing:${WORK_BRANCH}"; then
+              landed=true
+              break
+            fi
+
+            echo "push rejected; ${WORK_BRANCH} moved under us (attempt ${attempt})"
+            git checkout -q "$BRANCH"
+          done
+
+          if [ "$landed" = true ]; then
+            git push -q origin ":refs/heads/$BRANCH" || true
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+            echo "$subject"
+            exit 0
+          fi
+
+          echo "::warning::${WORK_BRANCH} would not take this shift; the work is preserved on ${BRANCH}"
+          echo "rescued=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "committed=false" >> "$GITHUB_OUTPUT"
+
+      - name: Shift report
+        if: always()
+        env:
+          STAFFED: ${{ steps.staffed.outputs.staffed }}
+          OUTCOME: ${{ steps.zot.outputs.outcome }}
+          VET: ${{ steps.vet.outcome }}
+          TEST: ${{ steps.test.outcome }}
+          COVER: ${{ steps.cover.outcome }}
+          COMMITTED: ${{ steps.commit.outputs.committed }}
+          RESCUED: ${{ steps.commit.outputs.rescued }}
+        run: |
+          set +e
+          set -u
+
+          if [ "$STAFFED" != true ]; then
+            {
+              echo "## Shift"
+              echo
+              echo "Idle: no \`OPENROUTER_API_KEY\` secret."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## Shift"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| zot | ${OUTCOME:-did not run} |"
+            echo "| vet | ${VET} |"
+            echo "| test | ${TEST} |"
+            echo "| coverage | ${COVER} |"
+            echo "| committed to \`${WORK_BRANCH}\` | ${COMMITTED:-false} |"
+            if [ -n "${RESCUED:-}" ]; then
+              echo "| preserved on | \`${RESCUED}\` |"
+              echo
+              echo "> This shift's work would not land on \`${WORK_BRANCH}\`. Nothing is lost:"
+              echo "> every snapshot is on \`${RESCUED}\`, and the next shift folds it back in."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Green means: the orders settled, the tree is proved, and the pass
+          # is on WORK_BRANCH.
+          [ "$OUTCOME" = settled ] && [ "$VET" = success ] && [ "$TEST" = success ] && [ "$COVER" = success ] && [ -z "${RESCUED:-}" ]
