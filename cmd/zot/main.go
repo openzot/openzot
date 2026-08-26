@@ -106,8 +106,17 @@ func run() error {
 	rerun := pflag.Bool("rerun", false, "run orders even when the ledger already records a successful run of the same content")
 	fresh := pflag.Bool("fresh", false, "start orders from scratch even when an unfinished run of the same order exists")
 	showVersion := pflag.Bool("version", false, "print version and exit")
-	pflag.Usage = usage
+	showHelp := pflag.BoolP("help", "h", false, "show this help and exit")
+	pflag.Usage = func() { usage(os.Stderr) }
 	pflag.Parse()
+
+	// Asking for help must succeed: the usage goes to stdout where a pager or
+	// a pipe reads it, and the run ends well before any work is looked up.
+	if *showHelp {
+		usage(os.Stdout)
+
+		return nil
+	}
 
 	if *showVersion {
 		// the build kind is on the version line because it changes what the
@@ -536,7 +545,7 @@ func listOrdersRoot(ordersRoot string) ([]string, error) {
 	}
 
 	if len(found) == 0 {
-		usage()
+		usage(os.Stderr)
 
 		where := "no orders directory is configured"
 		if ordersRoot != "" {
@@ -574,9 +583,35 @@ func newOrder(args []string, out io.Writer) error {
 	modelFlag := set.String("model", "", "model for --draft (default: the configured one)")
 	dir := set.String("dir", ".", "working directory the order is for: the scaffold lands under <dir>/"+order.BookDir+"/orders and a --draft survey reads there")
 	ordersFlag := set.String("orders-dir", "", "where to write the order (default: <dir>/"+order.BookDir+"/orders)")
+	showHelp := set.BoolP("help", "h", false, "show this help and exit")
+
+	// One usage text wherever it lands: --help prints it to out (stdout),
+	// a parse error leaves pflag printing it to stderr.
+	newUsage := func(w io.Writer) {
+		fmt.Fprintln(w, `usage: zot new [--draft] [--dir <dir>] [--orders-dir <dir>] ["the objective"]
+
+Scaffolds a work order - a small YAML file carrying the objective, the
+acceptance criteria that define done, and the constraints to hold - under
+<dir>/.zot/orders, prints its path, and stops. Bare for the blank form; with an
+objective it fills that in; --draft also has the configured model propose the
+criteria (surveying --dir first), for review rather than trust.`)
+		fmt.Fprintln(w)
+		fmt.Fprint(w, set.FlagUsages())
+	}
+
+	set.Usage = func() { newUsage(os.Stderr) }
 
 	if err := set.Parse(args); err != nil {
 		return err
+	}
+
+	// Help is answered before anything else is checked, so `zot new --help`
+	// never trips over a missing objective or a --provider without --draft on
+	// the way.
+	if *showHelp {
+		newUsage(out)
+
+		return nil
 	}
 
 	objective := strings.TrimSpace(strings.Join(set.Args(), " "))
@@ -815,9 +850,24 @@ func listSessions(args []string) error {
 	set := pflag.NewFlagSet("sessions", pflag.ContinueOnError)
 
 	dir := set.String("session-dir", config.DefaultSessionDir(), "directory to list")
+	showHelp := set.BoolP("help", "h", false, "show this help and exit")
+
+	sessionsUsage := func(w io.Writer) {
+		fmt.Fprintln(w, "usage: zot sessions [--session-dir <dir>]")
+		fmt.Fprintln(w)
+		fmt.Fprint(w, set.FlagUsages())
+	}
+
+	set.Usage = func() { sessionsUsage(os.Stderr) }
 
 	if err := set.Parse(args); err != nil {
 		return err
+	}
+
+	if *showHelp {
+		sessionsUsage(os.Stdout)
+
+		return nil
 	}
 
 	entries, err := session.List(*dir)
@@ -858,18 +908,27 @@ func exportSessions(args []string, stdout, stderr io.Writer) error {
 	out := set.String("out", "", "directory to write <id>.jsonl and images/ into (default: JSON Lines on stdout, without images)")
 	snapshots := set.Bool("snapshots", false, "include the earlier states of the conversation that compaction or a resume superseded")
 	all := set.Bool("all", false, "export every session that is not continued by another, instead of the ones named")
+	showHelp := set.BoolP("help", "h", false, "show this help and exit")
 
-	set.Usage = func() {
-		fmt.Fprintln(stderr, "usage: zot sessions export [flags] [session ...]")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "A session is an id, a path, or \"last\" (the default). A session that continues")
-		fmt.Fprintln(stderr, "earlier ones is exported as one trajectory with the whole chain behind it.")
-		fmt.Fprintln(stderr)
-		set.PrintDefaults()
+	exportUsage := func(w io.Writer) {
+		fmt.Fprintln(w, "usage: zot sessions export [flags] [session ...]")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "A session is an id, a path, or \"last\" (the default). A session that continues")
+		fmt.Fprintln(w, "earlier ones is exported as one trajectory with the whole chain behind it.")
+		fmt.Fprintln(w)
+		fmt.Fprint(w, set.FlagUsages())
 	}
+
+	set.Usage = func() { exportUsage(stderr) }
 
 	if err := set.Parse(args); err != nil {
 		return err
+	}
+
+	if *showHelp {
+		exportUsage(stdout)
+
+		return nil
 	}
 
 	entries, err := session.List(*dir)
@@ -1154,8 +1213,12 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, `zot - an automated software factory powered by an autonomous coding harness
+// usage prints the top-level help to w. --help asks for it, and a pager or a
+// pipe reads what it prints, so that path passes stdout; every other caller is
+// in the middle of reporting something wrong, so those pass stderr. One text
+// either way - the help is not allowed to drift between the two.
+func usage(w io.Writer) {
+	fmt.Fprintln(w, `zot - an automated software factory powered by an autonomous coding harness
 
 zot takes work orders, not prompts. A work order is a small YAML file: the
 durable objective, the acceptance criteria that define "done", and the
@@ -1216,7 +1279,7 @@ Commands:
   sessions   list previous runs, newest first
 
 Flags:`)
-	pflag.PrintDefaults()
+	fmt.Fprint(w, pflag.CommandLine.FlagUsages())
 }
 
 // unfinishedRunOf finds the newest session of this exact order that did not

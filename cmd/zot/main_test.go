@@ -528,8 +528,154 @@ func TestFirstNonEmpty(t *testing.T) {
 		}
 	}
 }
+// Asking for help must succeed. --help used to fall through to pflag's
+// built-in handling: the usage landed on stderr, "pflag: help requested"
+// landed on stdout, and the status was 2 - so `zot --help | less` showed one
+// useless line and anything scripting around `zot --help` saw a failure.
+// Both spellings now print the usage on stdout and end cleanly.
+func TestRunHelpIsAnsweredOnStdout(t *testing.T) {
+	for _, arg := range []string{"--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			withArgs(t, arg)
+
+			output, err := captureStdout(t, run)
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			// The landmarks someone asking for help is looking for: how to
+			// invoke zot at all, where the book lives, the flags that shape a
+			// run - and none of pflag's internal error text.
+			for _, want := range []string{"zot [flags] [<order.yaml> ...]", order.BookDir + "/records", "--watch", "--version"} {
+				if !strings.Contains(output, want) {
+					t.Errorf("%s output missing %q:\n%s", arg, want, output)
+				}
+			}
+
+			if strings.Contains(output, "pflag") {
+				t.Errorf("%s output leaks pflag's internal error text:\n%s", arg, output)
+			}
+		})
+	}
+}
+
+// Help is answered before the rest of the command line is looked at, so it
+// works even alongside an argument that would fail to resolve as an order.
+func TestRunHelpBeatsTheRestOfTheCommandLine(t *testing.T) {
+	withArgs(t, "no-such-order.yaml", "--help")
+
+	output, err := captureStdout(t, run)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !strings.Contains(output, "Usage:") {
+		t.Errorf("--help next to an unresolvable argument should still print help:\n%s", output)
+	}
+}
+
+// `zot new --help` documents the subcommand on stdout without scaffolding
+// anything - and it beats validation, so it answers even when the rest of the
+// command line would have been refused (--provider without --draft).
+func TestNewOrderHelpAnswersWithoutScaffolding(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"long spelling", []string{"--help"}},
+		{"shorthand", []string{"-h"}},
+		{"alongside a refused combination", []string{"--provider", "x", "--model", "y", "--help"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out strings.Builder
+
+			if err := newOrder(test.args, &out); err != nil {
+				t.Fatalf("newOrder(%q): %v", test.args, err)
+			}
+
+			if !strings.Contains(out.String(), "usage: zot new") || !strings.Contains(out.String(), "--orders-dir") {
+				t.Errorf("help output missing the usage line or its flags:\n%s", out.String())
+			}
+
+			// Help describes scaffolding; it must not do any. Nothing lands in
+			// the book on this path.
+			if _, err := os.Stat(filepath.Join(order.BookDir, "orders")); !os.IsNotExist(err) {
+				t.Error("`new --help` must not scaffold an order")
+			}
+		})
+	}
+}
+
+// A `zot new` command line that is genuinely wrong still refuses on stderr,
+// exactly as before - only the help path moved.
+func TestNewOrderStillRefusesAProviderWithoutDraft(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var out strings.Builder
+
+	if err := newOrder([]string{"--provider", "x", "fix", "the", "typo"}, &out); err == nil {
+		t.Error("--provider without --draft must still be an error")
+	}
+}
+
+// `zot sessions --help` prints its usage and succeeds, like every other
+// ask-for-help spelling; an unknown flag is still an error on stderr.
+func TestListSessionsHelpAndErrorsGoToDifferentStreams(t *testing.T) {
+	for _, arg := range []string{"--help", "-h"} {
+		output, err := captureStdout(t, func() error { return listSessions([]string{arg}) })
+		if err != nil {
+			t.Fatalf("listSessions(%q): %v", arg, err)
+		}
+
+		if !strings.Contains(output, "--session-dir") {
+			t.Errorf("%s output missing --session-dir:\n%s", arg, output)
+		}
+	}
+
+	quietStderr(t)
+
+	if err := listSessions([]string{"--nope"}); err == nil {
+		t.Error("an unknown flag must be an error")
+	}
+}
+
+// Export's help lands on stdout while its parse errors keep landing on stderr:
+// asking for help and being wrong are different audiences.
+func TestExportSessionsHelpAndErrorsGoToDifferentStreams(t *testing.T) {
+	var stdout, stderr strings.Builder
+
+	if err := exportSessions([]string{"--help"}, &stdout, &stderr); err != nil {
+		t.Fatalf("exportSessions: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "usage: zot sessions export") {
+		t.Errorf("help missing from stdout:\n%s", stdout.String())
+	}
+
+	if stderr.Len() != 0 {
+		t.Errorf("asking for help wrote to stderr:\n%s", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+
+	err := exportSessions([]string{"--nope"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--nope") {
+		t.Errorf("an unknown flag must be an error naming it, got %v", err)
+	}
+
+	if stdout.Len() != 0 {
+		t.Errorf("a parse error must not write to stdout:\n%s", stdout.String())
+	}
+}
 
 // The usage text is what a user sees when they get it wrong, so it has to name
+// the things they can actually do - and nothing they cannot.
+
 // the things they can actually do - and nothing they cannot.
 func TestUsageDescribesTheRealCommands(t *testing.T) {
 	original := os.Stderr
@@ -541,7 +687,7 @@ func TestUsageDescribesTheRealCommands(t *testing.T) {
 
 	os.Stderr = write
 
-	usage()
+	usage(os.Stderr)
 
 	write.Close()
 

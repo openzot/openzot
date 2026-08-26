@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "shift": 1,
+    "date": "2026-08-26",
+    "facet": "ux",
+    "grievance": "Asking zot for help failed. `zot --help` and `zot -h` fell through to pflag's built-in handling: the usage block was dumped on stderr, a stray `pflag: help requested` line was printed on stdout, and the exit status was 2 - so `zot --help | less` showed one useless line, redirecting help to a file captured nothing useful, and anything scripting around the command saw it fail. The subcommands fared no better: `zot new --help`, `zot sessions --help` and `zot sessions export --help` each ended in an error (status 1) with only an auto-generated flag dump on stderr. The first command anyone runs against a new tool was broken.",
+    "change": "Help is now a real flag on every surface that takes one: `-h/--help` at the top level and on `new`, `sessions` and `sessions export`. Asking for help prints the usage to stdout and exits 0, before any validation or filesystem work (`zot new --provider x --help` answers with help instead of refusing, and scaffolds nothing). `usage()` takes its destination writer, so one help text serves both audiences - stdout when asked for, stderr from the error paths, which are otherwise unchanged (an unknown flag still explains itself on stderr with a non-zero status). Subcommand usage blocks became writer-parameterised closures rendering FlagUsages(), dropping pflag's global-output mutation.",
+    "proof": "Observed before the change: `./zot --help >o 2>e` left o containing exactly 'pflag: help requested' (22 bytes), e holding the 4,805-byte usage, status 2; `./zot new --help` exited 1 with stdout empty. Observed after rebuilding: `./zot --help` exits 0 with the full 4,858 bytes of usage on stdout and zero bytes on stderr (`grep -c pflag` finds none); `-h`, `zot new --help`, `zot sessions --help`/`-h` and `zot sessions export --help`/`-h` each print their usage on stdout with status 0; `./zot --nope` still prints 'unknown flag' plus usage on stderr and exits 2; `zot new --provider x fix the typo` still refuses; and a work order run against a local stub provider still ends settled with the full digest block (session id, resume line, token counts). The five new tests (TestRunHelpIsAnsweredOnStdout, TestRunHelpBeatsTheRestOfTheCommandLine, TestNewOrderHelpAnswersWithoutScaffolding, TestListSessionsHelpAndErrorsGoToDifferentStreams, TestExportSessionsHelpAndErrorsGoToDifferentStreams) were bite-checked: with main.go reverted to d33ccbe all five fail; with the change they pass. Gate green afterwards: make vet over both build variants, full make test, make cover-check at 91.8% (threshold 90%).",
+    "files": [
+      "cmd/zot/main.go",
+      "cmd/zot/main_test.go",
+      "cmd/zot/watch_test.go",
+      "CHANGELOG.md"
+    ]
+  }
+]

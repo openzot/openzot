@@ -537,7 +537,7 @@ func waitForSessions(t *testing.T, dir string, n int, want string) {
 // both forms of target, and says what stopping looks like.
 func TestUsageDocumentsWatchMode(t *testing.T) {
 	text, err := captureStderr(t, func() error {
-		usage()
+		usage(os.Stderr)
 
 		return nil
 	})
