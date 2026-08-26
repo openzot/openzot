@@ -109,15 +109,18 @@ func run() error {
 		switch name {
 		// `zot config` opens the config file in $EDITOR, seeding it from the
 		// embedded template on first run. `zot config path` prints its location.
-		// It takes no flags of its own.
+		// It takes no flags of its own - but --config ahead of it names the file
+		// to open, exactly as it names the file a run reads.
 		case "config":
+			path := firstNonEmpty(*configPath, config.DefaultConfigPath())
+
 			if len(after) > 0 && after[0] == "path" {
-				fmt.Println(config.DefaultConfigPath())
+				fmt.Println(path)
 
 				return nil
 			}
 
-			return editConfig()
+			return editConfig(path)
 
 		// `zot sessions` lists what previous runs left behind. Its own subcommand
 		// rather than a flag because it takes no order and produces no run.
@@ -404,12 +407,12 @@ func sessionDirFlag(args []string, dir string) []string {
 
 // newOrderFlags adds to args the globals ahead of the command word that `zot
 // new` speaks itself. Empty means unset: nothing is forwarded that was not
-// newOrderFlags adds to args the globals ahead of the command word that `zot
-// new` speaks itself. Empty means unset: nothing is forwarded that was not
-// given, so the command's own defaults stand.
+// given, so the command's own defaults stand - and a flag named on both sides
+// keeps the command-word position's value, because what it parses last wins.
 func newOrderFlags(args []string, configPath, provider, model, dir, ordersDir string) []string {
 	for _, flag := range []struct{ name, value string }{
-
+		{"--config", configPath},
+		{"--provider", provider},
 		{"--model", model},
 		{"--dir", dir},
 		{"--orders-dir", ordersDir},
@@ -1310,11 +1313,14 @@ func loadEnv(dir string) {
 	_ = godotenv.Load(filepath.Join(dir, ".env"))
 }
 
-// editConfig ensures the config file exists - seeding it from the embedded
-// template on first run - and opens it in the user's editor. This is the setup
-// path: configure the provider, model and key by editing the file.
-func editConfig() error {
-	path := config.DefaultConfigPath()
+// editConfig opens the config file at path in $EDITOR - the setup path:
+// configure the provider, model and key by editing the file. It is seeded from
+// the embedded template on first run. An empty path means the default
+// location, the one a run reads when no --config was given.
+func editConfig(path string) error {
+	if strings.TrimSpace(path) == "" {
+		path = config.DefaultConfigPath()
+	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
@@ -1322,6 +1328,7 @@ func editConfig() error {
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.WriteFile(path, zot.ExampleConfigYAML, 0o600); err != nil {
+
 			return fmt.Errorf("write config template: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Created %s from the template.\n", path)

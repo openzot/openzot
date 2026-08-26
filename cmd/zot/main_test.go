@@ -941,7 +941,7 @@ func TestEditConfigSeedsTheTemplate(t *testing.T) {
 	t.Setenv("EDITOR", "")
 	t.Setenv("PATH", dir) // no nano/vi/vim reachable
 
-	err := editConfig()
+	err := editConfig("")
 
 	// with no editor available it must fail loudly rather than silently doing
 	// nothing - but the file it would have opened must exist by then
@@ -967,8 +967,12 @@ func TestEditConfigOpensTheConfiguredEditor(t *testing.T) {
 
 	// a no-op "editor" that just succeeds
 	t.Setenv("VISUAL", "true")
+	if err := editConfig(""); err != nil {
+		t.Fatalf("editConfig: %v", err)
+	}
 
-	if err := editConfig(); err != nil {
+	if err := editConfig(""); err != nil {
+
 		t.Fatalf("editConfig: %v", err)
 	}
 
@@ -1012,6 +1016,153 @@ func TestRunConfigPath(t *testing.T) {
 
 	if !strings.Contains(output, "/some/where/config.yaml") {
 		t.Errorf("output = %q, want the config path", output)
+	}
+}
+
+// A global flag ahead of a command word travels with it - that is the
+// documented way to point any command at a non-default configuration. A draft
+// survey run with `zot --config X new --draft` must speak through the config
+// named: left behind with the default resolution it would fail outright on a
+// host with no default key, or worse, bill a provider nobody chose. The flag
+// must also beat ZOT_CONFIG, the way the layering (defaults < file < env <
+// flags) promises for a run.
+func TestADraftRunsThroughTheConfigNamedAheadOfTheCommandWord(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var turn atomic.Int32
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		// first the survey - a list call - then the drafted criteria, delivered
+		// the way every run ends: through the success tool
+		if turn.Add(1) == 1 {
+			fmt.Fprintf(w, "data: %s\n\n",
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"list","arguments":"{\"path\":\".\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		} else {
+			fmt.Fprintf(w, "data: %s\n\n",
+				`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","type":"function","function":{"name":"success","arguments":"{\"summary\":\"acceptance:\\n  - the suite passes\\n\"}"}}]},"finish_reason":"tool_calls"}]}`)
+		}
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer good.Close()
+
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "wrong config", http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+
+	named := filepath.Join(t.TempDir(), "named.yaml")
+	if err := os.WriteFile(named, []byte(fmt.Sprintf(`
+agent:
+  model: test-model
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, good.URL)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// what the environment points at is what a dropped flag would silently use
+	fallback := filepath.Join(t.TempDir(), "fallback.yaml")
+	if err := os.WriteFile(fallback, []byte(fmt.Sprintf(`
+agent:
+  model: test-model
+default_provider: local
+providers:
+  local:
+    driver: custom
+    base_url: %s
+    api_key: test-key
+`, bad.URL)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ZOT_CONFIG", fallback)
+
+	withArgs(t, "--config", named, "new", "--draft", "add", "rate", "limiting")
+
+	if err := run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(order.BookDir, "orders", "add-rate-limiting.yaml"))
+	if err != nil {
+		t.Fatalf("the drafted order does not exist: %v", err)
+	}
+
+	if !strings.Contains(string(data), "the suite passes") {
+		t.Errorf("the order carries no drafted criteria - the survey did not run through the named config:\n%s", data)
+	}
+}
+
+// The flags `new` refuses without --draft must refuse wherever they sit.
+// --config and --provider ahead of the command word used to vanish silently:
+// the forwarding table carried only --model, --dir and --orders-dir, so
+// `zot --provider p new "objective"` scaffolded an order as though nothing
+// had been said - one command line, two behaviours depending on word order.
+func TestAProviderAheadOfNewIsRefusedWithoutDraft(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	withArgs(t, "--provider", "some-provider", "new", "an objective")
+
+	err := run()
+	if err == nil {
+		t.Fatal("--provider ahead of `new` without --draft must be refused, not silently ignored")
+	}
+
+	if !strings.Contains(err.Error(), "--draft") {
+		t.Errorf("the refusal should name the missing word: %v", err)
+	}
+
+	// a refusal scaffolds nothing
+	if _, statErr := os.Stat(filepath.Join(order.BookDir, "orders")); !os.IsNotExist(statErr) {
+		t.Error("the refused command must not scaffold an order")
+	}
+}
+
+// mistake that gets edited into place and wondered about later.
+func TestTheConfigCommandOpensTheConfigNamedAheadOfIt(t *testing.T) {
+	named := filepath.Join(t.TempDir(), "named.yaml")
+
+	t.Setenv("VISUAL", "true") // a no-op "editor" that just succeeds
+
+	withArgs(t, "--config", named, "config")
+
+	if err := run(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	content, err := os.ReadFile(named)
+	if err != nil {
+		t.Fatalf("read the named config: %v", err)
+	}
+
+	if len(content) == 0 {
+		t.Error("the named config was not seeded from the template")
+	}
+}
+
+// `zot --config X config path` prints X - the flag beats the environment,
+// exactly as it does for the run the config would drive.
+func TestConfigPathHonoursTheFlagAheadOfTheCommandWord(t *testing.T) {
+	named := filepath.Join(t.TempDir(), "named.yaml")
+
+	t.Setenv("ZOT_CONFIG", "/somewhere/else/from-env.yaml")
+
+	withArgs(t, "--config", named, "config", "path")
+
+	output, err := captureStdout(t, run)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if got := strings.TrimSpace(output); got != named {
+		t.Errorf("output = %q, want the named path %q", got, named)
 	}
 }
 
