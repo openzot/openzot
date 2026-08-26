@@ -574,17 +574,34 @@ type Entry struct {
 	// clean. Listed rather than left inside the log so a caller can walk a
 	// chain of resumes without loading every session in the directory.
 	ResumedFrom string
+
+	// Ended is when the result record was written - when the run concluded,
+	// as it said so itself. Zero for a run that recorded no outcome.
+	Ended time.Time
+
+	// Duration is how long the run went on: from the meta record's timestamp
+	// to the result record's. Zero unless both records carried one, which is
+	// every log this package writes whole - a listing states only what the
+	// log says, never what it infers.
+	Duration time.Duration
+
+	// InputTokens and OutputTokens are the provider-billed totals the run's
+	// result recorded. Zero when it recorded none - a log written before the
+	// fields existed reads back unrecorded, not zero.
+	InputTokens  int
+	OutputTokens int
 }
 
 // List enumerates the sessions in dir, newest first.
 //
 // Each log is read for what a listing shows - the meta record's task and
-// provenance, and whether a result closed it - and nothing more. The message
-// and event payloads that make up the bulk of a log are skipped rather than
-// decoded: a directory holds one log per run, an unattended project accumulates
-// months of them, and this listing is read on every dispatch (an order whose
-// last run did not conclude is continued) as well as by `zot sessions`. A
-// caller that needs the conversation loads the log itself (Load).
+// provenance, and what the run's outcome records about itself - and nothing
+// more. The message and event payloads that make up the bulk of a log are
+// skipped rather than decoded: a directory holds one log per run, an
+// unattended project accumulates months of them, and this listing is read on
+// every dispatch (an order whose last run did not conclude is continued) as
+// well as by `zot sessions`. A caller that needs the conversation loads the
+// log itself (Load).
 func List(dir string) ([]Entry, error) {
 	files, err := os.ReadDir(dir)
 
@@ -632,15 +649,17 @@ func List(dir string) ([]Entry, error) {
 // a whole directory - stays out of the decoder, which is what makes scanning a
 // full history cheap.
 type listingRecord struct {
-	Kind   Kind    `json:"kind"`
-	Meta   *Meta   `json:"meta,omitempty"`
-	Result *Result `json:"result,omitempty"`
+	Kind   Kind      `json:"kind"`
+	At     time.Time `json:"at"`
+	Meta   *Meta     `json:"meta,omitempty"`
+	Result *Result   `json:"result,omitempty"`
 }
 
 // scanEntry reads one log for listing: the meta record's task and provenance,
-// and the run's outcome when it recorded one. A half-written line - the normal
-// shape of a crash - is skipped, exactly as Read skips it; ok is false only
-// when the log cannot be read at all.
+// and what the run's outcome says about itself - when it concluded, how long
+// it went, what it billed. A half-written line - the normal shape of a crash -
+// is skipped, exactly as Read skips it; ok is false only when the log cannot
+// be read at all.
 func scanEntry(path string) (Entry, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -650,6 +669,8 @@ func scanEntry(path string) (Entry, bool) {
 	defer file.Close()
 
 	var entry Entry
+
+	var began time.Time
 
 	scanner := bufio.NewScanner(file)
 
@@ -685,13 +706,21 @@ func scanEntry(path string) (Entry, bool) {
 				if record.Meta != nil {
 					entry.Task = record.Meta.Task
 					entry.ResumedFrom = record.Meta.ResumedFrom
+					began = record.At
 				}
 
 			case KindResult:
 				entry.Complete = true
+				entry.Ended = record.At
+
+				if !began.IsZero() && !record.At.IsZero() {
+					entry.Duration = record.At.Sub(began)
+				}
 
 				if record.Result != nil {
 					entry.Reason = record.Result.Reason
+					entry.InputTokens = record.Result.InputTokens
+					entry.OutputTokens = record.Result.OutputTokens
 				}
 			}
 		}

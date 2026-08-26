@@ -36,6 +36,15 @@ func entryFromLoad(path string) Entry {
 
 	if loaded.Result != nil {
 		entry.Reason = loaded.Result.Reason
+		entry.InputTokens = loaded.Result.InputTokens
+		entry.OutputTokens = loaded.Result.OutputTokens
+
+		// the outcome's own timestamp is the ending; the length is measured
+		// from the log's opening record, which is where every run begins
+		if !loaded.Started.IsZero() && !loaded.Ended.IsZero() {
+			entry.Ended = loaded.Ended
+			entry.Duration = loaded.Ended.Sub(loaded.Started)
+		}
 	}
 
 	return entry
@@ -66,9 +75,8 @@ func TestListMatchesAFullRead(t *testing.T) {
 
 	writeLog(t, dir, "20260805-100000",
 		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"failed run","resumedFrom":"20260805-090000"}}
-
 		 {"kind":"message","at":"2026-08-05T10:00:01Z","message":{"type":"user","text":"go"}}
-		 {"kind":"result","at":"2026-08-05T10:30:00Z","result":{"reason":"failed","message":"gave up","code":1}}`)
+		 {"kind":"result","at":"2026-08-05T10:30:00Z","result":{"reason":"failed","message":"gave up","code":1,"inputTokens":12345,"outputTokens":678}}`)
 
 	// no result at all: the run never concluded
 	writeLog(t, dir, "20260805-110000",
@@ -86,7 +94,7 @@ func TestListMatchesAFullRead(t *testing.T) {
 	// colons. The head-of-line kind check must not silently miss its records.
 	writeLog(t, dir, "20260805-130000",
 		`{"meta": {"id": "20260805-130000", "task": "reformatted run"}, "at": "2026-08-05T13:00:00Z", "kind": "meta"}
-		 {"result": {"reason": "aborted"}, "at": "2026-08-05T13:30:00Z", "kind": "result"}`)
+		 {"result": {"reason": "aborted", "inputTokens": 500}, "at": "2026-08-05T13:30:00Z", "kind": "result"}`)
 
 	entries, err := List(dir)
 	if err != nil {
@@ -110,6 +118,15 @@ func TestListMatchesAFullRead(t *testing.T) {
 
 		if got.ResumedFrom != want.ResumedFrom {
 			t.Errorf("%s: resumedFrom = %q, want %q", got.ID, got.ResumedFrom, want.ResumedFrom)
+		}
+
+		if !got.Ended.Equal(want.Ended) || got.Duration != want.Duration {
+			t.Errorf("%s: ending = (%v, %v), want (%v, %v)", got.ID, got.Ended, got.Duration, want.Ended, want.Duration)
+		}
+
+		if got.InputTokens != want.InputTokens || got.OutputTokens != want.OutputTokens {
+			t.Errorf("%s: tokens = (%d, %d), want (%d, %d)",
+				got.ID, got.InputTokens, got.OutputTokens, want.InputTokens, want.OutputTokens)
 		}
 	}
 }
@@ -236,5 +253,59 @@ func TestListStartedIsTheFileTime(t *testing.T) {
 
 	if len(entries) != 1 || !entries[0].Started.Equal(stamp) {
 		t.Errorf("started = %v, want the file's mod time %v", entries[0].Started, stamp)
+	}
+}
+
+// A listing must carry what a run's outcome records about itself - when it
+// concluded, how long it went from its opening record to that outcome, and
+// what it billed - because `zot sessions` is where an operator reads cost and
+// length without opening every log. A run with no outcome has none of these:
+// zeros there mean "the log says nothing", never a measured zero.
+func TestListLiftsWhatTheResultRecords(t *testing.T) {
+	dir := t.TempDir()
+
+	writeLog(t, dir, "20260805-090000",
+		`{"kind":"meta","at":"2026-08-05T09:00:00Z","meta":{"id":"20260805-090000","task":"long run"}}
+		 {"kind":"result","at":"2026-08-05T09:04:40Z","result":{"reason":"settled","code":0,"inputTokens":12345,"outputTokens":678}}`)
+
+	// no result: the run never concluded, so the listing has no ending, no
+	// length and no cost to state
+	writeLog(t, dir, "20260805-100000",
+		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"killed run"}}`)
+
+	entries, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+
+	byID := map[string]Entry{}
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+
+	settled := byID["20260805-090000"]
+
+	wantEnded := time.Date(2026, 8, 5, 9, 4, 40, 0, time.UTC)
+	if !settled.Ended.Equal(wantEnded) {
+		t.Errorf("ended = %v, want %v", settled.Ended, wantEnded)
+	}
+
+	if settled.Duration != 280*time.Second {
+		t.Errorf("duration = %v, want 4m40s", settled.Duration)
+	}
+
+	if settled.InputTokens != 12345 || settled.OutputTokens != 678 {
+		t.Errorf("tokens = (%d, %d), want (12345, 678)", settled.InputTokens, settled.OutputTokens)
+	}
+
+	killed := byID["20260805-100000"]
+	if killed.Complete || !killed.Ended.IsZero() || killed.Duration != 0 ||
+		killed.InputTokens != 0 || killed.OutputTokens != 0 {
+		t.Errorf("unfinished run listed as (%v, %v, %v, %d, %d), want all zero/false",
+			killed.Complete, killed.Ended, killed.Duration, killed.InputTokens, killed.OutputTokens)
 	}
 }

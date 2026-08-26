@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Reading a `.env` out of whatever directory zot was pointed at is a developer
@@ -528,6 +529,7 @@ func TestFirstNonEmpty(t *testing.T) {
 		}
 	}
 }
+
 // Asking for help must succeed. --help used to fall through to pflag's
 // built-in handling: the usage landed on stderr, "pflag: help requested"
 // landed on stdout, and the status was 2 - so `zot --help | less` showed one
@@ -640,6 +642,49 @@ func TestListSessionsHelpAndErrorsGoToDifferentStreams(t *testing.T) {
 
 	if err := listSessions([]string{"--nope"}); err == nil {
 		t.Error("an unknown flag must be an error")
+	}
+}
+
+// `zot sessions` is where an operator reads a night of unattended runs. The
+// listing must state what each run recorded about itself - how long it went
+// and what it billed - and say nothing (a dash) where the log records nothing,
+// so "what did last night cost?" never needs raw jq again.
+func TestListSessionsShowsHowLongAndWhatItCost(t *testing.T) {
+	dir := t.TempDir()
+
+	writeSessionLog(t, dir, "20260805-090000",
+		`{"kind":"meta","at":"2026-08-05T09:00:00Z","meta":{"id":"20260805-090000","task":"the overnight run"}}
+		 {"kind":"result","at":"2026-08-05T09:04:40Z","result":{"reason":"settled","code":0,"inputTokens":12345,"outputTokens":678}}`)
+
+	writeSessionLog(t, dir, "20260805-100000",
+		`{"kind":"meta","at":"2026-08-05T10:00:00Z","meta":{"id":"20260805-100000","task":"killed mid-flight"}}`)
+
+	output, err := captureStdout(t, func() error { return listSessions([]string{"--session-dir", dir}) })
+	if err != nil {
+		t.Fatalf("listSessions: %v", err)
+	}
+
+	if !strings.Contains(output, "4m40s") {
+		t.Errorf("listing missing the run's length:\n%s", output)
+	}
+
+	// 12.3k/678 - the billed totals in the digest's own shape
+	if !strings.Contains(output, "12.3k/678") {
+		t.Errorf("listing missing the run's cost:\n%s", output)
+	}
+
+	// an unfinished run has no length or cost to state: dashes, not zeros
+	if !strings.Contains(output, "running/interrupted") || strings.Count(output, "-") < 2 {
+		t.Errorf("unfinished run must show dashes for length and cost:\n%s", output)
+	}
+}
+
+// writeSessionLog writes one raw session log into dir, named id.jsonl.
+func writeSessionLog(t *testing.T, dir, id, body string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write session log %s: %v", id, err)
 	}
 }
 
@@ -1898,6 +1943,47 @@ func TestOneLine(t *testing.T) {
 	for _, test := range tests {
 		if got := oneLine(test.in, test.width); got != test.want {
 			t.Errorf("oneLine(%q, %d) = %q, want %q", test.in, test.width, got, test.want)
+		}
+	}
+}
+
+// The listing's length and cost cells have stated rules: unmeasured runs are
+// dashes rather than a confident "0s", minutes carry two digits so rows line
+// up, hours absorb the minutes' overflow - and token counts compact at the
+// thousand and million the way the digest's do. A listing that renders an
+// absent measurement as zero lies about what happened.
+func TestSessionListingCellFormatting(t *testing.T) {
+	cells := []struct {
+		in   time.Duration
+		want string
+	}{
+		{in: 0, want: "-"},
+		{in: 250 * time.Millisecond, want: "<1s"},
+		{in: 38 * time.Second, want: "38s"},
+		{in: time.Minute, want: "1m00s"},
+		{in: 280 * time.Second, want: "4m40s"},
+		{in: 66 * time.Minute, want: "1h06m"},
+	}
+
+	for _, test := range cells {
+		if got := ranFor(test.in); got != test.want {
+			t.Errorf("ranFor(%v) = %q, want %q", test.in, got, test.want)
+		}
+	}
+
+	spent := []struct {
+		in, out int
+		want    string
+	}{
+		{in: 0, out: 0, want: "-"},
+		{in: 532, out: 8, want: "532/8"},
+		{in: 45_200, out: 678, want: "45.2k/678"},
+		{in: 1_250_000, out: 0, want: "1.2M/0"},
+	}
+
+	for _, test := range spent {
+		if got := spentFor(test.in, test.out); got != test.want {
+			t.Errorf("spentFor(%d, %d) = %q, want %q", test.in, test.out, got, test.want)
 		}
 	}
 }

@@ -26,5 +26,20 @@
       "internal/session/listing_bench_test.go",
       "CHANGELOG.md"
     ]
+  },
+  {
+    "shift": 3,
+    "date": "2026-08-26",
+    "facet": "ux",
+    "grievance": "`zot sessions` - the one place an operator reads a night of unattended runs - showed only a session id (a UTC timestamp needing decoding), a stop-reason word, and sixty characters of task text. Everything else a run records about its own ending had to be pried out of files by hand: how long the run went, and what it cost in provider-billed tokens - numbers the end-of-run digest prints and the ledger receipt keeps, but which vanished in the index over them. Answering \"what did last night's shifts cost me?\" meant piping every .jsonl through jq; and since all sessions share one global directory across projects, there was not even a per-project shortcut. The tool whose whole premise is that unattended runs leave answerable records made you open each log to answer the two questions asked most often.",
+    "change": "Each row now reads <id> <status> <length> <in/out> <task>: the run's length from its meta record to its result record rendered compactly (38s / 4m40s / 1h06m, sub-second as <1s), and the billed totals in the digest's own shape (15.4k/4.2k). Absence is stated as a dash, never a confident zero - an unfinished run has no length or cost to state, and a log written before the token fields existed is unrecorded rather than free. session.Entry grew Ended/Duration/InputTokens/OutputTokens, lifted in scanEntry from the very same two small meta/result lines the shift-2 scanner already decodes - listingRecord just carries `at` now - so message and event payloads still never reach the decoder, dispatch-time continuation checks pay nothing extra, Started stays the file's mod time exactly as pinned before, and the allocation-ceiling test still holds the scan's cost to the number of runs rather than their size.",
+    "proof": "Ran the rebuilt binary against a local stub provider that reports usage and takes wall-clock time. The digest of a real order run printed input-tokens 15432 / output-tokens 4211; `./zot sessions` showed that run as `20260826-053734  settled  7s  15.4k/4.2k  second task` - length and cost matching the digest, where the pre-shift binary printed `20260826-053734 ... settled  second task` with no numbers at all. Runs whose logs record no usage show `-` and sub-second stub runs show `<1s`: absence stated as absence. A killed mid-flight log lists as running/interrupted with dashes, and `zot sessions export`, bare dispatch, watch pickup and auto-continue are unaffected (fields are additive). Tests: TestListLiftsWhatTheResultRecords pins ended/duration/tokens for a concluded log and all-zero for an unfinished one; TestListMatchesAFullRead now also holds the fast listing to full-read parity on the new fields across concluded/resumed/reformatted/truncated shapes; TestListSessionsShowsHowLongAndWhatItCost asserts the rendered columns including the dashes; TestSessionListingCellFormatting pins the cell rules (<1s, 1m00s, 4m40s, 1h06m, dash, 12.3k/678 compaction). Bite-checked by removing the lift from scanEntry: parity and lift tests fail on exactly the new fields; restored, they pass. Gate green afterwards: make vet over release and dev builds, make test, make cover-check at 91.9% (threshold 90%).",
+    "files": [
+      "internal/session/session.go",
+      "cmd/zot/main.go",
+      "internal/session/listing_test.go",
+      "cmd/zot/main_test.go",
+      "CHANGELOG.md"
+    ]
   }
 ]

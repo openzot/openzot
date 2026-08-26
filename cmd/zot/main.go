@@ -887,10 +887,60 @@ func listSessions(args []string) error {
 			status = entry.Reason
 		}
 
-		fmt.Printf("%-17s  %-20s  %s\n", entry.ID, status, oneLine(entry.Task, 60))
+		fmt.Printf("%-17s  %-19s  %8s  %13s  %s\n",
+			entry.ID, status, ranFor(entry.Duration), spentFor(entry.InputTokens, entry.OutputTokens), oneLine(entry.Task, 60))
 	}
 
 	return nil
+}
+
+// ranFor renders how long a run went on as a compact human duration: 38s,
+// 4m12s, 1h03m. Zero means the log says nothing about it - no outcome was
+// recorded - and reads as a dash rather than an instant; a fraction of a
+// second is stated as under a second rather than rounded to a lie.
+func ranFor(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+
+	if d < time.Minute {
+		if d < time.Second {
+			return "<1s"
+		}
+
+		return d.Round(time.Second).String()
+	}
+
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+
+	return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+}
+
+// spentFor renders the billed token totals the way a receipt reads them:
+// in/out. Absent counts - a log written before the fields existed, or a run
+// that recorded no outcome - leave the whole column a dash rather than a
+// confident zero.
+func spentFor(input, output int) string {
+	if input == 0 && output == 0 {
+		return "-"
+	}
+
+	return tokenCount(input) + "/" + tokenCount(output)
+}
+
+// tokenCount renders a token count compactly: 532, 45.2k, 1.2M - the same
+// shape the digest's numbers take.
+func tokenCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // exportSessions renders sessions as trajectories: the conversation in the
