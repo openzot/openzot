@@ -122,6 +122,103 @@ func TestChatMessageMarshalsAsAStringWhenItHasNoImages(t *testing.T) {
 	}
 }
 
+func TestChatMessageAlwaysSendsContentForToolRole(t *testing.T) {
+	encoded, err := json.Marshal(ChatMessage{Role: RoleTool, Name: "shell", ToolCallID: "x"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	content, ok := decoded["content"]
+	if !ok {
+		t.Fatal("content key is missing, which is what llama.cpp rejects on a tool message")
+	}
+
+	if string(content) != `""` {
+		t.Errorf("content = %s, want an empty string", content)
+	}
+}
+
+func TestChatMessageAlwaysSendsContentForUserAndSystemRoles(t *testing.T) {
+	for _, role := range []string{RoleUser, RoleSystem} {
+		encoded, err := json.Marshal(ChatMessage{Role: role})
+		if err != nil {
+			t.Fatalf("marshal %s: %v", role, err)
+		}
+
+		var decoded map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatalf("unmarshal %s: %v", role, err)
+		}
+
+		if content, ok := decoded["content"]; !ok || string(content) != `""` {
+			t.Errorf("%s content = %s, ok=%v, want an empty string present", role, content, ok)
+		}
+	}
+}
+
+func TestChatMessageOmitsContentForAssistantToolCalls(t *testing.T) {
+	message := ChatMessage{
+		Role:      RoleAssistant,
+		ToolCalls: []ToolCall{{ID: "x", Type: "function", Function: FunctionCall{Name: "shell", Arguments: "{}"}}},
+	}
+
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if _, ok := decoded["content"]; ok {
+		t.Error("content key present on an assistant tool-call message; this path already works without it")
+	}
+}
+
+func TestChatMessageContentFormatArrayWrapsPlainText(t *testing.T) {
+	encoded, err := json.Marshal(ChatMessage{Role: RoleUser, Content: "hello", ContentFormat: ContentFormatArray})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded struct {
+		Content []map[string]any `json:"content"`
+	}
+
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("content is not an array of parts: %v", err)
+	}
+
+	if len(decoded.Content) != 1 || decoded.Content[0]["type"] != "text" || decoded.Content[0]["text"] != "hello" {
+		t.Errorf("content = %v, want a single text part", decoded.Content)
+	}
+}
+
+func TestChatMessageContentFormatArraySendsEmptyArrayForNoContent(t *testing.T) {
+	for _, role := range []string{RoleUser, RoleSystem, RoleTool, RoleAssistant} {
+		encoded, err := json.Marshal(ChatMessage{Role: role, ContentFormat: ContentFormatArray})
+		if err != nil {
+			t.Fatalf("marshal %s: %v", role, err)
+		}
+
+		var decoded map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatalf("unmarshal %s: %v", role, err)
+		}
+
+		if content, ok := decoded["content"]; !ok || string(content) != `[]` {
+			t.Errorf("%s content = %s, ok=%v, want an empty array present", role, content, ok)
+		}
+	}
+}
+
 func TestChatMessagePromotesContentToPartsWhenItCarriesImages(t *testing.T) {
 	message := ChatMessage{
 		Role:    RoleUser,

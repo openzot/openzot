@@ -128,6 +128,18 @@ type ModelConfig struct {
 	Vision    *bool `yaml:"vision"`
 	Tools     *bool `yaml:"tools"`
 	Reasoning *bool `yaml:"reasoning"`
+
+	// ContentFormat overrides how a chat message's content is sent on the
+	// wire: "string" (the default - a bare string, promoted to an array of
+	// parts only when the message carries images) or "array" (always an array
+	// of parts, even plain text with none).
+	//
+	// Every OpenAI-compatible endpoint zot talks to out of the box is happy
+	// with the default. This exists for a self-hosted llama.cpp deployment
+	// whose loaded chat template validates that every message's content is an
+	// array unconditionally, and rejects the bare string the default sends
+	// with "item['content'] is not an array".
+	ContentFormat string `yaml:"content_format"`
 }
 
 // Capabilities applies this model's overrides to what the catalogue believes.
@@ -588,16 +600,24 @@ func (c Config) Validate() error {
 		// A provider either names a driver zot knows how to reach, or supplies
 		// its own endpoint. Neither means there is nowhere to send the request,
 		// and finding that out mid-run is worse than at load.
-		if provider.BaseURL != "" {
-			continue
+		if provider.BaseURL == "" {
+			driver := ProviderDriver(name, provider)
+
+			if !slices.Contains(agent.Providers(), driver) {
+				return fmt.Errorf(
+					"providers.%s: driver %q is not known and no base_url is set (known: %s)",
+					name, driver, strings.Join(agent.Providers(), ", "))
+			}
 		}
 
-		driver := ProviderDriver(name, provider)
-
-		if !slices.Contains(agent.Providers(), driver) {
-			return fmt.Errorf(
-				"providers.%s: driver %q is not known and no base_url is set (known: %s)",
-				name, driver, strings.Join(agent.Providers(), ", "))
+		for model, mc := range provider.Models {
+			switch mc.ContentFormat {
+			case "", agent.ContentFormatString, agent.ContentFormatArray:
+			default:
+				return fmt.Errorf(
+					"providers.%s.models.%s: content_format %q is not valid (use %q or %q)",
+					name, model, mc.ContentFormat, agent.ContentFormatString, agent.ContentFormatArray)
+			}
 		}
 	}
 	return nil

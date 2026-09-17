@@ -108,10 +108,33 @@ type ChatMessage struct {
 	// image parts on a tool result, which is why a tool that produces an image
 	// returns text and the engine attaches the image to a message of its own.
 	Images []Image `json:"-"`
+
+	// ContentFormat overrides how Content is shaped on the wire; see the
+	// ContentFormat constants. Empty behaves as ContentFormatString.
+	//
+	// Never set by a caller building a message - the engine knows nothing about
+	// wire quirks. The transport stamps it onto every outgoing message from
+	// Config.ContentFormat just before marshalling.
+	ContentFormat string `json:"-"`
 }
 
-// MarshalJSON renders the message for the wire, promoting content to an array
-// of parts when the message carries images.
+// ContentFormat selects how ChatMessage.Content is shaped on the wire.
+const (
+	// ContentFormatString sends plain text as a bare JSON string, promoting to
+	// an array of parts only when the message carries images. What every
+	// OpenAI-compatible endpoint accepts, and the default.
+	ContentFormatString = "string"
+
+	// ContentFormatArray always sends content as an array of parts, even a
+	// plain-text message with none. Some chat templates llama.cpp serves -
+	// vision-capable ones, mainly - validate that shape unconditionally, and
+	// reject a bare string with "item['content'] is not an array".
+	ContentFormatArray = "array"
+)
+
+// MarshalJSON renders the message for the wire, shaping content according to
+// ContentFormat: promoted to an array of parts whenever the message carries
+// images, or unconditionally when ContentFormatArray was asked for.
 //
 // It lives here rather than in the transport because every path that sends a
 // message goes through this type, and a message that quietly dropped its images
@@ -124,10 +147,6 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 	encoded, err := json.Marshal(alias(m))
 	if err != nil {
 		return nil, err
-	}
-
-	if len(m.Images) == 0 {
-		return encoded, nil
 	}
 
 	images := make([]any, 0, len(m.Images))
@@ -146,10 +165,18 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 		images = append(images, map[string]any{"type": "image_url", "image_url": url})
 	}
 
-	// nothing sendable survived: send the plain string rather than an array
-	// with a lone text part, which is a shape some endpoints are fussier about
-	if len(images) == 0 {
-		return encoded, nil
+	forceArray := m.ContentFormat == ContentFormatArray
+
+	// Nothing forces an array: a lone text part is a shape some endpoints are
+	// fussier about than the plain string every one of them accepts.
+	if len(images) == 0 && !forceArray {
+		if m.Content != "" || m.Role == RoleAssistant {
+			return encoded, nil
+		}
+
+		// omitempty drops content entirely on a non-assistant message.
+		// llama.cpp rejects that shape, so force the key back in.
+		return withContent(encoded, json.RawMessage(`""`))
 	}
 
 	parts := make([]any, 0, len(images)+1)
@@ -160,14 +187,20 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 
 	parts = append(parts, images...)
 
-	object := map[string]json.RawMessage{}
-
-	if err := json.Unmarshal(encoded, &object); err != nil {
+	content, err := json.Marshal(parts)
+	if err != nil {
 		return nil, err
 	}
 
-	content, err := json.Marshal(parts)
-	if err != nil {
+	return withContent(encoded, content)
+}
+
+// withContent replaces the "content" key of an already-marshalled message,
+// adding it back in if omitempty had dropped it.
+func withContent(encoded []byte, content json.RawMessage) ([]byte, error) {
+	object := map[string]json.RawMessage{}
+
+	if err := json.Unmarshal(encoded, &object); err != nil {
 		return nil, err
 	}
 

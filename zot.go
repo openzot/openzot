@@ -421,6 +421,7 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	credential := config.ProviderCredential(providerConfig)
 
 	contextWindow := 0
+	contentFormat := ""
 
 	// What the model can do: the catalogue's answer, then whatever the operator
 	// stated for this model. An uncatalogued model resolves to the conservative
@@ -447,6 +448,9 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 		}
 		if mc.Context > 0 {
 			contextWindow = mc.Context
+		}
+		if mc.ContentFormat != "" {
+			contentFormat = mc.ContentFormat
 		}
 
 		capabilities = mc.Capabilities(capabilities)
@@ -476,6 +480,17 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 			URL:      cfg.Attribution.URL,
 			Disabled: cfg.Attribution.Disabled,
 		},
+
+		// The catalogue guesses reasoning support from the model name, which
+		// can misfire for a self-hosted deployment that only shares a name
+		// prefix with a real provider's model (e.g. a local "Qwen..." build
+		// matching the hosted Qwen catalogue entry). Resolved capabilities
+		// already carry any explicit "reasoning: false" override, so trusting
+		// them here also cancels the auto-selected Responses API the guess
+		// would otherwise have picked.
+		DisableResponses: !capabilities.SupportsReasoning,
+
+		ContentFormat: contentFormat,
 	})
 	if err != nil {
 		return nil, empty, fmt.Errorf("provider %q: %w", cfg.DefaultProvider, err)

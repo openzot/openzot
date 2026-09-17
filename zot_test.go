@@ -314,6 +314,44 @@ providers:
 	}
 }
 
+// A self-hosted deployment can alias driver: openai purely for the wire
+// format while naming a model that happens to share a prefix with a real
+// hosted model the catalogue knows as reasoning-capable (here, "qwen"). Left
+// alone that misidentification auto-selects the Responses API - a wire format
+// the deployment was never asked to speak, and llama.cpp does not implement.
+// An explicit reasoning: false override must cancel that auto-selection, not
+// just the tool-listed capability.
+func TestResolveReasoningFalseOverrideDisablesResponses(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ZOT_CONFIG", "")
+	path := writeCfg(t, `
+agent:
+  model: default
+default_provider: selfhosted
+providers:
+  selfhosted:
+    driver: openai
+    base_url: http://127.0.0.1:1/v1
+    api_key: x
+    models:
+      default:
+        model: Qwen3.8-27B
+        reasoning: false
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	client, _, err := resolve(cfg, DefaultInstructions)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got := client.Transport(); got != agent.TransportChatCompletions {
+		t.Errorf("transport = %q, want %q (reasoning: false must cancel Responses auto-selection)",
+			got, agent.TransportChatCompletions)
+	}
+}
+
 // The iteration denominator in the meta bar has to be the limit the run will
 // actually stop at. A per-model max_iterations lowers that limit, and a bar
 // counting towards a number the run never reaches - "iter 12/100" on a run the

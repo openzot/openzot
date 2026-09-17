@@ -268,6 +268,22 @@ func TestValidate(t *testing.T) {
 	}).Validate(); err != nil {
 		t.Errorf("custom provider model was rejected: %v", err)
 	}
+	if err := validConfig(func(c *Config) {
+		c.Providers["openai"] = ProviderConfig{APIKey: "x", Models: map[string]ModelConfig{
+			"m": {ContentFormat: "parts"},
+		}}
+	}).Validate(); err == nil {
+		t.Error("expected an error for an unknown content_format")
+	}
+	for _, format := range []string{"", "string", "array"} {
+		if err := validConfig(func(c *Config) {
+			c.Providers["openai"] = ProviderConfig{APIKey: "x", Models: map[string]ModelConfig{
+				"m": {ContentFormat: format},
+			}}
+		}).Validate(); err != nil {
+			t.Errorf("content_format %q was rejected: %v", format, err)
+		}
+	}
 }
 
 func TestProviderModelsUsesCustomListOrCatalogue(t *testing.T) {

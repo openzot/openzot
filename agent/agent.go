@@ -68,12 +68,44 @@ type ClientOptions struct {
 	// from it. The zero value sends zot's own name and project URL; set
 	// Disabled to send nothing, or Name/URL to attribute a tool built on zot.
 	Attribution Attribution
+
+	// DisableResponses forces chat-completions even where zot would otherwise
+	// auto-select the Responses API because the model's name matches a
+	// reasoning-capable catalogue entry. A self-hosted endpoint that reuses a
+	// known driver name (driver: openai, say) purely for the wire format can
+	// still collide with a catalogue prefix it has nothing to do with - the
+	// escape hatch is naming the model's real capabilities explicitly.
+	DisableResponses bool
+
+	// ContentFormat overrides how a chat message's content is shaped on the
+	// wire: ContentFormatString (the default) or ContentFormatArray. Empty
+	// uses the default.
+	//
+	// Every OpenAI-compatible endpoint zot talks to out of the box is happy
+	// with the default. This exists for a self-hosted llama.cpp deployment
+	// whose loaded chat template validates that every message's content is an
+	// array of parts, even plain text, and rejects the bare string the default
+	// sends with "item['content'] is not an array".
+	ContentFormat string
 }
 
 // Attribution is the app identity sent to gateways that rank the apps calling
 // them. Only OpenRouter and the Vercel AI Gateway read it, and it carries
 // nothing about the user or the run - see the provider package for the details.
 type Attribution = provider.Attribution
+
+// ContentFormat values for ClientOptions.ContentFormat; see provider's own
+// constants for the shapes they select.
+const (
+	ContentFormatString = provider.ContentFormatString
+	ContentFormatArray  = provider.ContentFormatArray
+)
+
+// Transport values Client.Transport can return.
+const (
+	TransportChatCompletions = provider.TransportChatCompletions
+	TransportResponses       = provider.TransportResponses
+)
 
 // NewClient validates the options and returns a client.
 func NewClient(options ClientOptions) (*Client, error) {
@@ -84,7 +116,9 @@ func NewClient(options ClientOptions) (*Client, error) {
 		BaseURL:  options.BaseURL,
 		Headers:  options.Headers,
 
-		Attribution: options.Attribution,
+		Attribution:      options.Attribution,
+		DisableResponses: options.DisableResponses,
+		ContentFormat:    options.ContentFormat,
 	})
 	if err != nil {
 		return nil, err
@@ -106,6 +140,13 @@ func (c *Client) Provider() string {
 // BaseURL returns the endpoint the client will call.
 func (c *Client) BaseURL() string {
 	return c.inner.Config().BaseURL
+}
+
+// Transport names the wire format the client will speak - chat-completions or
+// the Responses API. Surfaced for diagnostics: whether a run picked the wire
+// format the operator expected is otherwise invisible until a request fails.
+func (c *Client) Transport() string {
+	return c.inner.Transport()
 }
 
 // Providers lists the recognised provider identifiers.

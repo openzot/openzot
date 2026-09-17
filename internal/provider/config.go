@@ -246,6 +246,17 @@ type Config struct {
 	// selected automatically - an escape hatch for a gateway that advertises
 	// OpenAI compatibility but implements only the older endpoint.
 	DisableResponses bool
+
+	// ContentFormat overrides how a chat message's content is shaped on the
+	// wire: ContentFormatString (the default) or ContentFormatArray. Empty
+	// resolves to ContentFormatString.
+	//
+	// The default suits every OpenAI-compatible endpoint zot talks to out of
+	// the box. It exists for self-hosted llama.cpp deployments whose loaded
+	// chat template validates that every message's content is an array of
+	// parts, even plain text - and rejects the bare string the default sends
+	// with "item['content'] is not an array".
+	ContentFormat string
 }
 
 // ErrMissingCredential is returned when a provider that needs a key has none.
@@ -268,6 +279,18 @@ func (c Config) Resolve() (Config, error) {
 
 	if resolved.Model == "" {
 		return Config{}, errors.New("provider: no model specified")
+	}
+
+	resolved.ContentFormat = strings.ToLower(strings.TrimSpace(c.ContentFormat))
+
+	switch resolved.ContentFormat {
+	case "":
+		resolved.ContentFormat = ContentFormatString
+	case ContentFormatString, ContentFormatArray:
+	default:
+		return Config{}, fmt.Errorf(
+			"provider: content format %q is not valid (use %q or %q)",
+			c.ContentFormat, ContentFormatString, ContentFormatArray)
 	}
 
 	// On a gateway, complete a bare model name ("glm-5.2") into the

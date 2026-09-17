@@ -280,6 +280,43 @@ func TestStreamSendsCredentialAndModel(t *testing.T) {
 	}
 }
 
+func TestStreamAppliesContentFormatArray(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+
+		json.NewDecoder(r.Body).Decode(&body)
+
+		if len(body.Messages) != 1 || string(body.Messages[0].Content) != `[{"text":"hi","type":"text"}]` {
+			t.Errorf("messages = %+v, want a single array-shaped content", body.Messages)
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := New(Config{
+		Provider:      Custom,
+		Model:         "test-model",
+		APIKey:        "test-key",
+		BaseURL:       server.URL,
+		ContentFormat: ContentFormatArray,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	request := Request{Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}}}
+
+	for range client.Stream(context.Background(), request) {
+	}
+}
+
 func TestStreamCancellation(t *testing.T) {
 	client := serve(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

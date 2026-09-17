@@ -36,7 +36,7 @@ func (t *chatTransport) Stream(ctx context.Context, config Config, request Reque
 
 		body := wireRequest{
 			Model:         config.Model,
-			Messages:      request.Messages,
+			Messages:      withContentFormat(request.Messages, config.ContentFormat),
 			Tools:         request.Tools,
 			Stream:        true,
 			MaxTokens:     request.MaxTokens,
@@ -81,6 +81,24 @@ type wireRequest struct {
 
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+// withContentFormat returns the messages with ContentFormat stamped on each,
+// so ChatMessage.MarshalJSON shapes content the way this connection needs. A
+// fresh slice: the caller's Request.Messages is never mutated.
+func withContentFormat(messages []ChatMessage, format string) []ChatMessage {
+	if format == "" || format == ContentFormatString {
+		return messages
+	}
+
+	stamped := make([]ChatMessage, len(messages))
+
+	for i, message := range messages {
+		message.ContentFormat = format
+		stamped[i] = message
+	}
+
+	return stamped
 }
 
 // buildRequest encodes a body and applies auth and headers.

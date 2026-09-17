@@ -62,6 +62,16 @@ func TestResolveDefaultsAndValidation(t *testing.T) {
 			config:  Config{Provider: OpenAI, APIKey: "k"},
 			wantErr: true,
 		},
+		{
+			name:    "an explicit array content format is accepted",
+			config:  Config{Provider: OpenAI, Model: "gpt-5.4", APIKey: "k", ContentFormat: ContentFormatArray},
+			wantURL: "https://api.openai.com/v1",
+		},
+		{
+			name:    "an unknown content format is refused",
+			config:  Config{Provider: OpenAI, Model: "gpt-5.4", APIKey: "k", ContentFormat: "parts"},
+			wantErr: true,
+		},
 	}
 
 	for _, test := range tests {
@@ -84,6 +94,17 @@ func TestResolveDefaultsAndValidation(t *testing.T) {
 				t.Errorf("base URL = %q, want %q", resolved.BaseURL, test.wantURL)
 			}
 		})
+	}
+}
+
+func TestResolveDefaultsContentFormatToString(t *testing.T) {
+	resolved, err := (Config{Provider: OpenAI, Model: "gpt-5.4", APIKey: "k"}).Resolve()
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if resolved.ContentFormat != ContentFormatString {
+		t.Errorf("ContentFormat = %q, want %q", resolved.ContentFormat, ContentFormatString)
 	}
 }
 
