@@ -280,6 +280,65 @@ func TestStreamSendsCredentialAndModel(t *testing.T) {
 	}
 }
 
+func TestStreamSendsContentAsArrayWhenAsked(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		array bool
+		want  string
+	}{
+		{name: "default", want: `"hi"`},
+		{name: "content array", array: true, want: `[{"text":"hi","type":"text"}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var got []string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Messages []struct {
+						Content json.RawMessage `json:"content"`
+					} `json:"messages"`
+				}
+
+				json.NewDecoder(r.Body).Decode(&body)
+
+				for _, message := range body.Messages {
+					got = append(got, string(message.Content))
+				}
+
+				w.Header().Set("Content-Type", "text/event-stream")
+
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			t.Cleanup(server.Close)
+
+			client, err := New(Config{
+				Provider:     Custom,
+				Model:        "test-model",
+				APIKey:       "test-key",
+				BaseURL:      server.URL,
+				ContentArray: test.array,
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			request := Request{Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}}}
+
+			for range client.Stream(context.Background(), request) {
+			}
+
+			if len(got) != 1 || got[0] != test.want {
+				t.Errorf("content = %v, want [%s]", got, test.want)
+			}
+
+			// stamping works on a copy, so the caller's messages are untouched
+			if request.Messages[0].ContentArray {
+				t.Error("Stream mutated the caller's messages")
+			}
+		})
+	}
+}
+
 func TestStreamCancellation(t *testing.T) {
 	client := serve(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

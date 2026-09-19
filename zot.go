@@ -421,6 +421,7 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 	credential := config.ProviderCredential(providerConfig)
 
 	contextWindow := 0
+	contentArray := false
 
 	// What the model can do: the catalogue's answer, then whatever the operator
 	// stated for this model. An uncatalogued model resolves to the conservative
@@ -449,6 +450,8 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 			contextWindow = mc.Context
 		}
 
+		contentArray = mc.ContentArray
+
 		capabilities = mc.Capabilities(capabilities)
 	}
 
@@ -476,6 +479,8 @@ func resolve(cfg Config, defaultInstructions string) (*agent.Client, agent.Execu
 			URL:      cfg.Attribution.URL,
 			Disabled: cfg.Attribution.Disabled,
 		},
+
+		ContentArray: contentArray,
 	})
 	if err != nil {
 		return nil, empty, fmt.Errorf("provider %q: %w", cfg.DefaultProvider, err)

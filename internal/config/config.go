@@ -128,6 +128,10 @@ type ModelConfig struct {
 	Vision    *bool `yaml:"vision"`
 	Tools     *bool `yaml:"tools"`
 	Reasoning *bool `yaml:"reasoning"`
+
+	// ContentArray sends every message's content as an array of parts, for
+	// endpoints whose chat template rejects the bare string.
+	ContentArray bool `yaml:"content_array"`
 }
 
 // Capabilities applies this model's overrides to what the catalogue believes.

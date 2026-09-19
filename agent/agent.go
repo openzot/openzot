@@ -68,6 +68,10 @@ type ClientOptions struct {
 	// from it. The zero value sends zot's own name and project URL; set
 	// Disabled to send nothing, or Name/URL to attribute a tool built on zot.
 	Attribution Attribution
+
+	// ContentArray sends every message's content as an array of parts, for a
+	// self-hosted endpoint whose chat template rejects the bare string.
+	ContentArray bool
 }
 
 // Attribution is the app identity sent to gateways that rank the apps calling
@@ -84,7 +88,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		BaseURL:  options.BaseURL,
 		Headers:  options.Headers,
 
-		Attribution: options.Attribution,
+		Attribution:  options.Attribution,
+		ContentArray: options.ContentArray,
 	})
 	if err != nil {
 		return nil, err

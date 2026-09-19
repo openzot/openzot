@@ -246,6 +246,10 @@ type Config struct {
 	// selected automatically - an escape hatch for a gateway that advertises
 	// OpenAI compatibility but implements only the older endpoint.
 	DisableResponses bool
+
+	// ContentArray sends every message's content as an array of parts, and an
+	// empty one as []. Off by default, for endpoints whose template wants arrays.
+	ContentArray bool
 }
 
 // ErrMissingCredential is returned when a provider that needs a key has none.

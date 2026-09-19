@@ -36,7 +36,7 @@ func (t *chatTransport) Stream(ctx context.Context, config Config, request Reque
 
 		body := wireRequest{
 			Model:         config.Model,
-			Messages:      request.Messages,
+			Messages:      withContentArray(request.Messages, config.ContentArray),
 			Tools:         request.Tools,
 			Stream:        true,
 			MaxTokens:     request.MaxTokens,
@@ -81,6 +81,23 @@ type wireRequest struct {
 
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+// withContentArray returns the messages with ContentArray stamped on each, on
+// a fresh slice so the caller's Request.Messages is never mutated.
+func withContentArray(messages []ChatMessage, enabled bool) []ChatMessage {
+	if !enabled {
+		return messages
+	}
+
+	stamped := make([]ChatMessage, len(messages))
+
+	for i, message := range messages {
+		message.ContentArray = true
+		stamped[i] = message
+	}
+
+	return stamped
 }
 
 // buildRequest encodes a body and applies auth and headers.

@@ -122,6 +122,45 @@ func TestChatMessageMarshalsAsAStringWhenItHasNoImages(t *testing.T) {
 	}
 }
 
+func TestChatMessageContentArrayWrapsPlainText(t *testing.T) {
+	encoded, err := json.Marshal(ChatMessage{Role: RoleUser, Content: "hello", ContentArray: true})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded struct {
+		Content []map[string]any `json:"content"`
+	}
+
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("content is not an array of parts: %v", err)
+	}
+
+	if len(decoded.Content) != 1 || decoded.Content[0]["type"] != "text" || decoded.Content[0]["text"] != "hello" {
+		t.Errorf("content = %v, want a single text part", decoded.Content)
+	}
+}
+
+// llama.cpp rejects a missing content key, and array-only templates reject a
+// string, so an empty message must still carry [].
+func TestChatMessageContentArraySendsEmptyArrayForNoContent(t *testing.T) {
+	for _, role := range []string{RoleUser, RoleSystem, RoleTool, RoleAssistant} {
+		encoded, err := json.Marshal(ChatMessage{Role: role, ContentArray: true})
+		if err != nil {
+			t.Fatalf("marshal %s: %v", role, err)
+		}
+
+		var decoded map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatalf("unmarshal %s: %v", role, err)
+		}
+
+		if content, ok := decoded["content"]; !ok || string(content) != `[]` {
+			t.Errorf("%s content = %s, ok=%v, want an empty array present", role, content, ok)
+		}
+	}
+}
+
 func TestChatMessagePromotesContentToPartsWhenItCarriesImages(t *testing.T) {
 	message := ChatMessage{
 		Role:    RoleUser,

@@ -108,10 +108,14 @@ type ChatMessage struct {
 	// image parts on a tool result, which is why a tool that produces an image
 	// returns text and the engine attaches the image to a message of its own.
 	Images []Image `json:"-"`
+
+	// ContentArray sends Content as an array of parts even when it is plain
+	// text or empty. The transport sets it from Config.ContentArray at send time.
+	ContentArray bool `json:"-"`
 }
 
 // MarshalJSON renders the message for the wire, promoting content to an array
-// of parts when the message carries images.
+// of parts when the message carries images or when ContentArray is set.
 //
 // It lives here rather than in the transport because every path that sends a
 // message goes through this type, and a message that quietly dropped its images
@@ -126,7 +130,7 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 
-	if len(m.Images) == 0 {
+	if len(m.Images) == 0 && !m.ContentArray {
 		return encoded, nil
 	}
 
@@ -148,7 +152,7 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 
 	// nothing sendable survived: send the plain string rather than an array
 	// with a lone text part, which is a shape some endpoints are fussier about
-	if len(images) == 0 {
+	if len(images) == 0 && !m.ContentArray {
 		return encoded, nil
 	}
 

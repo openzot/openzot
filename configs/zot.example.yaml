@@ -256,3 +256,6 @@ providers:
   #       # hatch for a model whose endpoint ceiling is smaller than its card
   #       # (compaction then fires before the endpoint rejects the request)
   #       context: 32000
+  #       # send every message's content as an array of parts, for llama.cpp
+  #       # templates that reject a bare string
+  #       content_array: true

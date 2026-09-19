@@ -2,6 +2,7 @@ package zot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"regexp"
@@ -212,6 +213,98 @@ providers:
 			case got := <-seen:
 				if got != test.want {
 					t.Errorf("the provider received %q, want %q", got, test.want)
+				}
+			default:
+				t.Fatal("the provider was never called")
+			}
+		})
+	}
+}
+
+// content_array on a model has to reach the wire, so every message the run
+// sends carries array content, while other models keep the plain string.
+func TestContentArrayReachesTheWire(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		extra string
+		want  string
+	}{
+		{name: "asked for", extra: "        content_array: true\n", want: "["},
+		{name: "not asked for", want: `"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("ZOT_CONFIG", "")
+
+			seen := make(chan []json.RawMessage, 1)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Messages []struct {
+						Content json.RawMessage `json:"content"`
+					} `json:"messages"`
+				}
+
+				json.NewDecoder(r.Body).Decode(&body)
+
+				contents := make([]json.RawMessage, 0, len(body.Messages))
+
+				for _, message := range body.Messages {
+					contents = append(contents, message.Content)
+				}
+
+				select {
+				case seen <- contents:
+				default:
+				}
+
+				w.Header().Set("Content-Type", "text/event-stream")
+
+				fmt.Fprintf(w, "data: %s\n\n",
+					`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d","type":"function","function":{"name":"success","arguments":"{\"summary\":\"done\"}"}}]},"finish_reason":"tool_calls"}]}`)
+
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+
+			defer server.Close()
+
+			path := writeCfg(t, fmt.Sprintf(`
+agent:
+  model: default
+ui:
+  plain: true
+default_provider: selfhosted
+providers:
+  selfhosted:
+    driver: custom
+    base_url: %s
+    api_key: x
+    models:
+      default:
+        model: Qwen3.8-27B
+%s`, server.URL, test.extra))
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+
+			if _, err := quietly(t, func() error {
+				return RunWith(context.Background(), cfg, "do the thing", RunOptions{})
+			}); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+
+			select {
+			case contents := <-seen:
+				if len(contents) < 2 {
+					t.Fatalf("saw %d messages, want the system prompt and the task", len(contents))
+				}
+
+				for i, content := range contents {
+					if !strings.HasPrefix(string(content), test.want) {
+						t.Errorf("message %d content = %.40s, want it to start with %s", i, content, test.want)
+					}
 				}
 			default:
 				t.Fatal("the provider was never called")
