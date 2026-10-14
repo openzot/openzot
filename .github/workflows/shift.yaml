@@ -10,9 +10,9 @@
 # next shift knows every pass that came before.
 name: shift
 
+# The experiment is over, so the half-hourly schedule is off: a shift runs only
+# when dispatched by hand.
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 # Queue rather than skip, and never cancel: a due shift waits for the running
