@@ -13,15 +13,11 @@ on:
       - 'LICENSE'
       - 'configs/**'
       - '.github/**'
+  # Every pull request, docs-only ones too: main requires the Lint & Test check, which a skipped run never reports.
   pull_request:
     branches:
       - main
       - next
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - 'LICENSE'
-      - 'configs/**'
 
 permissions:
   contents: read
