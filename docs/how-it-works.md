@@ -19,7 +19,7 @@ The harness is zot's own, in the [`agent`](../agent) package:
   operator's config.
 
 That package is importable, so the same engine drives more than coding:
-[Rook](https://github.com/pdparchitect/rook), an AI bug-hunting and security-audit
+[Acof](https://github.com/pdparchitect/acof), an AI bug-hunting and security-audit
 agent, is built on it with its own toolset and skills.
 
 ## Under the harness
