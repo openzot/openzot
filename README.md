@@ -94,7 +94,7 @@ session ships to a public dataset.
 
 | Project                                       | Role                                                                      |
 | --------------------------------------------- | ------------------------------------------------------------------------- |
-| [Rook](https://github.com/pdparchitect/rook)  | A fully automated offensive security harness                              |
+| [Acof](https://github.com/pdparchitect/acof)  | A fully automated offensive security harness                              |
 | [Pion](https://github.com/pdparchitect/pion)  | A defensive AI security harness for automatic monitoring and incident prevention |
 | [Pantalk](https://github.com/pantalk/pantalk) | Connect coding agents to the chat platforms people already use            |
 | [MCPShim](https://github.com/mcpshim/mcpshim) | Turn MCP servers and HTTP APIs into standard CLI commands                 |
